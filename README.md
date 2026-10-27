@@ -1,2 +1,1 @@
-# ClariFy
-An official repository for ClariFy.
+# Temporary Repository
