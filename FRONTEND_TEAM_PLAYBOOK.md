@@ -85,7 +85,7 @@ To prevent merge conflicts, no two frontend developers will edit the same page r
 | **Backend Lead** | *\[Jonathan\]* | **Laravel 13 API, PostgreSQL, Queues, PRISMS Sync, Push/SMS & RBAC** | All Server-Side Logic (`FR-01`–`FR-10`, `NFR-01`–`NFR-05`) | All Controllers, Policies, Models & Jobs | 
 | **Frontend Dev 1 (FE-1)** | *\[Archelle\]* | **Design System, App Shell, Auth, Profile & Channel Navigation** | `FR-01_REV`, `FR-06`, `NFR-01_REV`, `NFR-04_REV`, Workflows 1 & 5 | `AuthController`, `ProfileController`, `ChannelController` | 
 | **Frontend Dev 2 (FE-2)** | *\[Zyra\]* | **Scoped Noticeboard Feed, Publisher Modal, Search/Filter, Read Reach & Audit UI** | `FR-02`, `FR-04_REV`, `FR-05`, `NFR-03_REV`, Workflows 2 & 3 | `AnnouncementController` | 
-| **Frontend Dev 3 (FE-3)** | *\[Teammate 3\]* | **Isolated Q&A Threads, Inquiry Ticketing, 1-Click Class FAQs & Instructor Directory** | `FR-03_REV`, `FR-07`, `NFR-05` (Anonymity), Workflow 4 + Instructor Grid | `ThreadController`, `FaqController`, `InstructorController` | 
+| **Frontend Dev 3 (FE-3)** | *\[Jazir Uzman Sambajon\]* | **Isolated Q&A Threads, Inquiry Ticketing, 1-Click Class FAQs & Instructor Directory** | `FR-03_REV`, `FR-07`, `NFR-05` (Anonymity), Workflow 4 + Instructor Grid | `ThreadController`, `FaqController`, `InstructorController` |
 | **Frontend Dev 4 (FE-4)** | *\[Zild\]* | **IT Admin Console (Web) & Mobile App Adaptation / Push Integration (Expo)** | `FR-08`, `FR-09`, `FR-10`, `NFR-02`, Workflow 6 + Mobile Shell/Push | `AccountController`, `SyncController`, `DeviceTokenController` | 
 
 ### Detailed Responsibilities & Deliverables by Teammate
@@ -553,7 +553,7 @@ Whenever an endpoint needs a new field, filter parameter, or route change:
 
 Before writing production code, our 5-member team should take 15 minutes to confirm and lock in answers to these **6 open questions** arising from gaps in our PDF documentation:
 
-1. **Final Teammate-to-Role Mapping:** Which specific group member (**Zyra Nadine Flores, Zild Jan Abuga-a, Archelle Aparici, Jonathan Justiniani, Jazir Uzman Sambajon**) is taking **FE-1, FE-2, FE-3, and FE-4** alongside the Backend Lead?
+1. **Final Teammate-to-Role Mapping:** For this implementation, the mapping is **Jonathan Justiniani (Backend Lead), Archelle Aparici (FE-1), Zyra Nadine Flores (FE-2), Jazir Uzman Sambajon (FE-3), and Zild Jan Abuga-a (FE-4)**.
 
 2. **Account Onboarding Flow (`FR-08` vs. `FR-01_REV`):** Does a new user fill out a **Self-Registration Sign-Up form** on the Login screen that goes into the IT Admin verification queue (`TC-FR08`), OR are accounts pre-imported via PRISMS (`FR-01_REV`) and held in an `"Unverified"` state until the IT Admin approves them?
 

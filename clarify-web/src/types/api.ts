@@ -67,3 +67,63 @@ export interface ApiError extends Error {
   errors?: Record<string, string[]>;
 }
 
+export type ThreadStatus = 'open' | 'resolved';
+
+export interface ThreadReply {
+  id: number;
+  content: string;
+  author_id: number;
+  author_name: string;
+  created_at: string;
+}
+
+export interface QaThread {
+  id: number;
+  channel_id: number;
+  announcement_id: number | null;
+  subject_hashtag: string;
+  content: string;
+  is_private: boolean;
+  status: ThreadStatus;
+  is_pinned_faq: boolean;
+  author_id: number;
+  author_name: string;
+  created_at: string;
+  updated_at: string;
+  replies: ThreadReply[];
+}
+
+export interface ClassFaq {
+  id: number;
+  subject_hashtag: string;
+  question: string;
+  answer: string;
+  published_at: string;
+}
+
+export interface CreateThreadInput {
+  announcement_id: number | null;
+  subject_hashtag: string;
+  content: string;
+  is_private: boolean;
+}
+
+export interface ThreadReplyInput {
+  content: string;
+  mark_resolved: boolean;
+  pin_to_faq: boolean;
+}
+
+export interface InstructorDirectoryEntry {
+  id: number;
+  name: string;
+  campus: string;
+  department: string;
+}
+
+export interface InstructorFilters {
+  search?: string;
+  department?: string;
+  sort?: 'name';
+  page?: number;
+}
