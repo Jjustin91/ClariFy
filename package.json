@@ -1,0 +1,15 @@
+{
+  "name": "clarify-ustp-monorepo",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "clarify-web"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace=clarify-web",
+    "build": "npm run build --workspace=clarify-web",
+    "start": "npm run start --workspace=clarify-web",
+    "lint": "npm run lint --workspace=clarify-web",
+    "clean": "npm run clean --workspace=clarify-web"
+  }
+}

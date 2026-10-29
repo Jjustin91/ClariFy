@@ -1,0 +1,26 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@theme {
+  --color-ustp-navy: #1a1851;
+  --color-ustp-gold: #fcb315;
+  --color-ustp-orange: #ff9718;
+  --color-ustp-orange-dark: #ff6418;
+  --color-ustp-cream: #FFFAF2;
+  --color-ustp-text: #031c2e;
+  --color-ustp-blue: #0d4a77;
+  --color-ustp-sky: #329dea;
+  --font-sans: var(--font-plus-jakarta), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-jetbrains-mono), ui-monospace, SFMono-Regular, monospace;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
