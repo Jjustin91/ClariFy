@@ -1,14 +1,10 @@
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000/api/v1";
+const notWired = async (): Promise<unknown> => {
+  throw new Error('api-client not wired yet');
+};
 
-export async function apiClient<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
-  // TODO: Attach Bearer token and handle 401, 403, 422, 500 per Section 6.3
-  const response = await fetch(`${API_BASE_URL}${endpoint}`, {
-    ...options,
-    headers: {
-      Accept: "application/json",
-      "Content-Type": "application/json",
-      ...options.headers,
-    },
-  });
-  return response.json() as Promise<T>;
-}
+export const apiClient = {
+  get: (_path: string, _opts?: unknown) => notWired(),
+  post: (_path: string, _body?: unknown) => notWired(),
+  patch: (_path: string, _body?: unknown) => notWired(),
+  delete: (_path: string) => notWired(),
+};

@@ -24,3 +24,14 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+
+@theme {
+  --color-ustp-navy: #1a1851;
+  --color-ustp-gold: #fcb315;
+  --color-ustp-orange: #ff9718;
+  --color-ustp-cream: #FFFAF2;
+  --color-ustp-text: #031c2e;
+  --color-ustp-blue: #0d4a77;
+}
+
