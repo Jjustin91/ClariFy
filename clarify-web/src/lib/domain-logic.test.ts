@@ -214,3 +214,66 @@ test('getFieldValidationError extracts Laravel 422 field error message', () => {
   assert.equal(getFieldValidationError(errors, 'title'), 'The title field is required.');
   assert.equal(getFieldValidationError(errors, 'content'), null);
 });
+
+test('ClariFy API Engine enforces FR-08 pending 403, TC-NFR01 student 403, TC-NFR03 audit logs, and TC-FR07 FAQ masking', async () => {
+  const { handleClarifyApiRequest, resetServerStore } = await import(
+    '../server/clarify-api-engine'
+  );
+  resetServerStore();
+
+  // 1. Pending account receives HTTP 403 Forbidden on login (FR-08 / TC-FR08)
+  const pendingLogin = handleClarifyApiRequest({
+    method: 'POST',
+    path: '/auth/login',
+    body: { institutional_id: '2023309999', password: 'ustp2026' },
+  });
+  assert.equal(pendingLogin.status, 403);
+  assert.equal(pendingLogin.body.verification_status, 'pending');
+
+  // 2. Student token receives HTTP 403 Forbidden on POST /announcements/create (TC-NFR01)
+  const studentCreate = handleClarifyApiRequest({
+    method: 'POST',
+    path: '/announcements/create',
+    headers: { authorization: 'Bearer clarify-jwt-student-2020202020' },
+    body: { channel_id: 7, title: 'Unauthorized Student Post', content: 'Blocked' },
+  });
+  assert.equal(studentCreate.status, 403);
+
+  // 3. Faculty token publishes announcement (201) and edits it (200) -> logs immutable audit (TC-NFR03)
+  const facultyUpdate = handleClarifyApiRequest({
+    method: 'PATCH',
+    path: '/announcements/42',
+    headers: { authorization: 'Bearer clarify-jwt-faculty-10492' },
+    body: {
+      title: 'CITC Lab Room Reassignment: IT314 moved to CEA 302 (Updated)',
+      content: 'Updated laboratory schedule for Group 5.',
+    },
+  });
+  assert.equal(facultyUpdate.status, 200);
+  const metricsRes = handleClarifyApiRequest({
+    method: 'GET',
+    path: '/admin/metrics',
+    headers: { authorization: 'Bearer clarify-jwt-it_admin-90001' },
+  });
+  assert.equal(metricsRes.status, 200);
+  const metricsData = metricsRes.body.data as {
+    announcement_audits: Array<{ new_title: string }>;
+  };
+  assert.equal(
+    metricsData.announcement_audits[0].new_title,
+    'CITC Lab Room Reassignment: IT314 moved to CEA 302 (Updated)'
+  );
+
+  // 4. 1-Click FAQ conversion masks student author as "Anonymous Student" (TC-FR07)
+  const faqRes = handleClarifyApiRequest({
+    method: 'POST',
+    path: '/threads/205/convert-faq',
+    headers: { authorization: 'Bearer clarify-jwt-faculty-10492' },
+  });
+  assert.equal(faqRes.status, 200);
+  const convertedThread = faqRes.body.data as QaThread;
+  assert.equal(convertedThread.is_pinned_faq, true);
+  assert.equal(convertedThread.author.name, 'Anonymous Student');
+  assert.equal(convertedThread.author.id, null);
+});
+

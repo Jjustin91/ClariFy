@@ -106,19 +106,19 @@ export function AppShell({
 
         {/* Right: Live API Mode Switcher + Role Switcher Pills (Student View (Kobeni), Faculty View (Aki), IT Admin View) + USTP Logo Badge */}
         <div className="flex items-center gap-2 sm:gap-3 shrink-0">
-          {/* API Mode Toggle (Mock Seed vs Live Laravel 13 API) */}
+          {/* API Mode Toggle (Connected /api/v1 REST API vs Local Mock Seed) */}
           <button
             type="button"
             onClick={() => toggleApiMode()}
-            aria-label="Toggle between Pre-Seeded Mock Data and Live Laravel 13 API"
-            className={`hidden xl:inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-[11px] font-mono font-semibold border transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+            aria-label="Toggle between Connected ClariFy REST API and Client-Side Mock Seed"
+            className={`hidden md:inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-[11px] font-mono font-semibold border transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
               useMock
                 ? 'bg-white/10 text-amber-200 border-white/20 hover:bg-white/15'
                 : 'bg-emerald-900/80 text-emerald-200 border-emerald-500/50'
             }`}
           >
             <Database className="w-3 h-3" />
-            <span>{useMock ? 'API: Mock Seed' : 'API: Laravel :8000'}</span>
+            <span>{useMock ? 'API: Mock Seed' : 'API: Connected (/api/v1)'}</span>
           </button>
 
           {/* Role Switcher Pills matching Oct 22 MVP screenshot */}

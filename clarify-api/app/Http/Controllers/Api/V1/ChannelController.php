@@ -17,12 +17,14 @@ class ChannelController
     {
         $query = Channel::with(['members.academicProfile', 'announcements.publisher']);
 
+        $likeOp = \Illuminate\Support\Facades\DB::getDriverName() === 'pgsql' ? 'ilike' : 'like';
+
         if ($search = trim((string) $request->query('search', ''))) {
-            $query->where(function ($q) use ($search) {
-                $q->where('name', 'ilike', "%{$search}%")
-                    ->orWhere('course_code', 'ilike', "%{$search}%")
-                    ->orWhere('description', 'ilike', "%{$search}%")
-                    ->orWhere('scope_department', 'ilike', "%{$search}%");
+            $query->where(function ($q) use ($search, $likeOp) {
+                $q->where('name', $likeOp, "%{$search}%")
+                    ->orWhere('course_code', $likeOp, "%{$search}%")
+                    ->orWhere('description', $likeOp, "%{$search}%")
+                    ->orWhere('scope_department', $likeOp, "%{$search}%");
             });
         }
 

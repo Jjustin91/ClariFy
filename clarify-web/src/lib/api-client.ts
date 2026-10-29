@@ -31,11 +31,11 @@ import {
   formatSubjectHashtag,
 } from './domain-logic';
 
-export const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000/api/v1';
+// Always route browser requests through same-origin /api/v1 (which proxies server-side to LARAVEL_BACKEND_URL when active or executes the ClariFy API v1 engine)
+export const API_BASE_URL = '/api/v1';
 
-// Default to true for immediate preview testability; toggleable live in the Top Header
-export let USE_MOCK_API = true;
+// Default to false so clarify-web connects directly to the /api/v1 REST API routes
+export let USE_MOCK_API = false;
 
 const STORAGE_KEYS = {
   USE_MOCK: 'clarify_use_mock_api',
@@ -144,8 +144,11 @@ async function requestLaravel<T>(
   const json = await response.json().catch(() => ({}));
 
   if (!response.ok) {
-    const err: LaravelValidationError = {
+    const err: LaravelValidationError & {
+      verification_status?: VerificationStatus;
+    } = {
       status: response.status,
+      verification_status: json.verification_status,
       message:
         json.message ||
         (response.status === 403
@@ -546,6 +549,7 @@ export async function getAnnouncementsApi(params?: {
     if (params?.tag && params.tag !== 'ALL') qs.set('tag', params.tag);
     if (params?.sort) qs.set('sort', params.sort);
     if (params?.page) qs.set('page', String(params.page));
+    if (params?.per_page) qs.set('per_page', String(params.per_page));
     return requestLaravel<PaginatedResponse<Announcement>>(
       `/announcements?${qs.toString()}`
     );
@@ -1073,6 +1077,7 @@ export async function getInstructorsApi(params?: {
       qs.set('department', params.department);
     if (params?.sort) qs.set('sort', params.sort);
     if (params?.page) qs.set('page', String(params.page));
+    if (params?.per_page) qs.set('per_page', String(params.per_page));
     return requestLaravel<PaginatedResponse<Instructor>>(
       `/instructors?${qs.toString()}`
     );

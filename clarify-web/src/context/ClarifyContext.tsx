@@ -52,7 +52,7 @@ const ClarifyContext = createContext<ClarifyContextValue | undefined>(undefined)
 
 export function ClarifyProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User>(DEMO_USERS.student);
-  const [useMock, setUseMock] = useState<boolean>(true);
+  const [useMock, setUseMock] = useState<boolean>(false);
   const [isDrawerOpen, setIsDrawerOpen] = useState<boolean>(true);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState<boolean>(false);
   const [isChannelModalOpen, setIsChannelModalOpen] = useState<boolean>(false);
@@ -97,12 +97,15 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
     const initialMock = getUseMockApi();
     setUseMock(initialMock);
     setUser(getCurrentMockUser());
-  }, []);
+    refreshChannels();
+  }, [refreshChannels]);
 
   const switchRole = useCallback(
     (role: 'student' | 'faculty' | 'it_admin') => {
       const nextUser = switchDemoRole(role);
       setUser(nextUser);
+      refreshChannels();
+      setAnnouncementVersion((v) => v + 1);
       const roleLabels = {
         student: 'Student View (Kobeni Higashiyama • 2020202020)',
         faculty: 'Faculty View (Aki Hayakawa • Faculty ID: 10492)',
@@ -110,7 +113,7 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
       };
       showToast(`Switched active session to ${roleLabels[role]}`, 'info');
     },
-    [showToast]
+    [refreshChannels, showToast]
   );
 
   const toggleApiMode = useCallback(
@@ -120,13 +123,14 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
       setUseMock(target);
       showToast(
         target
-          ? 'API Mode: Pre-seeded USTP Mock Data active'
-          : 'API Mode: Live Laravel 13 Backend (http://localhost:8000/api/v1)',
+          ? 'API Mode: Client-side USTP Mock Seed active'
+          : 'API Mode: Connected to ClariFy REST API (/api/v1)',
         'info'
       );
+      refreshChannels();
       setAnnouncementVersion((v) => v + 1);
     },
-    [useMock, showToast]
+    [useMock, refreshChannels, showToast]
   );
 
   const openAnnouncementModal = useCallback(

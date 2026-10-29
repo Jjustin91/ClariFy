@@ -21,7 +21,9 @@ class AnnouncementController
     public function index(Request $request): JsonResponse
     {
         $user = $request->user();
-        $query = Announcement::with(['publisher.academicProfile', 'channel', 'reads']);
+        $query = Announcement::with(['publisher.academicProfile', 'channel', 'reads'])
+            ->withCount('reads');
+        $likeOp = \Illuminate\Support\Facades\DB::getDriverName() === 'pgsql' ? 'ilike' : 'like';
 
         if (! $user || ! $user->canPublishOrManage()) {
             $query->where('status', 'published');
@@ -49,11 +51,12 @@ class AnnouncementController
         }
 
         if ($search = trim((string) $request->query('search', ''))) {
-            $query->where(function ($q) use ($search) {
-                $q->where('title', 'ilike', "%{$search}%")
-                    ->orWhere('content', 'ilike', "%{$search}%")
-                    ->orWhere('subtitle', 'ilike', "%{$search}%")
-                    ->orWhereHas('publisher', fn ($pq) => $pq->where('name', 'ilike', "%{$search}%"));
+            $query->where(function ($q) use ($search, $likeOp) {
+                $q->where('title', $likeOp, "%{$search}%")
+                    ->orWhere('content', $likeOp, "%{$search}%")
+                    ->orWhere('subtitle', $likeOp, "%{$search}%")
+                    ->orWhereHas('channel', fn ($cq) => $cq->where('course_code', $likeOp, "%{$search}%"))
+                    ->orWhereHas('publisher', fn ($pq) => $pq->where('name', $likeOp, "%{$search}%"));
             });
         }
 
@@ -63,6 +66,8 @@ class AnnouncementController
 
         if ($sort === 'oldest') {
             $query->orderBy('published_at');
+        } elseif ($sort === 'read_reach') {
+            $query->orderByDesc('reads_count')->orderByDesc('published_at');
         } else {
             $query->orderByDesc('published_at');
         }

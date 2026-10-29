@@ -26,17 +26,27 @@ class InstructorController
             }
         }
 
+        $likeOp = \Illuminate\Support\Facades\DB::getDriverName() === 'pgsql' ? 'ilike' : 'like';
+
         if ($search = trim((string) $request->query('search', ''))) {
-            $query->where(function ($q) use ($search) {
-                $q->where('name', 'ilike', "%{$search}%")
-                    ->orWhereHas('academicProfile', function ($pq) use ($search) {
-                        $pq->where('department', 'ilike', "%{$search}%")
-                            ->orWhere('specialization', 'ilike', "%{$search}%");
+            $query->where(function ($q) use ($search, $likeOp) {
+                $q->where('name', $likeOp, "%{$search}%")
+                    ->orWhereHas('academicProfile', function ($pq) use ($search, $likeOp) {
+                        $pq->where('department', $likeOp, "%{$search}%")
+                            ->orWhere('specialization', $likeOp, "%{$search}%");
                     });
             });
         }
 
-        $query->orderBy('name');
+        if ($request->query('sort') === 'department') {
+            $query->orderBy(
+                \App\Models\AcademicProfile::select('department')
+                    ->whereColumn('academic_profiles.user_id', 'users.id')
+                    ->limit(1)
+            )->orderBy('name');
+        } else {
+            $query->orderBy('name');
+        }
 
         $perPage = (int) $request->query('per_page', 12);
         $paginator = $query->paginate($perPage);

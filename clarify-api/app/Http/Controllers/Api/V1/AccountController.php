@@ -20,11 +20,13 @@ class AccountController
         $query = User::with('academicProfile')
             ->where('verification_status', 'pending');
 
+        $likeOp = \Illuminate\Support\Facades\DB::getDriverName() === 'pgsql' ? 'ilike' : 'like';
+
         if ($search = trim((string) $request->query('search', ''))) {
-            $query->where(function ($q) use ($search) {
-                $q->where('name', 'ilike', "%{$search}%")
-                    ->orWhere('institutional_id', 'ilike', "%{$search}%")
-                    ->orWhere('email', 'ilike', "%{$search}%");
+            $query->where(function ($q) use ($search, $likeOp) {
+                $q->where('name', $likeOp, "%{$search}%")
+                    ->orWhere('institutional_id', $likeOp, "%{$search}%")
+                    ->orWhere('email', $likeOp, "%{$search}%");
             });
         }
 
@@ -67,15 +69,16 @@ class AccountController
     /**
      * GET /api/v1/admin/users (FR-09)
      */
-    public function allUsers(Request $request): JsonResponse
+    public function index(Request $request): JsonResponse
     {
         $query = User::with('academicProfile')->where('verification_status', 'approved');
+        $likeOp = \Illuminate\Support\Facades\DB::getDriverName() === 'pgsql' ? 'ilike' : 'like';
 
         if ($search = trim((string) $request->query('search', ''))) {
-            $query->where(function ($q) use ($search) {
-                $q->where('name', 'ilike', "%{$search}%")
-                    ->orWhere('institutional_id', 'ilike', "%{$search}%")
-                    ->orWhere('role', 'ilike', "%{$search}%");
+            $query->where(function ($q) use ($search, $likeOp) {
+                $q->where('name', $likeOp, "%{$search}%")
+                    ->orWhere('institutional_id', $likeOp, "%{$search}%")
+                    ->orWhere('role', $likeOp, "%{$search}%");
             });
         }
 
@@ -84,6 +87,11 @@ class AccountController
         return response()->json([
             'data' => UserResource::collection($users),
         ]);
+    }
+
+    public function allUsers(Request $request): JsonResponse
+    {
+        return $this->index($request);
     }
 
     /**

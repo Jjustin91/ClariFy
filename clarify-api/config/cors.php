@@ -13,13 +13,18 @@ return [
 
     'allowed_methods' => ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
 
-    'allowed_origins' => array_filter([
+    'allowed_origins' => array_values(array_unique(array_filter([
         'http://localhost:3000',
         'http://127.0.0.1:3000',
-        env('FRONTEND_URL', '*'),
-    ]),
+        'http://localhost:8081',
+        env('FRONTEND_URL'),
+    ]))),
 
-    'allowed_origins_patterns' => [],
+    'allowed_origins_patterns' => [
+        '#^https?://localhost(:\d+)?$#',
+        '#^https?://127\.0\.0\.1(:\d+)?$#',
+        '#\.run\.app$#',
+    ],
 
     'allowed_headers' => [
         'Content-Type',
