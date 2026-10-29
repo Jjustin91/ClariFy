@@ -38,7 +38,7 @@ export default function SettingsPage() {
         
         {/* Top App Header */}
         <header className="h-16 bg-[#1a1851] text-white flex items-center justify-between px-8 border-b border-indigo-950 shrink-0">
-          <h1 className="text-2xl font-bold tracking-tight">Settings</h1>
+          <h1 className="text-2xl font-bold tracking-tight">Settingss</h1>
           <div className="h-8 w-8 rounded bg-white/20 flex items-center justify-center text-[10px] font-bold">
             logo
           </div>
