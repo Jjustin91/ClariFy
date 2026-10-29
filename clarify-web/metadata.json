@@ -1,0 +1,6 @@
+{
+  "name": "ClariFy — USTP Unified Campus Noticeboard & Scoped Communication Platform",
+  "description": "Unified Campus Noticeboard, Scoped Course Hubs, Isolated Q&A Threads, 1-Click Anonymized Class FAQs, and PRISMS Admin Console for USTP-CDO (IT314 Group 5).",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
