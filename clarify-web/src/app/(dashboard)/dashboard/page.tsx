@@ -75,6 +75,9 @@ export default function DashboardPage() {
           <div className="pt-4">
             <h2 className="text-sm font-bold text-slate-800">Latest Messages</h2>
           </div>
+          <div className="col-span-2 text-center py-12 text-xs font-semibold text-slate-400 bg-white rounded-2xl border border-slate-200">
+                No messages available.
+              </div>
         </main>
 
       </div>

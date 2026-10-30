@@ -1,17 +1,20 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, ChangeEvent } from 'react';
 import { RightProfileSidebar } from '@/components/layout/RightProfileSidebar';
 
 export default function SettingsPage() {
   const [role, setRole] = useState<'student' | 'faculty'>('student');
   const [mounted, setMounted] = useState(false);
 
-  // Student Settings State
+  // Avatar state
+  const [avatar, setAvatar] = useState<string>('');
+
+  // Student Preferences
   const [studentNotifications, setStudentNotifications] = useState(true);
   const [emailAlerts, setEmailAlerts] = useState(false);
 
-  // Faculty Settings State
+  // Faculty Preferences
   const [officeHoursActive, setOfficeHoursActive] = useState(true);
   const [autoArchive, setAutoArchive] = useState(true);
   const [broadcastEmail, setBroadcastEmail] = useState(true);
@@ -20,12 +23,78 @@ export default function SettingsPage() {
 
   useEffect(() => {
     const storedRole = (localStorage.getItem('user_role') as 'student' | 'faculty') || 'student';
+    
+    const storedAvatar =
+      localStorage.getItem(`user_avatar_${storedRole}`) ||
+      localStorage.getItem('user_avatar') ||
+      (storedRole === 'faculty'
+        ? 'https://api.dicebear.com/7.x/avataaars/svg?seed=Faculty'
+        : 'https://api.dicebear.com/7.x/avataaars/svg?seed=Student');
+
     setRole(storedRole);
+    setAvatar(storedAvatar);
     setMounted(true);
   }, []);
 
+  // Center-crop image into a square canvas to prevent horizontal squishing
+  const handleImageUpload = (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const img = new Image();
+        img.src = reader.result as string;
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          const ctx = canvas.getContext('2d');
+          const targetSize = 200;
+          canvas.width = targetSize;
+          canvas.height = targetSize;
+
+          if (ctx) {
+            // Calculate center square crop dimensions
+            const minDimension = Math.min(img.width, img.height);
+            const sourceX = (img.width - minDimension) / 2;
+            const sourceY = (img.height - minDimension) / 2;
+
+            ctx.drawImage(
+              img,
+              sourceX,
+              sourceY,
+              minDimension,
+              minDimension,
+              0,
+              0,
+              targetSize,
+              targetSize
+            );
+
+            const croppedBase64 = canvas.toDataURL('image/jpeg', 0.85);
+
+            setAvatar(croppedBase64);
+
+            const activeRole = localStorage.getItem('user_role') || 'student';
+            localStorage.setItem(`user_avatar_${activeRole}`, croppedBase64);
+            localStorage.setItem('user_avatar', croppedBase64);
+
+            window.dispatchEvent(new Event('storage'));
+          }
+        };
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
+    
+    if (avatar) {
+      const activeRole = localStorage.getItem('user_role') || 'student';
+      localStorage.setItem(`user_avatar_${activeRole}`, avatar);
+      localStorage.setItem('user_avatar', avatar);
+      window.dispatchEvent(new Event('storage'));
+    }
+
     setSaved(true);
     setTimeout(() => setSaved(false), 3000);
   };
@@ -36,15 +105,15 @@ export default function SettingsPage() {
     <div className="flex h-screen bg-slate-900 text-slate-900 overflow-hidden font-sans">
       <div className="flex-1 flex flex-col min-w-0">
         
-        {/* Top App Header */}
+        {/* Header */}
         <header className="h-16 bg-[#1a1851] text-white flex items-center justify-between px-8 border-b border-indigo-950 shrink-0">
-          <h1 className="text-2xl font-bold tracking-tight">Settingss</h1>
+          <h1 className="text-2xl font-bold tracking-tight">Settings</h1>
           <div className="h-8 w-8 rounded bg-white/20 flex items-center justify-center text-[10px] font-bold">
             logo
           </div>
         </header>
 
-        {/* Settings Body */}
+        {/* Content */}
         <main className="flex-1 bg-[#FFFAF2] p-8 overflow-y-auto space-y-6">
           <div className="max-w-2xl bg-white rounded-2xl p-6 border border-slate-200 shadow-sm space-y-6">
             
@@ -60,10 +129,33 @@ export default function SettingsPage() {
 
             <form onSubmit={handleSave} className="space-y-6">
               
+              {/* Profile Photo Preview */}
+              <div className="flex items-center gap-5 border-b border-slate-100 pb-6">
+                <div className="h-20 w-20 rounded-full overflow-hidden border-2 border-slate-900 bg-rose-200 shrink-0 aspect-square flex items-center justify-center">
+                  <img
+                    src={avatar}
+                    alt="Profile Avatar"
+                    className="h-full w-full object-cover object-center rounded-full"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <p className="text-xs font-bold text-slate-800">Profile Picture</p>
+                  <label className="inline-block bg-[#1a1851] hover:bg-indigo-950 text-white font-bold text-xs px-3.5 py-1.5 rounded-lg transition-colors cursor-pointer">
+                    Upload New Photo
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={handleImageUpload}
+                      className="hidden"
+                    />
+                  </label>
+                  <p className="text-[11px] text-slate-400">PNG, JPG or WebP up to 5MB</p>
+                </div>
+              </div>
+
               {/* FACULTY VIEW */}
               {role === 'faculty' ? (
                 <>
-                  {/* Faculty Overview */}
                   <div className="grid grid-cols-2 gap-4 text-xs">
                     <div>
                       <label className="block text-slate-500 font-semibold mb-1">Faculty ID</label>
@@ -85,7 +177,6 @@ export default function SettingsPage() {
                     </div>
                   </div>
 
-                  {/* Faculty Toggles */}
                   <div className="space-y-4 pt-2">
                     <div className="flex items-center justify-between">
                       <div>
@@ -130,7 +221,6 @@ export default function SettingsPage() {
               ) : (
                 /* STUDENT VIEW */
                 <>
-                  {/* Student Overview */}
                   <div className="grid grid-cols-2 gap-4 text-xs">
                     <div>
                       <label className="block text-slate-500 font-semibold mb-1">Student ID</label>
@@ -152,7 +242,6 @@ export default function SettingsPage() {
                     </div>
                   </div>
 
-                  {/* Student Toggles */}
                   <div className="space-y-4 pt-2">
                     <div className="flex items-center justify-between">
                       <div>
@@ -196,7 +285,6 @@ export default function SettingsPage() {
 
       </div>
 
-      {/* Right Profile Sidebar */}
       <RightProfileSidebar />
     </div>
   );

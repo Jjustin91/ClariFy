@@ -26,14 +26,24 @@ export function RightProfileSidebar() {
   useEffect(() => {
     const loadProfile = () => {
       const storedRole = localStorage.getItem('user_role') || 'student';
-      const storedName = localStorage.getItem('user_name') || (storedRole === 'faculty' ? 'Dr. Faculty Name' : 'Student User');
+      const storedName =
+        localStorage.getItem('user_name') ||
+        (storedRole === 'faculty' ? 'Dr. Faculty Name' : 'Student User');
       
-      // Dynamic fallback defaults based on role
-      const storedId = localStorage.getItem('user_id') || (storedRole === 'faculty' ? 'FAC-2024-001' : '2020202020');
-      const storedSection = localStorage.getItem('user_section') || (storedRole === 'faculty' ? 'CITC' : 'IT3R5');
-      const storedAvatar = localStorage.getItem('user_avatar') || (storedRole === 'faculty' 
-        ? 'https://api.dicebear.com/7.x/avataaars/svg?seed=Faculty' 
-        : 'https://api.dicebear.com/7.x/avataaars/svg?seed=Student');
+      const storedId =
+        localStorage.getItem('user_id') ||
+        (storedRole === 'faculty' ? 'FAC-2024-001' : '2020202020');
+        
+      const storedSection =
+        localStorage.getItem('user_section') ||
+        (storedRole === 'faculty' ? 'CITC' : 'IT3R5');
+
+      const storedAvatar =
+        localStorage.getItem(`user_avatar_${storedRole}`) ||
+        localStorage.getItem('user_avatar') ||
+        (storedRole === 'faculty'
+          ? 'https://api.dicebear.com/7.x/avataaars/svg?seed=Faculty'
+          : 'https://api.dicebear.com/7.x/avataaars/svg?seed=Student');
 
       setUser({
         name: storedName,
@@ -47,30 +57,38 @@ export function RightProfileSidebar() {
 
     loadProfile();
 
-    // Re-check profile if localStorage changes or page updates
     window.addEventListener('storage', loadProfile);
     return () => window.removeEventListener('storage', loadProfile);
   }, []);
 
   const handleLogout = () => {
+    const savedStudentAvatar = localStorage.getItem('user_avatar_student');
+    const savedFacultyAvatar = localStorage.getItem('user_avatar_faculty');
+    const savedGeneralAvatar = localStorage.getItem('user_avatar');
+
     document.cookie = 'auth_token=; path=/; expires=Thu, 01 Jan 1970 00:00:01 GMT; Max-Age=0;';
     localStorage.clear();
     sessionStorage.clear();
+
+    if (savedStudentAvatar) localStorage.setItem('user_avatar_student', savedStudentAvatar);
+    if (savedFacultyAvatar) localStorage.setItem('user_avatar_faculty', savedFacultyAvatar);
+    if (savedGeneralAvatar) localStorage.setItem('user_avatar', savedGeneralAvatar);
+
     window.location.href = '/login';
   };
 
   return (
     <aside className="w-72 bg-[#fcb315] text-slate-900 flex flex-col items-center py-6 px-5 border-l border-amber-500 shrink-0 select-none h-full overflow-y-auto">
       
-      {/* Dynamic Profile Avatar & Info */}
+      {/* Sidebar Profile Container */}
       <div className="flex flex-col items-center mb-6 min-h-[140px] justify-center">
         {mounted ? (
           <>
-            <div className="h-24 w-24 rounded-full overflow-hidden border-4 border-slate-900 shadow-md bg-rose-200 mb-2.5">
+            <div className="h-24 w-24 rounded-full overflow-hidden border-4 border-slate-900 shadow-md bg-rose-200 mb-2.5 shrink-0 aspect-square flex items-center justify-center">
               <img
                 src={user.avatar}
                 alt={user.name}
-                className="h-full w-full object-cover"
+                className="h-full w-full object-cover object-center rounded-full"
               />
             </div>
             <h3 className="text-sm font-bold text-slate-900 leading-tight text-center">{user.name}</h3>
@@ -79,14 +97,14 @@ export function RightProfileSidebar() {
           </>
         ) : (
           <div className="flex flex-col items-center animate-pulse space-y-2">
-            <div className="h-24 w-24 rounded-full bg-slate-900/10" />
+            <div className="h-24 w-24 rounded-full bg-slate-900/10 shrink-0 aspect-square" />
             <div className="h-4 w-28 bg-slate-900/10 rounded" />
             <div className="h-3 w-20 bg-slate-900/10 rounded" />
           </div>
         )}
       </div>
 
-      {/* Navigation Links */}
+      {/* Navigation */}
       <nav className="w-full space-y-1 text-center font-bold text-xs text-slate-900">
         <button
           onClick={() => (window.location.href = '/dashboard')}
@@ -130,7 +148,7 @@ export function RightProfileSidebar() {
         </button>
       </nav>
 
-      {/* Settings & Logout Actions */}
+      {/* Actions */}
       <div className="mt-auto w-full space-y-1 pt-4 text-center text-xs font-bold">
         <button
           onClick={() => (window.location.href = '/settings')}
