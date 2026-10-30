@@ -37,7 +37,7 @@ import type {
 type AdminTab = 'verifications' | 'rbac' | 'prisms' | 'metrics';
 
 export default function AdminConsolePage() {
-  const { announcementVersion, showToast } = useClarify();
+  const { user, announcementVersion, showToast } = useClarify();
 
   const [activeTab, setActiveTab] = useState<AdminTab>('verifications');
   const [pendingUsers, setPendingUsers] = useState<User[]>([]);
@@ -52,6 +52,10 @@ export default function AdminConsolePage() {
   const [syncErrors, setSyncErrors] = useState<Record<string, string[]>>({});
 
   const loadAdminData = useCallback(async () => {
+    if (user.role !== 'it_admin') {
+      setIsLoading(false);
+      return;
+    }
     setIsLoading(true);
     setError(null);
     try {
@@ -71,7 +75,7 @@ export default function AdminConsolePage() {
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [user.role]);
 
   useEffect(() => {
     loadAdminData();
@@ -136,6 +140,36 @@ export default function AdminConsolePage() {
   };
 
   const semesterError = getFieldValidationError(syncErrors, 'semester_code');
+
+  if (user.role !== 'it_admin') {
+    return (
+      <AppShell title="IT Admin Console">
+        <div className="p-6 lg:p-8 max-w-2xl w-full mx-auto">
+          <div className="bg-white border-2 border-ustp-navy rounded-lg p-6 text-center space-y-3 shadow-sm">
+            <ShieldCheck className="w-10 h-10 text-ustp-navy mx-auto" />
+            <h2 className="text-lg font-extrabold text-ustp-navy">
+              IT Administrator Domain Isolated (NFR-01_REV)
+            </h2>
+            <p className="text-xs text-slate-600 leading-relaxed">
+              You are currently signed in to the{' '}
+              <span className="font-bold text-ustp-navy uppercase">
+                {user.role.replace('_', ' ')}
+              </span>{' '}
+              domain ({user.name}). To access the ICTO Registrar Verification Queue, RBAC Manager, and PRISMS Sync Console, please sign in with an IT Administrator account on the Login page.
+            </p>
+            <div className="pt-2">
+              <a
+                href="/login"
+                className="inline-flex items-center gap-2 px-4 py-2 bg-ustp-navy text-ustp-gold text-xs font-extrabold rounded hover:opacity-95"
+              >
+                Go to Login Page
+              </a>
+            </div>
+          </div>
+        </div>
+      </AppShell>
+    );
+  }
 
   return (
     <AppShell title="IT Admin Console">

@@ -19,18 +19,27 @@ export default function LoginPage() {
   const [pendingNotice, setPendingNotice] = useState<string | null>(null);
   const [generalError, setGeneralError] = useState<string | null>(null);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const authenticateWithCredentials = async (idToUse: string, passToUse: string) => {
     setIsLoading(true);
     setFieldErrors({});
     setPendingNotice(null);
     setGeneralError(null);
 
     try {
-      const res = await loginApi(institutionalId, password);
+      const res = await loginApi(idToUse, passToUse);
       setUser(res.user);
-      showToast(`Welcome back, ${res.user.name}!`, 'success');
-      router.push('/');
+      const domainLabel =
+        res.user.role === 'faculty' || res.user.role === 'dept_head'
+          ? 'Faculty Domain'
+          : res.user.role === 'it_admin'
+          ? 'IT Admin Domain'
+          : 'Student Domain';
+      showToast(`Signed in to ${domainLabel} as ${res.user.name}.`, 'success');
+      if (res.user.role === 'it_admin') {
+        router.push('/admin');
+      } else {
+        router.push('/');
+      }
     } catch (err) {
       const apiErr = err as LaravelValidationError & {
         verification_status?: VerificationStatus;
@@ -51,6 +60,11 @@ export default function LoginPage() {
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    await authenticateWithCredentials(institutionalId, password);
   };
 
   const fillDemoAccount = (id: string, pass: string) => {
@@ -82,44 +96,65 @@ export default function LoginPage() {
             University of Science and Technology of Southern Philippines — Cagayan de Oro Campus (IT314 Software Engineering • IT3R2 Group 5)
           </p>
 
-          {/* Quick Evaluator Credential Presets */}
+          {/* Role Domain Sign-In Presets */}
           <div className="mt-8 pt-6 border-t border-slate-300 text-left">
             <p className="text-xs font-extrabold uppercase tracking-wider text-slate-600 mb-2.5 flex items-center gap-1.5">
               <UserCheck className="w-4 h-4 text-ustp-navy" />
-              One-Click Role Presets (Workflow 1 &amp; FR-08 Verification Test)
+              Select Isolated User Domain to Sign In
             </p>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
               <button
                 type="button"
-                onClick={() => fillDemoAccount('2020202020', 'ustp2026')}
-                className="px-3 py-2 text-left text-xs bg-white hover:bg-amber-50 border border-slate-300 rounded flex items-center justify-between cursor-pointer"
+                onClick={() => {
+                  fillDemoAccount('2020202020', 'ustp2026');
+                  void authenticateWithCredentials('2020202020', 'ustp2026');
+                }}
+                className="px-3.5 py-2.5 text-left text-xs bg-white hover:bg-amber-50 border border-slate-300 rounded flex items-center justify-between cursor-pointer"
               >
-                <span className="font-bold text-ustp-navy">Kobeni (Student)</span>
-                <span className="font-mono text-slate-600 tabular-nums">2020202020</span>
+                <div>
+                  <span className="block font-extrabold text-ustp-navy">Student Domain</span>
+                  <span className="text-[11px] text-slate-600">Kobeni Higashiyama (IT3R2)</span>
+                </div>
+                <span className="font-mono text-slate-600 tabular-nums font-bold">2020202020</span>
               </button>
               <button
                 type="button"
-                onClick={() => fillDemoAccount('10492', 'ustp2026')}
-                className="px-3 py-2 text-left text-xs bg-white hover:bg-amber-50 border border-slate-300 rounded flex items-center justify-between cursor-pointer"
+                onClick={() => {
+                  fillDemoAccount('10492', 'ustp2026');
+                  void authenticateWithCredentials('10492', 'ustp2026');
+                }}
+                className="px-3.5 py-2.5 text-left text-xs bg-white hover:bg-amber-50 border border-slate-300 rounded flex items-center justify-between cursor-pointer"
               >
-                <span className="font-bold text-ustp-navy">Aki (Faculty)</span>
-                <span className="font-mono text-slate-600 tabular-nums">10492</span>
+                <div>
+                  <span className="block font-extrabold text-ustp-navy">Faculty Domain</span>
+                  <span className="text-[11px] text-slate-600">Aki Hayakawa (CITC Faculty)</span>
+                </div>
+                <span className="font-mono text-slate-600 tabular-nums font-bold">10492</span>
               </button>
               <button
                 type="button"
-                onClick={() => fillDemoAccount('90001', 'ustp2026')}
-                className="px-3 py-2 text-left text-xs bg-white hover:bg-amber-50 border border-slate-300 rounded flex items-center justify-between cursor-pointer"
+                onClick={() => {
+                  fillDemoAccount('90001', 'ustp2026');
+                  void authenticateWithCredentials('90001', 'ustp2026');
+                }}
+                className="px-3.5 py-2.5 text-left text-xs bg-white hover:bg-amber-50 border border-slate-300 rounded flex items-center justify-between cursor-pointer"
               >
-                <span className="font-bold text-ustp-navy">Makima (IT Admin)</span>
-                <span className="font-mono text-slate-600 tabular-nums">90001</span>
+                <div>
+                  <span className="block font-extrabold text-ustp-navy">IT Admin Domain</span>
+                  <span className="text-[11px] text-slate-600">Engr. Makima Cruz (ICTO)</span>
+                </div>
+                <span className="font-mono text-slate-600 tabular-nums font-bold">90001</span>
               </button>
               <button
                 type="button"
                 onClick={() => fillDemoAccount('2023309999', 'ustp2026')}
-                className="px-3 py-2 text-left text-xs bg-red-50 hover:bg-red-100 border border-red-300 rounded flex items-center justify-between cursor-pointer"
+                className="px-3.5 py-2.5 text-left text-xs bg-red-50 hover:bg-red-100 border border-red-300 rounded flex items-center justify-between cursor-pointer"
               >
-                <span className="font-bold text-red-800">Pending (FR-08 403)</span>
-                <span className="font-mono text-red-700 tabular-nums">2023309999</span>
+                <div>
+                  <span className="block font-extrabold text-red-800">Pending Account</span>
+                  <span className="text-[11px] text-red-700">FR-08 Verification Test</span>
+                </div>
+                <span className="font-mono text-red-700 tabular-nums font-bold">2023309999</span>
               </button>
             </div>
           </div>

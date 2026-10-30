@@ -196,7 +196,17 @@ export async function loginApi(
       method: 'POST',
       body: JSON.stringify({ institutional_id, password }),
     });
+    mockCurrentUser = { ...res.data };
     setStoredToken(res.token);
+    if (typeof window !== 'undefined') {
+      const normalizedRole =
+        res.data.role === 'faculty' || res.data.role === 'dept_head'
+          ? 'faculty'
+          : res.data.role === 'it_admin'
+          ? 'it_admin'
+          : 'student';
+      window.localStorage.setItem(STORAGE_KEYS.ROLE, normalizedRole);
+    }
     return { token: res.token, user: res.data };
   }
 

@@ -28,7 +28,6 @@ export function AppShell({
   const router = useRouter();
   const {
     user,
-    switchRole,
     useMock,
     toggleApiMode,
     isDrawerOpen,
@@ -63,10 +62,6 @@ export function AppShell({
       active: pathname.startsWith('/channels'),
     },
   ];
-
-  const isRoleStudent = user.role === 'student';
-  const isRoleFaculty = user.role === 'faculty' || user.role === 'dept_head';
-  const isRoleAdmin = user.role === 'it_admin';
 
   const avatarInitial = user.name ? user.name.charAt(0).toUpperCase() : 'U';
   const idDisplay =
@@ -103,7 +98,7 @@ export function AppShell({
           </h1>
         </div>
 
-        {/* Right: Live API Mode Switcher + Role Switcher Pills (Student View (Kobeni), Faculty View (Aki), IT Admin View) + USTP Logo Badge */}
+        {/* Right: Live API Mode Switcher + USTP Logo Badge */}
         <div className="flex items-center gap-2 sm:gap-3 shrink-0">
           {/* API Mode Toggle (Connected /api/v1 REST API vs Local Mock Seed) */}
           <button
@@ -119,47 +114,6 @@ export function AppShell({
             <Database className="w-3 h-3" />
             <span>{useMock ? 'API: Mock Seed' : 'API: Connected (/api/v1)'}</span>
           </button>
-
-          {/* Role Switcher Pills matching Oct 22 MVP screenshot */}
-          <div
-            className="flex items-center bg-white/10 p-0.5 rounded border border-white/15"
-            role="group"
-            aria-label="Demo Role Switcher"
-          >
-            <button
-              type="button"
-              onClick={() => switchRole('student')}
-              className={`px-2.5 py-1 rounded text-xs font-bold transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                isRoleStudent
-                  ? 'bg-ustp-gold text-ustp-navy'
-                  : 'text-slate-200 hover:text-white'
-              }`}
-            >
-              Student View (Kobeni)
-            </button>
-            <button
-              type="button"
-              onClick={() => switchRole('faculty')}
-              className={`px-2.5 py-1 rounded text-xs font-bold transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                isRoleFaculty
-                  ? 'bg-ustp-gold text-ustp-navy'
-                  : 'text-slate-200 hover:text-white'
-              }`}
-            >
-              Faculty View (Aki)
-            </button>
-            <button
-              type="button"
-              onClick={() => switchRole('it_admin')}
-              className={`px-2.5 py-1 rounded text-xs font-bold transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                isRoleAdmin
-                  ? 'bg-ustp-gold text-ustp-navy'
-                  : 'text-slate-200 hover:text-white'
-              }`}
-            >
-              IT Admin View
-            </button>
-          </div>
 
           {/* USTP Logo Badge matching Wireframes top-right "logo" box */}
           <Link

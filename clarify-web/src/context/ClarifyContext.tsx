@@ -51,7 +51,7 @@ interface ClarifyContextValue {
 const ClarifyContext = createContext<ClarifyContextValue | undefined>(undefined);
 
 export function ClarifyProvider({ children }: { children: React.ReactNode }) {
-  const [user, setUser] = useState<User>(DEMO_USERS.student);
+  const [user, setUserState] = useState<User>(DEMO_USERS.student);
   const [useMock, setUseMock] = useState<boolean>(false);
   const [isDrawerOpen, setIsDrawerOpen] = useState<boolean>(true);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState<boolean>(false);
@@ -96,14 +96,23 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     const initialMock = getUseMockApi();
     setUseMock(initialMock);
-    setUser(getCurrentMockUser());
+    setUserState(getCurrentMockUser());
     refreshChannels();
   }, [refreshChannels]);
+
+  const setUser = useCallback(
+    (nextUser: User) => {
+      setUserState(nextUser);
+      refreshChannels();
+      setAnnouncementVersion((v) => v + 1);
+    },
+    [refreshChannels]
+  );
 
   const switchRole = useCallback(
     (role: 'student' | 'faculty' | 'it_admin') => {
       const nextUser = switchDemoRole(role);
-      setUser(nextUser);
+      setUserState(nextUser);
       refreshChannels();
       setAnnouncementVersion((v) => v + 1);
       const roleLabels = {

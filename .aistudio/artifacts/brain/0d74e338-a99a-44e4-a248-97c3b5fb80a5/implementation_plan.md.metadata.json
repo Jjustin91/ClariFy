@@ -1,6 +1,6 @@
 {
-  "summary":  "Plan to enable the Add Channel + button in the left Scoped Channels sidebar for both Student and Faculty roles, keep the Roster button, and remove the Channel Management + button from the right-hand orange Profile & Navigation sidebar.",
-  "updatedAt":  "2026-10-30T14:42:56.396323278Z",
+  "summary":  "Implementation plan to remove the top header Demo Role Switcher pill group while keeping the API status indicator and USTP badge, and isolate Student, Faculty, and IT Admin user domains via dedicated role authentication on the Login page (/login) while preserving each role's full features and capabilities.",
+  "updatedAt":  "2026-10-30T15:17:14.547065499Z",
   "requestFeedback":  true,
   "userFacing":  true
 }
