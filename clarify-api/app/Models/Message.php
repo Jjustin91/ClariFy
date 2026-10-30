@@ -35,7 +35,11 @@ class Message extends Model
 
     public function scopeRootThreads(Builder $query): Builder
     {
-        return $query->whereNull('parent_id');
+        return $query->whereNull('parent_id')
+            ->where(function (Builder $q) {
+                $q->whereNull('subject_hashtag')
+                    ->orWhere('subject_hashtag', '!=', '__CHAT__');
+            });
     }
 
     public function channel(): BelongsTo

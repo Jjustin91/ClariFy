@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ArrowRight,
   FileText,
@@ -13,24 +13,19 @@ import {
   X,
 } from 'lucide-react';
 import { formatShortTime } from '../announcements/AnnouncementCard';
-import type { Channel, User } from '../../types/api';
+import { useClarify } from '../../context/ClarifyContext';
+import {
+  getChannelChatMessagesApi,
+  sendChannelChatMessageApi,
+} from '../../lib/api-client';
+import type { Channel, ChatMessage, User } from '../../types/api';
 
 export type CourseHubTab = 'messenger' | 'feed' | 'threads' | 'send_inquiry';
 
-interface ChatMessageItem {
-  id: string;
-  content: string;
-  created_at: string;
-  author: {
-    id: number;
-    name: string;
-    role: User['role'];
-  };
-}
-
-const INITIAL_CHANNEL_CHAT_MESSAGES: ChatMessageItem[] = [
+const INITIAL_CHANNEL_CHAT_MESSAGES: ChatMessage[] = [
   {
     id: 'msg-1',
+    channel_id: 7,
     content: 'When po defence maam? and what possible need i bring?',
     created_at: '2026-10-30T17:30:00Z',
     author: {
@@ -41,17 +36,19 @@ const INITIAL_CHANNEL_CHAT_MESSAGES: ChatMessageItem[] = [
   },
   {
     id: 'msg-2',
+    channel_id: 7,
     content:
       'Inig date date date, dili na ma move kay mao ra day free sa mga panelist nato, so dont be late and print your documents at least 3 copies',
     created_at: '2026-10-30T17:30:00Z',
     author: {
-      id: 2,
+      id: 10492,
       name: 'Aki Hayakawa',
       role: 'faculty',
     },
   },
   {
     id: 'msg-3',
+    channel_id: 7,
     content:
       'Naa bay specific na format maam? hehe thank you pag answer maam',
     created_at: '2026-10-30T17:30:00Z',
@@ -63,10 +60,11 @@ const INITIAL_CHANNEL_CHAT_MESSAGES: ChatMessageItem[] = [
   },
   {
     id: 'msg-4',
+    channel_id: 7,
     content: 'A4, Times New Roman, 12 fontsize, basta dont be late lng dayun',
     created_at: '2026-10-30T17:30:00Z',
     author: {
-      id: 2,
+      id: 10492,
       name: 'Aki Hayakawa',
       role: 'faculty',
     },
@@ -96,19 +94,39 @@ export function MessengerChatBox({
   onMessageSentToast,
   childrenWhenNotMessenger,
 }: MessengerChatBoxProps) {
+  const { announcementVersion, triggerAnnouncementRefresh } = useClarify();
   const channelKey = channel?.id || 7;
   const [messagesByChannel, setMessagesByChannel] = useState<
-    Record<number, ChatMessageItem[]>
+    Record<number, ChatMessage[]>
   >({
     [channelKey]: INITIAL_CHANNEL_CHAT_MESSAGES,
   });
   const [messageText, setMessageText] = useState('');
   const [stagedAttachment, setStagedAttachment] = useState<string | null>(null);
   const [showSettingsMenu, setShowSettingsMenu] = useState(false);
+  const [isSending, setIsSending] = useState(false);
 
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const streamContainerRef = useRef<HTMLDivElement | null>(null);
+
+  const loadChatMessages = useCallback(async () => {
+    try {
+      const res = await getChannelChatMessagesApi(channelKey);
+      if (Array.isArray(res.data)) {
+        setMessagesByChannel((prev) => ({
+          ...prev,
+          [channelKey]: res.data,
+        }));
+      }
+    } catch {
+      // Retain existing messages if offline
+    }
+  }, [channelKey]);
+
+  useEffect(() => {
+    void loadChatMessages();
+  }, [loadChatMessages, announcementVersion]);
 
   const conversationMessages =
     messagesByChannel[channelKey] || INITIAL_CHANNEL_CHAT_MESSAGES;
@@ -127,36 +145,56 @@ export function MessengerChatBox({
       )}`
     : 'IT3R2-IT314 Software Engineering';
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const trimmed = messageText.trim();
-    if (!trimmed && !stagedAttachment) return;
+    if ((!trimmed && !stagedAttachment) || isSending) return;
 
     const finalContent = stagedAttachment
       ? `${trimmed ? `${trimmed} ` : ''}[Attachment: ${stagedAttachment}]`
       : trimmed;
 
-    const newMsg: ChatMessageItem = {
-      id: `msg-${Date.now()}`,
-      content: finalContent,
-      created_at: new Date().toISOString(),
-      author: {
-        id: currentUser.id,
-        name: currentUser.name,
-        role: currentUser.role,
-      },
-    };
-
-    setMessagesByChannel((prev) => ({
-      ...prev,
-      [channelKey]: [
-        ...(prev[channelKey] || INITIAL_CHANNEL_CHAT_MESSAGES),
-        newMsg,
-      ],
-    }));
-    setMessageText('');
-    setStagedAttachment(null);
-    onMessageSentToast?.('Message sent to Course Hub chat.');
+    setIsSending(true);
+    try {
+      const res = await sendChannelChatMessageApi(channelKey, finalContent);
+      setMessagesByChannel((prev) => ({
+        ...prev,
+        [channelKey]: [
+          ...(prev[channelKey] || INITIAL_CHANNEL_CHAT_MESSAGES),
+          res.data,
+        ],
+      }));
+      setMessageText('');
+      setStagedAttachment(null);
+      triggerAnnouncementRefresh();
+      onMessageSentToast?.(
+        res.message || 'Message sent to Course Hub chat.'
+      );
+    } catch {
+      // Fallback local append if request failed
+      const fallbackMsg: ChatMessage = {
+        id: `msg-${Date.now()}`,
+        channel_id: channelKey,
+        content: finalContent,
+        created_at: new Date().toISOString(),
+        author: {
+          id: currentUser.id,
+          name: currentUser.name,
+          role: currentUser.role,
+        },
+      };
+      setMessagesByChannel((prev) => ({
+        ...prev,
+        [channelKey]: [
+          ...(prev[channelKey] || INITIAL_CHANNEL_CHAT_MESSAGES),
+          fallbackMsg,
+        ],
+      }));
+      setMessageText('');
+      setStagedAttachment(null);
+    } finally {
+      setIsSending(false);
+    }
   };
 
   const handleVoiceNoteClick = () => {
@@ -464,7 +502,7 @@ export function MessengerChatBox({
             {/* Circular Dark Navy Send Arrow Button */}
             <button
               type="submit"
-              disabled={!messageText.trim() && !stagedAttachment}
+              disabled={(!messageText.trim() && !stagedAttachment) || isSending}
               aria-label="Send message"
               className="w-9 h-9 rounded-full bg-[#0c0a3e] hover:bg-ustp-navy disabled:opacity-50 text-white flex items-center justify-center shrink-0 transition-opacity cursor-pointer"
             >

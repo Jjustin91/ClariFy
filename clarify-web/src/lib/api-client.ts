@@ -2,9 +2,11 @@ import type {
   AdminMetricsResponse,
   Announcement,
   Channel,
+  ChatMessage,
   Instructor,
   LaravelValidationError,
   PaginatedResponse,
+  PersistenceStatus,
   PrismsSyncLog,
   QaThread,
   SingleResourceResponse,
@@ -157,6 +159,26 @@ async function requestLaravel<T>(
       errors: json.errors,
     };
     throw err;
+  }
+
+  const method = (options.method || 'GET').toUpperCase();
+  if (
+    method !== 'GET' &&
+    method !== 'HEAD' &&
+    typeof window !== 'undefined' &&
+    'BroadcastChannel' in window
+  ) {
+    try {
+      const bc = new BroadcastChannel('clarify_realtime_sync');
+      bc.postMessage({
+        type: 'mutation',
+        endpoint,
+        timestamp: Date.now(),
+      });
+      bc.close();
+    } catch {
+      // Ignore BroadcastChannel errors
+    }
   }
 
   return json as T;
@@ -1313,3 +1335,127 @@ export async function getAdminMetricsApi(): Promise<
     data: mockMetrics,
   };
 }
+
+// ============================================================================
+// COURSE HUB MESSENGER CHAT & PERSISTENCE STATUS
+// ============================================================================
+
+const mockChatMessagesByChannel: Record<number, ChatMessage[]> = {
+  7: [
+    {
+      id: 801,
+      channel_id: 7,
+      content: 'When po defence maam? and what possible need i bring?',
+      created_at: '2026-10-30T17:30:00Z',
+      author: {
+        id: 1,
+        name: 'Kobeni Higashiyama',
+        role: 'student',
+      },
+    },
+    {
+      id: 802,
+      channel_id: 7,
+      content:
+        'Inig date date date, dili na ma move kay mao ra day free sa mga panelist nato, so dont be late and print your documents at least 3 copies',
+      created_at: '2026-10-30T17:30:00Z',
+      author: {
+        id: 10492,
+        name: 'Aki Hayakawa',
+        role: 'faculty',
+      },
+    },
+    {
+      id: 803,
+      channel_id: 7,
+      content:
+        'Naa bay specific na format maam? hehe thank you pag answer maam',
+      created_at: '2026-10-30T17:30:00Z',
+      author: {
+        id: 1,
+        name: 'Kobeni Higashiyama',
+        role: 'student',
+      },
+    },
+    {
+      id: 804,
+      channel_id: 7,
+      content: 'A4, Times New Roman, 12 fontsize, basta dont be late lng dayun',
+      created_at: '2026-10-30T17:30:00Z',
+      author: {
+        id: 10492,
+        name: 'Aki Hayakawa',
+        role: 'faculty',
+      },
+    },
+  ],
+};
+
+export async function getChannelChatMessagesApi(
+  channelId: number
+): Promise<SingleResourceResponse<ChatMessage[]>> {
+  if (!getUseMockApi()) {
+    return requestLaravel<SingleResourceResponse<ChatMessage[]>>(
+      `/channels/${channelId}/chat`
+    );
+  }
+  return {
+    data:
+      mockChatMessagesByChannel[channelId] ||
+      mockChatMessagesByChannel[7] ||
+      [],
+  };
+}
+
+export async function sendChannelChatMessageApi(
+  channelId: number,
+  content: string
+): Promise<SingleResourceResponse<ChatMessage>> {
+  if (!getUseMockApi()) {
+    return requestLaravel<SingleResourceResponse<ChatMessage>>(
+      `/channels/${channelId}/chat`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ content }),
+      }
+    );
+  }
+
+  const trimmed = content.trim();
+  if (!trimmed) {
+    throw createValidationError('Message content cannot be empty.', {
+      content: ['Please type a message before sending.'],
+    });
+  }
+
+  const existing =
+    mockChatMessagesByChannel[channelId] ||
+    mockChatMessagesByChannel[7] ||
+    [];
+  const newMsg: ChatMessage = {
+    id: Date.now(),
+    channel_id: channelId,
+    content: trimmed,
+    created_at: new Date().toISOString(),
+    author: {
+      id: mockCurrentUser.id,
+      name: mockCurrentUser.name,
+      role: mockCurrentUser.role,
+      avatar_url: mockCurrentUser.avatar_url || null,
+    },
+  };
+  mockChatMessagesByChannel[channelId] = [...existing, newMsg];
+  return {
+    message: 'Message sent to Course Hub chat.',
+    data: newMsg,
+  };
+}
+
+export async function getPersistenceStatusApi(): Promise<
+  SingleResourceResponse<PersistenceStatus>
+> {
+  return requestLaravel<SingleResourceResponse<PersistenceStatus>>(
+    '/persistence/status'
+  );
+}
+

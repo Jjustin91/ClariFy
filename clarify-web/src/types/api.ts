@@ -184,8 +184,53 @@ export interface SingleResourceResponse<T> {
   data: T;
 }
 
+export interface ChatMessage {
+  id: number | string;
+  channel_id: number;
+  content: string;
+  created_at: string;
+  author: {
+    id: number;
+    name: string;
+    role: UserRole;
+    avatar_url?: string | null;
+  };
+}
+
+export interface RealtimeEvent {
+  revision: number;
+  type:
+    | 'connected'
+    | 'announcement.created'
+    | 'announcement.updated'
+    | 'announcement.deleted'
+    | 'announcement.acknowledged'
+    | 'chat.message'
+    | 'thread.created'
+    | 'thread.updated'
+    | 'thread.deleted'
+    | 'thread.replied'
+    | 'thread.faq_pinned'
+    | 'channel.created'
+    | 'channel.updated'
+    | 'admin.updated'
+    | 'db.changed';
+  channel_id?: number;
+  actor_id?: number;
+  timestamp: string;
+}
+
+export interface PersistenceStatus {
+  driver: 'postgresql-direct' | 'laravel-postgresql' | 'memory-fallback';
+  database?: string;
+  host?: string;
+  connected: boolean;
+  revision: number;
+}
+
 export interface LaravelValidationError {
   status: number;
   message: string;
   errors?: Record<string, string[]>;
 }
+

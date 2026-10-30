@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { FileText, Image as ImageIcon, Search } from 'lucide-react';
 import { AppShell } from '@/src/components/layout/AppShell';
 import { AnnouncementCard } from '@/src/components/announcements/AnnouncementCard';
@@ -47,9 +47,12 @@ export default function AnnouncementsPage() {
   });
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const hasLoadedOnceRef = useRef(false);
 
   const fetchAnnouncements = useCallback(async () => {
-    setIsLoading(true);
+    if (!hasLoadedOnceRef.current) {
+      setIsLoading(true);
+    }
     setError(null);
     try {
       const res = await getAnnouncementsApi({
@@ -61,6 +64,7 @@ export default function AnnouncementsPage() {
       });
       setAnnouncements(res.data);
       setMeta(res.meta);
+      hasLoadedOnceRef.current = true;
     } catch (err) {
       const apiErr = err as LaravelValidationError;
       setError(

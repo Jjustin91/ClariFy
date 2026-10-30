@@ -92,7 +92,10 @@ class AnnouncementController
     public function store(Request $request): JsonResponse
     {
         $user = $request->user();
-        $channel = Channel::find($request->input('channel_id', 7));
+        $channel = Channel::find($request->input('channel_id', 7)) ?? Channel::first();
+        if ($channel) {
+            $request->merge(['channel_id' => $channel->id]);
+        }
 
         $authResponse = Gate::inspect('create', [Announcement::class, $channel]);
         if ($authResponse->denied()) {

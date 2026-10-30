@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { Plus } from 'lucide-react';
 import { AppShell } from '@/src/components/layout/AppShell';
@@ -26,9 +26,12 @@ export default function DashboardPage() {
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
+  const hasLoadedOnceRef = useRef(false);
 
   const loadDashboardData = useCallback(async () => {
-    setIsLoading(true);
+    if (!hasLoadedOnceRef.current) {
+      setIsLoading(true);
+    }
     setError(null);
     try {
       const res = await getAnnouncementsApi({
@@ -37,6 +40,7 @@ export default function DashboardPage() {
         per_page: 2,
       });
       setAnnouncements(res.data);
+      hasLoadedOnceRef.current = true;
     } catch (err) {
       const apiErr = err as LaravelValidationError;
       setError(

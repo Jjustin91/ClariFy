@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Activity,
   CheckCircle2,
@@ -45,6 +45,7 @@ export default function AdminConsolePage() {
   const [metrics, setMetrics] = useState<AdminMetricsResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const hasLoadedOnceRef = useRef(false);
 
   // PRISMS Sync state (FR-10)
   const [semesterCode, setSemesterCode] = useState('2026-1ST-SEM');
@@ -56,7 +57,9 @@ export default function AdminConsolePage() {
       setIsLoading(false);
       return;
     }
-    setIsLoading(true);
+    if (!hasLoadedOnceRef.current) {
+      setIsLoading(true);
+    }
     setError(null);
     try {
       const [pendingRes, usersRes, metricsRes] = await Promise.all([
@@ -67,6 +70,7 @@ export default function AdminConsolePage() {
       setPendingUsers(pendingRes.data);
       setAllUsers(usersRes.data);
       setMetrics(metricsRes.data);
+      hasLoadedOnceRef.current = true;
     } catch (err) {
       const apiErr = err as LaravelValidationError;
       setError(

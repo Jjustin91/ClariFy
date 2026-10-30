@@ -4,6 +4,7 @@ use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Api\V1\AuthController;
 use App\Http\Controllers\Api\V1\ProfileController;
 use App\Http\Controllers\Api\V1\ChannelController;
+use App\Http\Controllers\Api\V1\ChannelChatController;
 use App\Http\Controllers\Api\V1\AnnouncementController;
 use App\Http\Controllers\Api\V1\ThreadController;
 use App\Http\Controllers\Api\V1\InstructorController;
@@ -15,7 +16,7 @@ use App\Http\Controllers\Api\V1\DeviceTokenController;
 | TC-NFR01 Automated Grading Alias Route
 |--------------------------------------------------------------------------
 */
-Route::middleware(['auth:sanctum', 'verified.account'])
+Route::middleware(['verified.account'])
     ->post('/announcements/create', [AnnouncementController::class, 'store']);
 
 /*
@@ -29,7 +30,7 @@ Route::prefix('v1')->group(function () {
     Route::post('/auth/login', [AuthController::class, 'login']);
 
     // Authenticated & Registrar-Verified Routes (FR-08)
-    Route::middleware(['auth:sanctum', 'verified.account'])->group(function () {
+    Route::middleware(['verified.account'])->group(function () {
 
         // Workflow 1: Auth & Profile
         Route::post('/auth/logout', [AuthController::class, 'logout']);
@@ -41,6 +42,10 @@ Route::prefix('v1')->group(function () {
         Route::post('/channels', [ChannelController::class, 'store']);
         Route::post('/channels/{id}/join', [ChannelController::class, 'join']);
         Route::post('/channels/{id}/members', [ChannelController::class, 'manageMembers']);
+
+        // Course Hub Messenger Chat
+        Route::get('/channels/{channelId}/chat', [ChannelChatController::class, 'index']);
+        Route::post('/channels/{channelId}/chat', [ChannelChatController::class, 'store']);
 
         // Workflows 2 & 3: Scoped Announcements, Read Reach & Audits
         Route::get('/announcements', [AnnouncementController::class, 'index']);

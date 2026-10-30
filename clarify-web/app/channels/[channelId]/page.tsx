@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import {
@@ -76,6 +76,7 @@ export default function CourseHubPage() {
   const [threads, setThreads] = useState<QaThread[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const hasLoadedOnceRef = useRef(false);
 
   // Student Send an Inquiry form state (Wireframe Page 4)
   const [inquirySubject, setInquirySubject] = useState('');
@@ -100,7 +101,9 @@ export default function CourseHubPage() {
   const [openFaqIds, setOpenFaqIds] = useState<number[]>([201, 202, 204]);
 
   const loadHubData = useCallback(async () => {
-    setIsLoading(true);
+    if (!hasLoadedOnceRef.current) {
+      setIsLoading(true);
+    }
     setError(null);
     try {
       const [annRes, threadRes] = await Promise.all([
@@ -109,6 +112,7 @@ export default function CourseHubPage() {
       ]);
       setAnnouncements(annRes.data);
       setThreads(threadRes.data);
+      hasLoadedOnceRef.current = true;
     } catch (err) {
       const apiErr = err as LaravelValidationError;
       setError(

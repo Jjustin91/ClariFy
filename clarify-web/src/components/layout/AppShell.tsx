@@ -30,6 +30,7 @@ export function AppShell({
     user,
     useMock,
     toggleApiMode,
+    persistenceStatus,
     isDrawerOpen,
     setIsDrawerOpen,
     setIsSettingsModalOpen,
@@ -78,6 +79,12 @@ export function AppShell({
         } 3rd Year`
       : `${user.academic_profile?.department || 'CITC'} Dept`;
 
+  const apiBadgeLabel = useMock
+    ? 'API: Mock Seed'
+    : persistenceStatus?.connected
+    ? `PG: Connected (${persistenceStatus.database || 'clarify_db'})`
+    : 'API: Connected (/api/v1)';
+
   return (
     <div className="min-h-screen flex flex-col bg-ustp-cream text-ustp-text">
       {/* Persistent Sticky Top Header Bar (ustp-navy #1a1851) matching MVP Screenshots & Wireframes */}
@@ -112,7 +119,7 @@ export function AppShell({
             }`}
           >
             <Database className="w-3 h-3" />
-            <span>{useMock ? 'API: Mock Seed' : 'API: Connected (/api/v1)'}</span>
+            <span>{apiBadgeLabel}</span>
           </button>
 
           {/* USTP Logo Badge matching Wireframes top-right "logo" box */}

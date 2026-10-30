@@ -2,6 +2,7 @@ import type {
   AdminMetricsResponse,
   Announcement,
   Channel,
+  ChatMessage,
   Instructor,
   PrismsSyncLog,
   QaThread,
@@ -46,6 +47,7 @@ interface ServerStore {
   announcements: Announcement[];
   announcementReadsByUser: Record<number, number[]>; // announcementId -> array of userIds
   threads: QaThread[];
+  chatMessagesByChannel: Record<number, ChatMessage[]>;
   instructors: Instructor[];
   metrics: AdminMetricsResponse;
   tokens: Record<string, number>; // bearer token -> userId
@@ -90,6 +92,58 @@ function createInitialStore(): ServerStore {
     '3|clarify-sanctum-admin-90001': DEMO_USERS.it_admin.id,
   };
 
+  const initialChatMessages: Record<number, ChatMessage[]> = {
+    7: [
+      {
+        id: 801,
+        channel_id: 7,
+        content: 'When po defence maam? and what possible need i bring?',
+        created_at: '2026-10-30T17:30:00Z',
+        author: {
+          id: 1,
+          name: 'Kobeni Higashiyama',
+          role: 'student',
+        },
+      },
+      {
+        id: 802,
+        channel_id: 7,
+        content:
+          'Inig date date date, dili na ma move kay mao ra day free sa mga panelist nato, so dont be late and print your documents at least 3 copies',
+        created_at: '2026-10-30T17:30:00Z',
+        author: {
+          id: 10492,
+          name: 'Aki Hayakawa',
+          role: 'faculty',
+        },
+      },
+      {
+        id: 803,
+        channel_id: 7,
+        content:
+          'Naa bay specific na format maam? hehe thank you pag answer maam',
+        created_at: '2026-10-30T17:30:00Z',
+        author: {
+          id: 1,
+          name: 'Kobeni Higashiyama',
+          role: 'student',
+        },
+      },
+      {
+        id: 804,
+        channel_id: 7,
+        content:
+          'A4, Times New Roman, 12 fontsize, basta dont be late lng dayun',
+        created_at: '2026-10-30T17:30:00Z',
+        author: {
+          id: 10492,
+          name: 'Aki Hayakawa',
+          role: 'faculty',
+        },
+      },
+    ],
+  };
+
   return {
     users,
     pendingUsers,
@@ -97,6 +151,7 @@ function createInitialStore(): ServerStore {
     announcements,
     announcementReadsByUser,
     threads,
+    chatMessagesByChannel: initialChatMessages,
     instructors,
     metrics,
     tokens,
@@ -1461,6 +1516,63 @@ export function handleClarifyApiRequest(req: ApiEngineRequest): ApiEngineRespons
         message:
           'Device push token registered for <= 2.0s urgent alerts (NFR-02).',
         data: tokenRecord,
+      },
+    };
+  }
+
+  // ---------------------------------------------------------------------------
+  // COURSE HUB MESSENGER CHAT: GET & POST /channels/{channelId}/chat
+  // ---------------------------------------------------------------------------
+  const channelChatMatch = cleanPath.match(/^\/channels\/(\d+)\/chat$/);
+  if (method === 'GET' && channelChatMatch) {
+    const channelId = Number(channelChatMatch[1]);
+    const list =
+      store.chatMessagesByChannel[channelId] ||
+      store.chatMessagesByChannel[7] ||
+      [];
+    return {
+      status: 200,
+      body: { data: list },
+    };
+  }
+
+  if (method === 'POST' && channelChatMatch) {
+    const channelId = Number(channelChatMatch[1]);
+    const content = String(body.content || '').trim();
+    if (!content) {
+      return {
+        status: 422,
+        body: {
+          status: 422,
+          message: 'Message content cannot be empty.',
+          errors: { content: ['Please type a message before sending.'] },
+        },
+      };
+    }
+
+    const existing =
+      store.chatMessagesByChannel[channelId] ||
+      store.chatMessagesByChannel[7] ||
+      [];
+    const newMsg: ChatMessage = {
+      id: Date.now(),
+      channel_id: channelId,
+      content,
+      created_at: new Date().toISOString(),
+      author: {
+        id: activeUser.id,
+        name: activeUser.name,
+        role: activeUser.role,
+        avatar_url: activeUser.avatar_url || null,
+      },
+    };
+
+    store.chatMessagesByChannel[channelId] = [...existing, newMsg];
+    return {
+      status: 201,
+      body: {
+        message: 'Message sent to Course Hub chat.',
+        data: newMsg,
       },
     };
   }

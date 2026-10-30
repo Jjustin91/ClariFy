@@ -1,7 +1,21 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { handleClarifyApiRequest } from '@/src/server/clarify-api-engine';
+import {
+  getPostgresStatusInfo,
+  handlePostgresApiRequest,
+} from '@/src/server/postgres-adapter';
+import {
+  emitRealtimeEvent,
+  getCurrentRevision,
+} from '@/src/server/realtime-bus';
+import type { PersistenceStatus, RealtimeEvent } from '@/src/types/api';
 
-async function parseRequestBody(req: NextRequest): Promise<Record<string, unknown>> {
+export const dynamic = 'force-dynamic';
+export const runtime = 'nodejs';
+
+async function parseRequestBody(
+  req: NextRequest
+): Promise<Record<string, unknown>> {
   if (req.method === 'GET' || req.method === 'HEAD') {
     return {};
   }
@@ -29,6 +43,112 @@ async function parseRequestBody(req: NextRequest): Promise<Record<string, unknow
   }
 }
 
+function classifyMutationEvent(
+  method: string,
+  apiPath: string,
+  body: Record<string, unknown>
+): { type: RealtimeEvent['type']; channel_id?: number } | null {
+  const m = method.toUpperCase();
+  if (m === 'GET' || m === 'HEAD') return null;
+
+  if (apiPath === '/announcements' || apiPath === '/announcements/create') {
+    return {
+      type: 'announcement.created',
+      channel_id: body.channel_id ? Number(body.channel_id) : undefined,
+    };
+  }
+  if (/^\/announcements\/\d+\/acknowledge$/.test(apiPath)) {
+    return { type: 'announcement.acknowledged' };
+  }
+  if (/^\/announcements\/\d+$/.test(apiPath)) {
+    return {
+      type: m === 'DELETE' ? 'announcement.deleted' : 'announcement.updated',
+    };
+  }
+  const chatMatch = apiPath.match(/^\/channels\/(\d+)\/chat$/);
+  if (chatMatch) {
+    return {
+      type: 'chat.message',
+      channel_id: Number(chatMatch[1]),
+    };
+  }
+  const threadCreateMatch = apiPath.match(/^\/channels\/(\d+)\/threads$/);
+  if (threadCreateMatch) {
+    return {
+      type: 'thread.created',
+      channel_id: Number(threadCreateMatch[1]),
+    };
+  }
+  if (/^\/threads\/\d+\/replies$/.test(apiPath)) {
+    return { type: 'thread.replied' };
+  }
+  if (/^\/threads\/\d+\/convert-faq$/.test(apiPath)) {
+    return { type: 'thread.faq_pinned' };
+  }
+  if (/^\/threads\/\d+$/.test(apiPath)) {
+    return {
+      type: m === 'DELETE' ? 'thread.deleted' : 'thread.updated',
+    };
+  }
+  if (apiPath === '/channels') {
+    return { type: 'channel.created' };
+  }
+  if (/^\/channels\/\d+\/(join|members)$/.test(apiPath)) {
+    return { type: 'channel.updated' };
+  }
+  if (apiPath.startsWith('/admin/') || apiPath === '/profile') {
+    return { type: 'admin.updated' };
+  }
+  return null;
+}
+
+async function tryProxyToLaravel(
+  method: string,
+  apiPath: string,
+  searchParams: URLSearchParams,
+  authHeader: string | undefined,
+  body: Record<string, unknown>
+): Promise<{ status: number; body: Record<string, unknown> } | null> {
+  const laravelBase = process.env.LARAVEL_BACKEND_URL?.trim();
+  if (!laravelBase) return null;
+
+  const qs = searchParams.toString();
+  const targetUrl = `${laravelBase.replace(/\/$/, '')}/api/v1${apiPath}${
+    qs ? `?${qs}` : ''
+  }`;
+
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 2000);
+    const res = await fetch(targetUrl, {
+      method,
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        ...(authHeader ? { Authorization: authHeader } : {}),
+      },
+      body:
+        method === 'GET' || method === 'HEAD'
+          ? undefined
+          : JSON.stringify(body),
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+
+    if (res.status >= 500 || res.status === 404) {
+      return null;
+    }
+
+    const json = (await res.json().catch(() => ({}))) as Record<
+      string,
+      unknown
+    >;
+    return { status: res.status, body: json };
+  } catch {
+    return null;
+  }
+}
+
 async function handleRoute(
   req: NextRequest,
   context: { params: Promise<{ slug: string[] }> }
@@ -36,27 +156,77 @@ async function handleRoute(
   const { slug } = await context.params;
   const apiPath = `/${(slug || []).join('/')}`;
 
-  // Execute the ClariFy API v1 Engine directly
   const body = await parseRequestBody(req);
   const effectiveMethod =
     typeof body._method === 'string' ? body._method.toUpperCase() : req.method;
+
+  // Endpoint to inspect active database driver & real-time revision
+  if (effectiveMethod === 'GET' && apiPath === '/persistence/status') {
+    const pgStatus = await getPostgresStatusInfo();
+    const statusPayload: PersistenceStatus = pgStatus.connected
+      ? {
+          driver: 'postgresql-direct',
+          database: pgStatus.database,
+          host: pgStatus.host,
+          connected: true,
+          revision: getCurrentRevision(),
+        }
+      : {
+          driver: 'memory-fallback',
+          connected: false,
+          revision: getCurrentRevision(),
+        };
+    return NextResponse.json({ data: statusPayload }, { status: 200 });
+  }
 
   const query: Record<string, string | undefined> = {};
   req.nextUrl.searchParams.forEach((value, key) => {
     query[key] = value;
   });
 
+  const authHeader = req.headers.get('authorization') || undefined;
   const headers: Record<string, string | undefined> = {
-    authorization: req.headers.get('authorization') || undefined,
+    authorization: authHeader,
   };
 
-  const result = handleClarifyApiRequest({
+  // 1. Direct PostgreSQL execution (persists immediately into local PostgreSQL database)
+  let result = await handlePostgresApiRequest({
     method: effectiveMethod,
     path: apiPath,
     query,
     headers,
     body,
   });
+
+  // 2. If direct PostgreSQL is not reachable, try Laravel Backend Proxy if configured
+  if (!result) {
+    result = await tryProxyToLaravel(
+      effectiveMethod,
+      apiPath,
+      req.nextUrl.searchParams,
+      authHeader,
+      body
+    );
+  }
+
+  // 3. Fallback to in-memory contract engine for cloud preview environments without local PG
+  if (!result) {
+    result = handleClarifyApiRequest({
+      method: effectiveMethod,
+      path: apiPath,
+      query,
+      headers,
+      body,
+    });
+  }
+
+  // Broadcast real-time event whenever a mutation succeeds
+  if (result.status >= 200 && result.status < 300) {
+    const ev = classifyMutationEvent(effectiveMethod, apiPath, body);
+    if (ev) {
+      emitRealtimeEvent(ev.type, { channel_id: ev.channel_id });
+    }
+  }
 
   return NextResponse.json(result.body, { status: result.status });
 }

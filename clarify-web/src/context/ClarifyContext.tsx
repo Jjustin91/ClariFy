@@ -1,10 +1,25 @@
 'use client';
 
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import type { Announcement, Channel, User } from '../types/api';
+import React, {
+  createContext,
+  useContext,
+  useState,
+  useEffect,
+  useCallback,
+  useRef,
+} from 'react';
+import type {
+  Announcement,
+  Channel,
+  PersistenceStatus,
+  RealtimeEvent,
+  User,
+} from '../types/api';
 import {
   getChannelsApi,
   getCurrentMockUser,
+  getMeApi,
+  getPersistenceStatusApi,
   getUseMockApi,
   setUseMockApi,
   switchDemoRole,
@@ -23,6 +38,7 @@ interface ClarifyContextValue {
   switchRole: (role: 'student' | 'faculty' | 'it_admin') => void;
   useMock: boolean;
   toggleApiMode: (nextValue?: boolean) => void;
+  persistenceStatus: PersistenceStatus | null;
   isDrawerOpen: boolean;
   setIsDrawerOpen: React.Dispatch<React.SetStateAction<boolean>>;
   isSettingsModalOpen: boolean;
@@ -53,6 +69,8 @@ const ClarifyContext = createContext<ClarifyContextValue | undefined>(undefined)
 export function ClarifyProvider({ children }: { children: React.ReactNode }) {
   const [user, setUserState] = useState<User>(DEMO_USERS.student);
   const [useMock, setUseMock] = useState<boolean>(false);
+  const [persistenceStatus, setPersistenceStatus] =
+    useState<PersistenceStatus | null>(null);
   const [isDrawerOpen, setIsDrawerOpen] = useState<boolean>(true);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState<boolean>(false);
   const [isChannelModalOpen, setIsChannelModalOpen] = useState<boolean>(false);
@@ -68,6 +86,7 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
   const [channels, setChannels] = useState<Channel[]>(INITIAL_CHANNELS);
   const [announcementVersion, setAnnouncementVersion] = useState<number>(0);
   const [toasts, setToasts] = useState<ToastItem[]>([]);
+  const lastRevisionRef = useRef<number>(0);
 
   const showToast = useCallback(
     (message: string, variant: ToastItem['variant'] = 'info') => {
@@ -89,7 +108,19 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
       const res = await getChannelsApi();
       setChannels(res.data);
     } catch {
-      // Retain existing channels if live backend is offline
+      // Retain existing channels if backend is unreachable
+    }
+  }, []);
+
+  const refreshPersistenceStatus = useCallback(async () => {
+    try {
+      const res = await getPersistenceStatusApi();
+      setPersistenceStatus(res.data);
+      if (res.data.revision > lastRevisionRef.current) {
+        lastRevisionRef.current = res.data.revision;
+      }
+    } catch {
+      // Ignore status errors
     }
   }, []);
 
@@ -97,13 +128,111 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
     const initialMock = getUseMockApi();
     setUseMock(initialMock);
     setUserState(getCurrentMockUser());
-    refreshChannels();
-  }, [refreshChannels]);
+    void refreshChannels();
+    void refreshPersistenceStatus();
+
+    // Sync active user profile from backend / PostgreSQL
+    if (!initialMock) {
+      getMeApi()
+        .then((res) => {
+          if (res?.data) {
+            setUserState(res.data);
+          }
+        })
+        .catch(() => {});
+    }
+  }, [refreshChannels, refreshPersistenceStatus]);
+
+  // Real-time synchronization via Server-Sent Events (SSE) + BroadcastChannel + fallback polling
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const handleRealtimeTrigger = () => {
+      void refreshChannels();
+      setAnnouncementVersion((v) => v + 1);
+    };
+
+    // 1. Cross-tab BroadcastChannel for instant zero-latency local browser sync
+    let bc: BroadcastChannel | null = null;
+    if ('BroadcastChannel' in window) {
+      try {
+        bc = new BroadcastChannel('clarify_realtime_sync');
+        bc.onmessage = () => {
+          handleRealtimeTrigger();
+        };
+      } catch {
+        bc = null;
+      }
+    }
+
+    // 2. Server-Sent Events (SSE) subscription to /api/v1/realtime/stream
+    let eventSource: EventSource | null = null;
+    if (!useMock && 'EventSource' in window) {
+      try {
+        eventSource = new EventSource('/api/v1/realtime/stream');
+        eventSource.onmessage = (e) => {
+          try {
+            const payload = JSON.parse(e.data) as RealtimeEvent;
+            if (payload.revision && payload.revision > lastRevisionRef.current) {
+              const isInitialConnect = payload.type === 'connected';
+              lastRevisionRef.current = payload.revision;
+              if (!isInitialConnect) {
+                handleRealtimeTrigger();
+              }
+            }
+          } catch {
+            // Ignore malformed SSE payload
+          }
+        };
+      } catch {
+        eventSource = null;
+      }
+    }
+
+    // 3. Lightweight 2.5s poll fallback (detects external PostgreSQL edits & environments buffering SSE)
+    const pollInterval = setInterval(async () => {
+      if (useMock) return;
+      try {
+        const res = await fetch(
+          `/api/v1/realtime/stream?poll=1&since_revision=${lastRevisionRef.current}`,
+          { cache: 'no-store' }
+        );
+        if (!res.ok) return;
+        const data = (await res.json()) as {
+          revision: number;
+          events: RealtimeEvent[];
+        };
+        if (data.revision > lastRevisionRef.current) {
+          const hadPriorRevision = lastRevisionRef.current > 0;
+          lastRevisionRef.current = data.revision;
+          if (hadPriorRevision) {
+            handleRealtimeTrigger();
+          }
+        }
+      } catch {
+        // Ignore transient network errors
+      }
+    }, 2500);
+
+    return () => {
+      if (bc) {
+        try {
+          bc.close();
+        } catch {
+          // Ignore close error
+        }
+      }
+      if (eventSource) {
+        eventSource.close();
+      }
+      clearInterval(pollInterval);
+    };
+  }, [useMock, refreshChannels]);
 
   const setUser = useCallback(
     (nextUser: User) => {
       setUserState(nextUser);
-      refreshChannels();
+      void refreshChannels();
       setAnnouncementVersion((v) => v + 1);
     },
     [refreshChannels]
@@ -113,7 +242,7 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
     (role: 'student' | 'faculty' | 'it_admin') => {
       const nextUser = switchDemoRole(role);
       setUserState(nextUser);
-      refreshChannels();
+      void refreshChannels();
       setAnnouncementVersion((v) => v + 1);
       const roleLabels = {
         student: 'Student View (Kobeni Higashiyama • 2020202020)',
@@ -136,10 +265,11 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
           : 'API Mode: Connected to ClariFy REST API (/api/v1)',
         'info'
       );
-      refreshChannels();
+      void refreshChannels();
+      void refreshPersistenceStatus();
       setAnnouncementVersion((v) => v + 1);
     },
-    [useMock, refreshChannels, showToast]
+    [useMock, refreshChannels, refreshPersistenceStatus, showToast]
   );
 
   const openAnnouncementModal = useCallback(
@@ -150,10 +280,10 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
       setAnnouncementModalState({
         isOpen: true,
         editingAnnouncement: options?.editingAnnouncement || null,
-        defaultChannelId: options?.defaultChannelId || 7,
+        defaultChannelId: options?.defaultChannelId || channels[0]?.id || 7,
       });
     },
-    []
+    [channels]
   );
 
   const closeAnnouncementModal = useCallback(() => {
@@ -166,7 +296,8 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
 
   const triggerAnnouncementRefresh = useCallback(() => {
     setAnnouncementVersion((v) => v + 1);
-  }, []);
+    void refreshChannels();
+  }, [refreshChannels]);
 
   return (
     <ClarifyContext.Provider
@@ -176,6 +307,7 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
         switchRole,
         useMock,
         toggleApiMode,
+        persistenceStatus,
         isDrawerOpen,
         setIsDrawerOpen,
         isSettingsModalOpen,
