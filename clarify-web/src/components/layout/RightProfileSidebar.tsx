@@ -38,7 +38,9 @@ export function RightProfileSidebar() {
         localStorage.getItem('user_section') ||
         (storedRole === 'faculty' ? 'CITC' : 'IT3R5');
 
+      const accountAvatarKey = `user_avatar_${storedId}`;
       const storedAvatar =
+        localStorage.getItem(accountAvatarKey) ||
         localStorage.getItem(`user_avatar_${storedRole}`) ||
         localStorage.getItem('user_avatar') ||
         (storedRole === 'faculty'
@@ -62,17 +64,21 @@ export function RightProfileSidebar() {
   }, []);
 
   const handleLogout = () => {
-    const savedStudentAvatar = localStorage.getItem('user_avatar_student');
-    const savedFacultyAvatar = localStorage.getItem('user_avatar_faculty');
-    const savedGeneralAvatar = localStorage.getItem('user_avatar');
+    const savedAvatars: Record<string, string> = {};
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith('user_avatar')) {
+        savedAvatars[key] = localStorage.getItem(key) || '';
+      }
+    }
 
     document.cookie = 'auth_token=; path=/; expires=Thu, 01 Jan 1970 00:00:01 GMT; Max-Age=0;';
     localStorage.clear();
     sessionStorage.clear();
 
-    if (savedStudentAvatar) localStorage.setItem('user_avatar_student', savedStudentAvatar);
-    if (savedFacultyAvatar) localStorage.setItem('user_avatar_faculty', savedFacultyAvatar);
-    if (savedGeneralAvatar) localStorage.setItem('user_avatar', savedGeneralAvatar);
+    Object.entries(savedAvatars).forEach(([key, val]) => {
+      if (val) localStorage.setItem(key, val);
+    });
 
     window.location.href = '/login';
   };
@@ -80,7 +86,7 @@ export function RightProfileSidebar() {
   return (
     <aside className="w-72 bg-[#fcb315] text-slate-900 flex flex-col items-center py-6 px-5 border-l border-amber-500 shrink-0 select-none h-full overflow-y-auto">
       
-      {/* Sidebar Profile Container */}
+      {/* Profile Sidebar */}
       <div className="flex flex-col items-center mb-6 min-h-[140px] justify-center">
         {mounted ? (
           <>

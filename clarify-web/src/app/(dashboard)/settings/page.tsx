@@ -5,10 +5,12 @@ import { RightProfileSidebar } from '@/components/layout/RightProfileSidebar';
 
 export default function SettingsPage() {
   const [role, setRole] = useState<'student' | 'faculty'>('student');
+  const [userId, setUserId] = useState<string>('');
   const [mounted, setMounted] = useState(false);
 
-  // Avatar state
-  const [avatar, setAvatar] = useState<string>('');
+  // Saved active avatar vs. temporary staged file preview
+  const [activeAvatar, setActiveAvatar] = useState<string>('');
+  const [pendingAvatar, setPendingAvatar] = useState<string | null>(null);
 
   // Student Preferences
   const [studentNotifications, setStudentNotifications] = useState(true);
@@ -23,8 +25,13 @@ export default function SettingsPage() {
 
   useEffect(() => {
     const storedRole = (localStorage.getItem('user_role') as 'student' | 'faculty') || 'student';
-    
+    const activeUserId =
+      localStorage.getItem('user_id') || (storedRole === 'faculty' ? 'FAC-2024-001' : '2020202020');
+
+    // Read stored profile avatar for specific account ID
+    const accountAvatarKey = `user_avatar_${activeUserId}`;
     const storedAvatar =
+      localStorage.getItem(accountAvatarKey) ||
       localStorage.getItem(`user_avatar_${storedRole}`) ||
       localStorage.getItem('user_avatar') ||
       (storedRole === 'faculty'
@@ -32,12 +39,13 @@ export default function SettingsPage() {
         : 'https://api.dicebear.com/7.x/avataaars/svg?seed=Student');
 
     setRole(storedRole);
-    setAvatar(storedAvatar);
+    setUserId(activeUserId);
+    setActiveAvatar(storedAvatar);
     setMounted(true);
   }, []);
 
-  // Center-crop image into a square canvas to prevent horizontal squishing
-  const handleImageUpload = (e: ChangeEvent<HTMLInputElement>) => {
+  // Stage selected photo in temporary memory without persisting to localStorage yet
+  const handleImageSelect = (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
       const reader = new FileReader();
@@ -52,7 +60,7 @@ export default function SettingsPage() {
           canvas.height = targetSize;
 
           if (ctx) {
-            // Calculate center square crop dimensions
+            // Square crop to prevent horizontal squishing
             const minDimension = Math.min(img.width, img.height);
             const sourceX = (img.width - minDimension) / 2;
             const sourceY = (img.height - minDimension) / 2;
@@ -71,13 +79,8 @@ export default function SettingsPage() {
 
             const croppedBase64 = canvas.toDataURL('image/jpeg', 0.85);
 
-            setAvatar(croppedBase64);
-
-            const activeRole = localStorage.getItem('user_role') || 'student';
-            localStorage.setItem(`user_avatar_${activeRole}`, croppedBase64);
-            localStorage.setItem('user_avatar', croppedBase64);
-
-            window.dispatchEvent(new Event('storage'));
+            // Stage in pending avatar state ONLY
+            setPendingAvatar(croppedBase64);
           }
         };
       };
@@ -85,13 +88,25 @@ export default function SettingsPage() {
     }
   };
 
+  // Persist image to localStorage and trigger sidebar update ONLY on form submit
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
     
-    if (avatar) {
+    if (pendingAvatar) {
       const activeRole = localStorage.getItem('user_role') || 'student';
-      localStorage.setItem(`user_avatar_${activeRole}`, avatar);
-      localStorage.setItem('user_avatar', avatar);
+      const activeUserId =
+        localStorage.getItem('user_id') || (activeRole === 'faculty' ? 'FAC-2024-001' : '2020202020');
+
+      // Commit changes to state and localStorage
+      setActiveAvatar(pendingAvatar);
+      localStorage.setItem(`user_avatar_${activeUserId}`, pendingAvatar);
+      localStorage.setItem(`user_avatar_${activeRole}`, pendingAvatar);
+      localStorage.setItem('user_avatar', pendingAvatar);
+
+      // Clear pending state
+      setPendingAvatar(null);
+
+      // Dispatch storage event so RightProfileSidebar updates across open tabs
       window.dispatchEvent(new Event('storage'));
     }
 
@@ -100,6 +115,9 @@ export default function SettingsPage() {
   };
 
   if (!mounted) return null;
+
+  // Render pending staged image if selected, otherwise display current saved avatar
+  const displayedAvatar = pendingAvatar || activeAvatar;
 
   return (
     <div className="flex h-screen bg-slate-900 text-slate-900 overflow-hidden font-sans">
@@ -129,11 +147,11 @@ export default function SettingsPage() {
 
             <form onSubmit={handleSave} className="space-y-6">
               
-              {/* Profile Photo Preview */}
+              {/* Profile Photo Uploader */}
               <div className="flex items-center gap-5 border-b border-slate-100 pb-6">
                 <div className="h-20 w-20 rounded-full overflow-hidden border-2 border-slate-900 bg-rose-200 shrink-0 aspect-square flex items-center justify-center">
                   <img
-                    src={avatar}
+                    src={displayedAvatar}
                     alt="Profile Avatar"
                     className="h-full w-full object-cover object-center rounded-full"
                   />
@@ -145,10 +163,15 @@ export default function SettingsPage() {
                     <input
                       type="file"
                       accept="image/*"
-                      onChange={handleImageUpload}
+                      onChange={handleImageSelect}
                       className="hidden"
                     />
                   </label>
+                  {pendingAvatar && (
+                    <span className="ml-2 text-[11px] font-bold text-amber-600 bg-amber-50 px-2 py-0.5 rounded">
+                      Unsaved changes
+                    </span>
+                  )}
                   <p className="text-[11px] text-slate-400">PNG, JPG or WebP up to 5MB</p>
                 </div>
               </div>
@@ -162,7 +185,7 @@ export default function SettingsPage() {
                       <input
                         type="text"
                         disabled
-                        value="FAC-2024-001"
+                        value={userId || "FAC-2024-001"}
                         className="w-full bg-slate-100 border border-slate-200 rounded-lg px-3 py-2 text-slate-700 font-medium"
                       />
                     </div>
@@ -227,7 +250,7 @@ export default function SettingsPage() {
                       <input
                         type="text"
                         disabled
-                        value="2020202020"
+                        value={userId || "2020202020"}
                         className="w-full bg-slate-100 border border-slate-200 rounded-lg px-3 py-2 text-slate-700 font-medium"
                       />
                     </div>
