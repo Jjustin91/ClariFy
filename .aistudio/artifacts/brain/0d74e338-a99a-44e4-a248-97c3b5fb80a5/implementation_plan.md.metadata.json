@@ -1,6 +1,6 @@
 {
-  "summary":  "Plan to remove the hashtag topic selector bar, hashtag badge, and Resolved badge from MessengerChatBox, making Messenger Chat a standalone Course Hub chat room completely independent of the Isolated Q&A Threads ticket cards.",
-  "updatedAt":  "2026-10-30T13:39:45.226361108Z",
+  "summary":  "Plan to enable the Add Channel + button in the left Scoped Channels sidebar for both Student and Faculty roles, keep the Roster button, and remove the Channel Management + button from the right-hand orange Profile & Navigation sidebar.",
+  "updatedAt":  "2026-10-30T14:42:56.396323278Z",
   "requestFeedback":  true,
   "userFacing":  true
 }

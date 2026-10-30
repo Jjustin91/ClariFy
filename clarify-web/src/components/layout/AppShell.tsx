@@ -34,7 +34,6 @@ export function AppShell({
     isDrawerOpen,
     setIsDrawerOpen,
     setIsSettingsModalOpen,
-    setIsChannelModalOpen,
     toasts,
     dismissToast,
     showToast,
@@ -247,15 +246,6 @@ export function AppShell({
                   {item.label}
                 </Link>
               ))}
-
-              {/* Replaces first wireframe "idk +" placeholder -> Channel Management (Workflow 5) */}
-              <button
-                type="button"
-                onClick={() => setIsChannelModalOpen(true)}
-                className="w-full px-5 py-3 text-right text-sm font-bold hover:bg-ustp-orange-dark/50 text-ustp-text transition-colors cursor-pointer"
-              >
-                Channel Management +
-              </button>
 
               {/* Replaces second wireframe "idk +" placeholder -> Admin Console (visible when role === 'it_admin') */}
               {user.role === 'it_admin' && (

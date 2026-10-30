@@ -291,16 +291,14 @@ export default function CourseHubPage() {
               />
             </div>
 
-            {canPublish && (
-              <button
-                type="button"
-                onClick={() => setIsChannelModalOpen(true)}
-                className="w-full flex items-center justify-between px-3 py-1.5 text-xs font-bold bg-white/10 hover:bg-white/15 text-ustp-gold rounded border border-ustp-gold/40 cursor-pointer"
-              >
-                <span>Add Channel</span>
-                <Plus className="w-3.5 h-3.5" />
-              </button>
-            )}
+            <button
+              type="button"
+              onClick={() => setIsChannelModalOpen(true)}
+              className="w-full flex items-center justify-between px-3 py-1.5 text-xs font-bold bg-white/10 hover:bg-white/15 text-ustp-gold rounded border border-ustp-gold/40 cursor-pointer"
+            >
+              <span>Add Channel</span>
+              <Plus className="w-3.5 h-3.5" />
+            </button>
 
             {/* Scoped Channel List matching Oct 22 MVP (# IT314 SoftEng, # IT311 InfoAssurance, etc.) */}
             <nav aria-label="Course Hub Channels" className="space-y-1 pt-1">
