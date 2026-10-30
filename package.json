@@ -6,10 +6,10 @@
     "clarify-web"
   ],
   "scripts": {
-    "dev": "npm run dev --workspace=clarify-web",
-    "build": "npm run build --workspace=clarify-web",
-    "start": "npm run start --workspace=clarify-web",
-    "lint": "npm run lint --workspace=clarify-web",
-    "clean": "npm run clean --workspace=clarify-web"
+    "dev": "cd clarify-web && exec ./node_modules/.bin/next dev -p 3000 -H 0.0.0.0",
+    "build": "cd clarify-web && ./node_modules/.bin/next build",
+    "start": "cd clarify-web && exec ./node_modules/.bin/next start -p 3000 -H 0.0.0.0",
+    "lint": "cd clarify-web && ./node_modules/.bin/eslint .",
+    "clean": "cd clarify-web && ./node_modules/.bin/next clean"
   }
 }

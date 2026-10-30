@@ -1,0 +1,6 @@
+{
+  "summary":  "Implementation plan to make the top navigation header, right-hand orange Profile & Navigation aside drawer, and Course Hub sidebars (Scoped Channels and Class FAQs) sticky with fixed viewport-aligned sizing (calc(100vh - 3.5rem) below the 3.5rem sticky header) and independent internal scrolling.",
+  "updatedAt":  "2026-10-30T11:49:16.080982548Z",
+  "requestFeedback":  true,
+  "userFacing":  true
+}

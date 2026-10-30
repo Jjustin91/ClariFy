@@ -29,47 +29,6 @@ async function parseRequestBody(req: NextRequest): Promise<Record<string, unknow
   }
 }
 
-async function tryProxyToLaravel(
-  req: NextRequest,
-  apiPath: string
-): Promise<NextResponse | null> {
-  const laravelBase = process.env.LARAVEL_BACKEND_URL;
-  if (!laravelBase) {
-    return null;
-  }
-
-  try {
-    const targetUrl = `${laravelBase.replace(/\/$/, '')}/api/v1${apiPath}${req.nextUrl.search}`;
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 1200);
-
-    const headers = new Headers();
-    headers.set('Accept', 'application/json');
-    const auth = req.headers.get('authorization');
-    if (auth) headers.set('Authorization', auth);
-    const contentType = req.headers.get('content-type');
-    if (contentType) headers.set('Content-Type', contentType);
-
-    const bodyBuffer =
-      req.method !== 'GET' && req.method !== 'HEAD'
-        ? await req.clone().arrayBuffer()
-        : undefined;
-
-    const upstream = await fetch(targetUrl, {
-      method: req.method,
-      headers,
-      body: bodyBuffer,
-      signal: controller.signal,
-    });
-    clearTimeout(timeout);
-
-    const data = await upstream.json();
-    return NextResponse.json(data, { status: upstream.status });
-  } catch {
-    return null;
-  }
-}
-
 async function handleRoute(
   req: NextRequest,
   context: { params: Promise<{ slug: string[] }> }
@@ -77,13 +36,7 @@ async function handleRoute(
   const { slug } = await context.params;
   const apiPath = `/${(slug || []).join('/')}`;
 
-  // 1. If an external Laravel 13 server is configured & reachable, proxy to it
-  const proxied = await tryProxyToLaravel(req, apiPath);
-  if (proxied) {
-    return proxied;
-  }
-
-  // 2. Otherwise execute the embedded ClariFy API v1 Engine directly
+  // Execute the ClariFy API v1 Engine directly
   const body = await parseRequestBody(req);
   const effectiveMethod =
     typeof body._method === 'string' ? body._method.toUpperCase() : req.method;

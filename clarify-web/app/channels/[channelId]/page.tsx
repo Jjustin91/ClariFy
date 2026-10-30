@@ -264,11 +264,11 @@ export default function CourseHubPage() {
 
   return (
     <AppShell title={hubHeaderTitle}>
-      <div className="flex-1 flex flex-col lg:flex-row min-h-[calc(100vh-3.5rem)]">
+      <div className="flex-1 flex flex-col lg:flex-row lg:items-start min-h-[calc(100vh-3.5rem)]">
         {/* LEFT COLUMN: ustp-navy (#1a1851) Scoped Channels Sidebar matching Oct 22 MVP & Wireframes */}
         <aside
           aria-label="Scoped Channels Sidebar"
-          className="w-full lg:w-60 bg-ustp-navy text-white border-r border-slate-800 shrink-0 flex flex-col justify-between p-3.5"
+          className="w-full lg:w-60 lg:sticky lg:top-14 lg:h-[calc(100vh-3.5rem)] lg:overflow-y-auto lg:self-start bg-ustp-navy text-white border-r border-slate-800 shrink-0 flex flex-col justify-between p-3.5"
         >
           <div className="space-y-3">
             <div className="flex items-center justify-between px-1">
@@ -755,7 +755,7 @@ export default function CourseHubPage() {
         {/* INNER-RIGHT PANEL: Class FAQs — 1-Click Converted Accordion OR Faculty "Answer Ticket" Panel (Wireframes Pages 7 & 8 + Oct 22 MVP) */}
         <aside
           aria-label="Class FAQs and Answer Ticket Panel"
-          className="w-full lg:w-72 xl:w-80 bg-white border-t lg:border-t-0 lg:border-l border-slate-200 shrink-0 p-4 space-y-4"
+          className="w-full lg:w-72 xl:w-80 lg:sticky lg:top-14 lg:h-[calc(100vh-3.5rem)] lg:overflow-y-auto lg:self-start bg-white border-t lg:border-t-0 lg:border-l border-slate-200 shrink-0 p-4 space-y-4"
         >
           {answeringThread && canResolve ? (
             /* FACULTY "ANSWER TICKET" PANEL matching Wireframe Page 8 */

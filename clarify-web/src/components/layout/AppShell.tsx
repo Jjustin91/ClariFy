@@ -86,8 +86,8 @@ export function AppShell({
 
   return (
     <div className="min-h-screen flex flex-col bg-ustp-cream text-ustp-text">
-      {/* Persistent Top Header Bar (ustp-navy #1a1851) matching MVP Screenshots & Wireframes */}
-      <header className="h-14 bg-ustp-navy text-white px-4 lg:px-6 flex items-center justify-between gap-4 border-b border-slate-800 shrink-0 z-30">
+      {/* Persistent Sticky Top Header Bar (ustp-navy #1a1851) matching MVP Screenshots & Wireframes */}
+      <header className="sticky top-0 h-14 bg-ustp-navy text-white px-4 lg:px-6 flex items-center justify-between gap-4 border-b border-slate-800 shrink-0 z-30">
         {/* Left: ClariFy in bold ustp-gold + active view/hub title in white */}
         <div className="flex items-center gap-3 min-w-0">
           <Link
@@ -173,8 +173,8 @@ export function AppShell({
         </div>
       </header>
 
-      {/* Main Content + Right-Hand Collapsible Orange Profile & Navigation Drawer */}
-      <div className="flex-1 flex relative overflow-x-hidden">
+      {/* Main Content + Right-Hand Sticky Fixed-Size Orange Profile & Navigation Drawer */}
+      <div className="flex-1 flex items-start relative overflow-x-clip">
         {/* Main Center Workspace */}
         <main className="flex-1 min-w-0 flex flex-col">{children}</main>
 
@@ -191,12 +191,12 @@ export function AppShell({
           </button>
         )}
 
-        {/* Right-Hand Collapsible Profile & Navigation Drawer (ustp-orange #ff9718 — Wireframes pp. 2–9) */}
+        {/* Right-Hand Sticky Fixed-Size Profile & Navigation Drawer (ustp-orange #ff9718 — Wireframes pp. 2–9) */}
         <aside
           aria-label="User Profile and Navigation Drawer"
-          className={`bg-ustp-orange text-ustp-text border-l border-amber-600/40 shrink-0 flex flex-col justify-between transition-transform duration-200 ease-out ${
+          className={`sticky top-14 h-[calc(100vh-3.5rem)] self-start bg-ustp-orange text-ustp-text border-l border-amber-600/40 shrink-0 flex flex-col justify-between transition-transform duration-200 ease-out ${
             isDrawerOpen
-              ? 'w-60 sm:w-64 translate-x-0'
+              ? 'w-60 sm:w-64 translate-x-0 overflow-y-auto'
               : 'w-0 translate-x-full overflow-hidden border-l-0'
           }`}
         >
