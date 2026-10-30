@@ -8,15 +8,11 @@ import {
   joinChannelApi,
   manageChannelMemberApi,
 } from '../../lib/api-client';
-import {
-  canPublishOrManageAnnouncements,
-  getFieldValidationError,
-} from '../../lib/domain-logic';
+import { getFieldValidationError } from '../../lib/domain-logic';
 import type { LaravelValidationError } from '../../types/api';
 
 export function ChannelRosterModal() {
   const {
-    user,
     channels,
     refreshChannels,
     isChannelModalOpen,
@@ -42,7 +38,6 @@ export function ChannelRosterModal() {
 
   if (!isChannelModalOpen) return null;
 
-  const canManage = canPublishOrManageAnnouncements(user.role);
   const currentChannel =
     channels.find((c) => c.id === selectedChannelId) || channels[0];
 
@@ -180,24 +175,35 @@ export function ChannelRosterModal() {
           >
             Channel Roster ({currentChannel?.members_count || 42})
           </button>
-          {canManage && (
-            <button
-              type="button"
-              onClick={() => setActiveTab('create')}
-              className={`px-4 py-2 text-xs font-bold border-b-2 transition-colors cursor-pointer ${
-                activeTab === 'create'
-                  ? 'border-ustp-navy text-ustp-navy'
-                  : 'border-transparent text-slate-600 hover:text-ustp-text'
-              }`}
-            >
-              + Create Course Hub
-            </button>
-          )}
+          <button
+            type="button"
+            onClick={() => setActiveTab('create')}
+            className={`px-4 py-2 text-xs font-bold border-b-2 transition-colors cursor-pointer ${
+              activeTab === 'create'
+                ? 'border-ustp-navy text-ustp-navy'
+                : 'border-transparent text-slate-600 hover:text-ustp-text'
+            }`}
+          >
+            + Create Course Hub
+          </button>
         </div>
 
         <div className="p-6 max-h-[70vh] overflow-y-auto">
           {activeTab === 'browse' && (
             <div className="space-y-3">
+              <div className="flex items-center justify-between gap-2 pb-1">
+                <p className="text-xs font-bold text-slate-600">
+                  Available Scoped Channels ({channels.length})
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('create')}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold bg-ustp-gold text-ustp-navy rounded hover:opacity-95 cursor-pointer"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>+ Add Channel / Course Hub</span>
+                </button>
+              </div>
               {channels.map((ch) => (
                 <div
                   key={ch.id}
@@ -256,44 +262,42 @@ export function ChannelRosterModal() {
                 </select>
               </div>
 
-              {canManage && (
-                <form
-                  onSubmit={handleAddMember}
-                  className="p-3.5 bg-slate-50 border border-slate-200 rounded-lg space-y-2"
-                >
-                  <p className="text-xs font-bold text-ustp-navy flex items-center gap-1.5">
-                    <UserPlus className="w-3.5 h-3.5" />
-                    Add Student / Faculty to Channel Roster
+              <form
+                onSubmit={handleAddMember}
+                className="p-3.5 bg-slate-50 border border-slate-200 rounded-lg space-y-2"
+              >
+                <p className="text-xs font-bold text-ustp-navy flex items-center gap-1.5">
+                  <UserPlus className="w-3.5 h-3.5" />
+                  Add Student / Faculty to Channel Roster
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  <input
+                    type="text"
+                    value={newMemberId}
+                    onChange={(e) => setNewMemberId(e.target.value)}
+                    placeholder="ID e.g. 2020201199"
+                    className="px-3 py-1.5 text-xs font-mono border border-slate-300 rounded bg-white"
+                  />
+                  <input
+                    type="text"
+                    value={newMemberName}
+                    onChange={(e) => setNewMemberName(e.target.value)}
+                    placeholder="Full Name (optional)"
+                    className="px-3 py-1.5 text-xs border border-slate-300 rounded bg-white"
+                  />
+                  <button
+                    type="submit"
+                    className="px-3 py-1.5 text-xs font-bold bg-ustp-navy text-white rounded hover:opacity-95 cursor-pointer"
+                  >
+                    + Add to Roster
+                  </button>
+                </div>
+                {memberError && (
+                  <p className="text-xs font-semibold text-red-600" role="alert">
+                    {memberError}
                   </p>
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                    <input
-                      type="text"
-                      value={newMemberId}
-                      onChange={(e) => setNewMemberId(e.target.value)}
-                      placeholder="ID e.g. 2020201199"
-                      className="px-3 py-1.5 text-xs font-mono border border-slate-300 rounded bg-white"
-                    />
-                    <input
-                      type="text"
-                      value={newMemberName}
-                      onChange={(e) => setNewMemberName(e.target.value)}
-                      placeholder="Full Name (optional)"
-                      className="px-3 py-1.5 text-xs border border-slate-300 rounded bg-white"
-                    />
-                    <button
-                      type="submit"
-                      className="px-3 py-1.5 text-xs font-bold bg-ustp-navy text-white rounded hover:opacity-95 cursor-pointer"
-                    >
-                      + Add to Roster
-                    </button>
-                  </div>
-                  {memberError && (
-                    <p className="text-xs font-semibold text-red-600" role="alert">
-                      {memberError}
-                    </p>
-                  )}
-                </form>
-              )}
+                )}
+              </form>
 
               <div className="border border-slate-200 rounded-lg divide-y divide-slate-200">
                 {(currentChannel.roster || []).map((member) => (
@@ -316,7 +320,7 @@ export function ChannelRosterModal() {
                       <span className="text-slate-600 font-medium">
                         {member.role.toUpperCase()} · {member.section}
                       </span>
-                      {canManage && member.role === 'student' && (
+                      {member.role === 'student' && (
                         <button
                           type="button"
                           onClick={() =>
@@ -335,7 +339,7 @@ export function ChannelRosterModal() {
             </div>
           )}
 
-          {activeTab === 'create' && canManage && (
+          {activeTab === 'create' && (
             <form onSubmit={handleCreateChannel} className="space-y-4">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>

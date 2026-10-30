@@ -410,17 +410,6 @@ export function handleClarifyApiRequest(req: ApiEngineRequest): ApiEngineRespons
   }
 
   if (method === 'POST' && cleanPath === '/channels') {
-    if (!canPublishOrManageAnnouncements(activeUser.role)) {
-      return {
-        status: 403,
-        body: {
-          status: 403,
-          message:
-            'Access Denied: Students cannot create Course Hub channels (NFR-01_REV).',
-        },
-      };
-    }
-
     const courseCode = String(body.course_code || '').trim();
     const name = String(body.name || '').trim();
     const description = String(body.description || '').trim();
@@ -536,17 +525,6 @@ export function handleClarifyApiRequest(req: ApiEngineRequest): ApiEngineRespons
 
   const membersMatch = cleanPath.match(/^\/channels\/(\d+)\/members$/);
   if (method === 'POST' && membersMatch) {
-    if (!canPublishOrManageAnnouncements(activeUser.role)) {
-      return {
-        status: 403,
-        body: {
-          status: 403,
-          message:
-            'Only Faculty or IT Administrators can modify channel rosters.',
-        },
-      };
-    }
-
     const channelId = Number(membersMatch[1]);
     const idx = store.channels.findIndex((c) => c.id === channelId);
     if (idx === -1) {

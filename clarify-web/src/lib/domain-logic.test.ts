@@ -275,5 +275,46 @@ test('ClariFy API Engine enforces FR-08 pending 403, TC-NFR01 student 403, TC-NF
   assert.equal(convertedThread.is_pinned_faq, true);
   assert.equal(convertedThread.author.name, 'Anonymous Student');
   assert.equal(convertedThread.author.id, null);
+
+  // 5. Student token can create a new Course Hub channel and add/remove roster members
+  const studentChannelCreate = handleClarifyApiRequest({
+    method: 'POST',
+    path: '/channels',
+    headers: { authorization: 'Bearer clarify-jwt-student-2020202020' },
+    body: {
+      course_code: 'IT315',
+      name: '# IT315 IT Elective 1',
+      description: 'Student study hub for IT315',
+      channel_type: 'course_hub',
+      scope_college: 'CITC',
+      scope_department: 'CITC',
+      scope_section: 'IT3R2',
+    },
+  });
+  assert.equal(studentChannelCreate.status, 201);
+
+  const studentRosterAdd = handleClarifyApiRequest({
+    method: 'POST',
+    path: '/channels/7/members',
+    headers: { authorization: 'Bearer clarify-jwt-student-2020202020' },
+    body: {
+      institutional_id: '2020201199',
+      name: 'Asa Mitaka',
+      section: 'IT3R2',
+      action: 'add',
+    },
+  });
+  assert.equal(studentRosterAdd.status, 200);
+
+  const studentRosterRemove = handleClarifyApiRequest({
+    method: 'POST',
+    path: '/channels/7/members',
+    headers: { authorization: 'Bearer clarify-jwt-student-2020202020' },
+    body: {
+      institutional_id: '2020201199',
+      action: 'remove',
+    },
+  });
+  assert.equal(studentRosterRemove.status, 200);
 });
 

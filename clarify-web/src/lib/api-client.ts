@@ -356,12 +356,6 @@ export async function createChannelApi(payload: {
     });
   }
 
-  if (!canPublishOrManageAnnouncements(mockCurrentUser.role)) {
-    throw createForbiddenError(
-      'Access Denied: Students cannot create Course Hub channels (NFR-01_REV).'
-    );
-  }
-
   const errors: Record<string, string[]> = {};
   if (!payload.name.trim()) {
     errors.name = ['The channel name field is required.'];
@@ -472,12 +466,6 @@ export async function manageChannelMemberApi(
         method: 'POST',
         body: JSON.stringify(payload),
       }
-    );
-  }
-
-  if (!canPublishOrManageAnnouncements(mockCurrentUser.role)) {
-    throw createForbiddenError(
-      'Only Faculty or IT Administrators can modify channel rosters.'
     );
   }
 
