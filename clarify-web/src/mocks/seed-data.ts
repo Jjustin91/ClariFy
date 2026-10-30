@@ -375,8 +375,8 @@ export const INITIAL_THREADS: QaThread[] = [
     is_private: false,
     is_resolved: true,
     is_pinned_faq: true,
-    created_at: '2026-10-22T13:05:00+08:00',
-    updated_at: '2026-10-22T13:18:00+08:00',
+    created_at: '2026-10-22T17:30:00+08:00',
+    updated_at: '2026-10-22T17:35:00+08:00',
     author: {
       id: null,
       name: 'Anonymous Student',
@@ -388,8 +388,32 @@ export const INITIAL_THREADS: QaThread[] = [
         id: 501,
         thread_id: 201,
         content:
-          "A4 paper, Times New Roman 12 font size. Strictly semi-casual attire. Don't be late — panelist schedule cannot be moved, print your documents at least 3 copies.",
-        created_at: '2026-10-22T13:18:00+08:00',
+          'Inig date date date, dili na ma move kay mao ra day free sa mga panelist nato, so dont be late and print your documents at least 3 copies',
+        created_at: '2026-10-22T17:31:00+08:00',
+        author: {
+          id: 10492,
+          name: 'Aki Hayakawa',
+          role: 'faculty',
+        },
+      },
+      {
+        id: 505,
+        thread_id: 201,
+        content:
+          'Naa bay specific na format maam? hehe thank you pag answer maam',
+        created_at: '2026-10-22T17:33:00+08:00',
+        author: {
+          id: 1,
+          name: 'Kobeni Higashiyama',
+          role: 'student',
+        },
+      },
+      {
+        id: 506,
+        thread_id: 201,
+        content:
+          'A4, Times New Roman, 12 fontsize, basta dont be late lng dayun',
+        created_at: '2026-10-22T17:35:00+08:00',
         author: {
           id: 10492,
           name: 'Aki Hayakawa',

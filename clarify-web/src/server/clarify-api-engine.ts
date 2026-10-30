@@ -1091,17 +1091,6 @@ export function handleClarifyApiRequest(req: ApiEngineRequest): ApiEngineRespons
 
   const replyMatch = cleanPath.match(/^\/threads\/(\d+)\/replies$/);
   if (method === 'POST' && replyMatch) {
-    if (!canResolveOrPinThreads(activeUser.role)) {
-      return {
-        status: 403,
-        body: {
-          status: 403,
-          message:
-            'HTTP 403 Forbidden: Only instructors can answer and resolve tickets.',
-        },
-      };
-    }
-
     const threadId = Number(replyMatch[1]);
     const idx = store.threads.findIndex((t) => t.id === threadId);
     if (idx === -1) {
@@ -1119,15 +1108,19 @@ export function handleClarifyApiRequest(req: ApiEngineRequest): ApiEngineRespons
           status: 422,
           message: 'The reply content field is required.',
           errors: {
-            content: ['Please enter a faculty response before submitting.'],
+            content: ['Please enter a message before submitting.'],
           },
         },
       };
     }
 
-    const markResolved =
-      body.mark_resolved !== undefined ? Boolean(body.mark_resolved) : true;
-    const pinToFaq = Boolean(body.pin_to_faq);
+    const canResolve = canResolveOrPinThreads(activeUser.role);
+    const markResolved = canResolve
+      ? body.mark_resolved !== undefined
+        ? Boolean(body.mark_resolved)
+        : true
+      : false;
+    const pinToFaq = canResolve ? Boolean(body.pin_to_faq) : false;
     const nowIso = new Date().toISOString();
     const target = store.threads[idx];
 
@@ -1158,7 +1151,9 @@ export function handleClarifyApiRequest(req: ApiEngineRequest): ApiEngineRespons
       body: {
         message: pinToFaq
           ? 'Reply posted, ticket resolved, and converted to anonymized Class FAQ (FR-07).'
-          : 'Faculty reply posted.',
+          : canResolve
+          ? 'Faculty reply posted.'
+          : 'Student message posted.',
         data: updatedThread,
       },
     };

@@ -316,5 +316,18 @@ test('ClariFy API Engine enforces FR-08 pending 403, TC-NFR01 student 403, TC-NF
     },
   });
   assert.equal(studentRosterRemove.status, 200);
+
+  // 6. Both Student and Faculty can post messages in the Messenger Chat Box (POST /threads/:id/replies)
+  const studentChatReply = handleClarifyApiRequest({
+    method: 'POST',
+    path: '/threads/201/replies',
+    headers: { authorization: 'Bearer clarify-jwt-student-2020202020' },
+    body: {
+      content: 'Thank you maam! We will bring 3 printed copies.',
+      mark_resolved: false,
+      pin_to_faq: false,
+    },
+  });
+  assert.equal(studentChatReply.status, 200);
 });
 

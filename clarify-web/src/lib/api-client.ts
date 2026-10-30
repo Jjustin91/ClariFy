@@ -963,16 +963,10 @@ export async function replyToThreadApi(
     );
   }
 
-  if (!canResolveOrPinThreads(mockCurrentUser.role)) {
-    throw createForbiddenError(
-      'HTTP 403 Forbidden: Only instructors can answer and resolve tickets.'
-    );
-  }
-
   const trimmed = payload.content.trim();
   if (!trimmed) {
     throw createValidationError('The reply content field is required.', {
-      content: ['Please enter a faculty response before submitting.'],
+      content: ['Please enter a message before submitting.'],
     });
   }
 
@@ -981,6 +975,7 @@ export async function replyToThreadApi(
     throw createValidationError('Thread not found.', {});
   }
 
+  const canResolve = canResolveOrPinThreads(mockCurrentUser.role);
   const nowIso = new Date().toISOString();
   const target = mockThreads[idx];
   const newReply = {
@@ -997,17 +992,22 @@ export async function replyToThreadApi(
 
   const updatedThread: QaThread = enforceFaqAnonymity({
     ...target,
-    is_resolved: payload.mark_resolved || payload.pin_to_faq || target.is_resolved,
-    is_pinned_faq: payload.pin_to_faq || target.is_pinned_faq,
+    is_resolved: canResolve
+      ? payload.mark_resolved || payload.pin_to_faq || target.is_resolved
+      : target.is_resolved,
+    is_pinned_faq: canResolve
+      ? payload.pin_to_faq || target.is_pinned_faq
+      : target.is_pinned_faq,
     updated_at: nowIso,
     replies: [...target.replies, newReply],
   });
 
   mockThreads[idx] = updatedThread;
   return {
-    message: payload.pin_to_faq
-      ? 'Reply posted, ticket resolved, and converted to anonymized Class FAQ (FR-07).'
-      : 'Faculty reply posted.',
+    message:
+      canResolve && payload.pin_to_faq
+        ? 'Reply posted, ticket resolved, and converted to anonymized Class FAQ (FR-07).'
+        : 'Message posted to thread.',
     data: updatedThread,
   };
 }

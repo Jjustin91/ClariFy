@@ -1,6 +1,6 @@
 {
-  "summary":  "Implementation plan to enable the Create Course Hub tab/form, Add Channel action, and Channel Roster Add/Remove Member form for Student accounts as well as Faculty and IT Admin accounts across both the Channel Management modal UI and the API engine.",
-  "updatedAt":  "2026-10-30T12:20:18.677284104Z",
+  "summary":  "Plan to remove the hashtag topic selector bar, hashtag badge, and Resolved badge from MessengerChatBox, making Messenger Chat a standalone Course Hub chat room completely independent of the Isolated Q&A Threads ticket cards.",
+  "updatedAt":  "2026-10-30T13:39:45.226361108Z",
   "requestFeedback":  true,
   "userFacing":  true
 }
