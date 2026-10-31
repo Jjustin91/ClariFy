@@ -14,8 +14,11 @@ class ChannelChatController
      */
     public function index(Request $request, int $channelId): JsonResponse
     {
+        $channel = Channel::find($channelId) ?? Channel::first();
+        $resolvedChannelId = $channel ? $channel->id : $channelId;
+
         $messages = Message::with('sender')
-            ->where('channel_id', $channelId)
+            ->where('channel_id', $resolvedChannelId)
             ->whereNull('parent_id')
             ->where('subject_hashtag', '__CHAT__')
             ->oldest('created_at')

@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Resources\ThreadResource;
+use App\Models\Channel;
 use App\Models\Message;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -15,10 +16,12 @@ class ThreadController
     public function index(Request $request, int $channelId): JsonResponse
     {
         $user = $request->user();
+        $channel = Channel::find($channelId) ?? Channel::first();
+        $resolvedChannelId = $channel ? $channel->id : $channelId;
 
         $query = Message::with(['sender', 'replies.sender'])
             ->rootThreads()
-            ->where('channel_id', $channelId)
+            ->where('channel_id', $resolvedChannelId)
             ->latest('created_at');
 
         if ($status = $request->query('status')) {
@@ -59,11 +62,14 @@ class ThreadController
             'content.required' => 'Please enter your inquiry or clarification details.',
         ]);
 
+        $channel = Channel::find($channelId) ?? Channel::first();
+        $resolvedChannelId = $channel ? $channel->id : $channelId;
+
         $rawTag = ltrim(trim($validated['subject_hashtag']), '#');
         $formattedHashtag = '#' . $rawTag;
 
         $thread = Message::create([
-            'channel_id' => $channelId,
+            'channel_id' => $resolvedChannelId,
             'announcement_id' => $validated['announcement_id'] ?? null,
             'sender_id' => $request->user()->id,
             'parent_id' => null,

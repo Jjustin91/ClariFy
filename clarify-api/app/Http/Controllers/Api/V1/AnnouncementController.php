@@ -30,7 +30,10 @@ class AnnouncementController
         }
 
         if ($channelId = $request->query('channel_id')) {
-            $query->where('channel_id', (int) $channelId);
+            $resolvedChannel = Channel::find((int) $channelId) ?? Channel::first();
+            if ($resolvedChannel) {
+                $query->where('channel_id', $resolvedChannel->id);
+            }
         }
 
         if ($tag = $request->query('tag')) {
@@ -168,6 +171,13 @@ class AnnouncementController
             'status' => $validated['status'] ?? 'published',
             'is_edited' => false,
             'published_at' => now(),
+        ]);
+
+        AnnouncementRead::firstOrCreate([
+            'announcement_id' => $announcement->id,
+            'user_id' => $user->id,
+        ], [
+            'acknowledged_at' => now(),
         ]);
 
         if ($isUrgent) {

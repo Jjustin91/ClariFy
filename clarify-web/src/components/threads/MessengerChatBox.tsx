@@ -22,55 +22,6 @@ import type { Channel, ChatMessage, User } from '../../types/api';
 
 export type CourseHubTab = 'messenger' | 'feed' | 'threads' | 'send_inquiry';
 
-const INITIAL_CHANNEL_CHAT_MESSAGES: ChatMessage[] = [
-  {
-    id: 'msg-1',
-    channel_id: 7,
-    content: 'When po defence maam? and what possible need i bring?',
-    created_at: '2026-10-30T17:30:00Z',
-    author: {
-      id: 1,
-      name: 'Kobeni Higashiyama',
-      role: 'student',
-    },
-  },
-  {
-    id: 'msg-2',
-    channel_id: 7,
-    content:
-      'Inig date date date, dili na ma move kay mao ra day free sa mga panelist nato, so dont be late and print your documents at least 3 copies',
-    created_at: '2026-10-30T17:30:00Z',
-    author: {
-      id: 10492,
-      name: 'Aki Hayakawa',
-      role: 'faculty',
-    },
-  },
-  {
-    id: 'msg-3',
-    channel_id: 7,
-    content:
-      'Naa bay specific na format maam? hehe thank you pag answer maam',
-    created_at: '2026-10-30T17:30:00Z',
-    author: {
-      id: 1,
-      name: 'Kobeni Higashiyama',
-      role: 'student',
-    },
-  },
-  {
-    id: 'msg-4',
-    channel_id: 7,
-    content: 'A4, Times New Roman, 12 fontsize, basta dont be late lng dayun',
-    created_at: '2026-10-30T17:30:00Z',
-    author: {
-      id: 10492,
-      name: 'Aki Hayakawa',
-      role: 'faculty',
-    },
-  },
-];
-
 interface MessengerChatBoxProps {
   channel: Channel | undefined;
   threadsCount: number;
@@ -94,13 +45,12 @@ export function MessengerChatBox({
   onMessageSentToast,
   childrenWhenNotMessenger,
 }: MessengerChatBoxProps) {
-  const { announcementVersion, triggerAnnouncementRefresh } = useClarify();
-  const channelKey = channel?.id || 7;
+  const { announcementVersion, triggerAnnouncementRefresh, showToast } =
+    useClarify();
+  const channelKey = channel?.id || 1;
   const [messagesByChannel, setMessagesByChannel] = useState<
     Record<number, ChatMessage[]>
-  >({
-    [channelKey]: INITIAL_CHANNEL_CHAT_MESSAGES,
-  });
+  >({});
   const [messageText, setMessageText] = useState('');
   const [stagedAttachment, setStagedAttachment] = useState<string | null>(null);
   const [showSettingsMenu, setShowSettingsMenu] = useState(false);
@@ -128,8 +78,7 @@ export function MessengerChatBox({
     void loadChatMessages();
   }, [loadChatMessages, announcementVersion]);
 
-  const conversationMessages =
-    messagesByChannel[channelKey] || INITIAL_CHANNEL_CHAT_MESSAGES;
+  const conversationMessages = messagesByChannel[channelKey] || [];
 
   useEffect(() => {
     if (streamContainerRef.current && activeTab === 'messenger') {
@@ -159,10 +108,7 @@ export function MessengerChatBox({
       const res = await sendChannelChatMessageApi(channelKey, finalContent);
       setMessagesByChannel((prev) => ({
         ...prev,
-        [channelKey]: [
-          ...(prev[channelKey] || INITIAL_CHANNEL_CHAT_MESSAGES),
-          res.data,
-        ],
+        [channelKey]: [...(prev[channelKey] || []), res.data],
       }));
       setMessageText('');
       setStagedAttachment(null);
@@ -170,28 +116,12 @@ export function MessengerChatBox({
       onMessageSentToast?.(
         res.message || 'Message sent to Course Hub chat.'
       );
-    } catch {
-      // Fallback local append if request failed
-      const fallbackMsg: ChatMessage = {
-        id: `msg-${Date.now()}`,
-        channel_id: channelKey,
-        content: finalContent,
-        created_at: new Date().toISOString(),
-        author: {
-          id: currentUser.id,
-          name: currentUser.name,
-          role: currentUser.role,
-        },
-      };
-      setMessagesByChannel((prev) => ({
-        ...prev,
-        [channelKey]: [
-          ...(prev[channelKey] || INITIAL_CHANNEL_CHAT_MESSAGES),
-          fallbackMsg,
-        ],
-      }));
-      setMessageText('');
-      setStagedAttachment(null);
+    } catch (err) {
+      const msg =
+        err && typeof err === 'object' && 'message' in err
+          ? String((err as { message?: string }).message)
+          : 'Failed to send message to database.';
+      showToast(msg, 'error');
     } finally {
       setIsSending(false);
     }

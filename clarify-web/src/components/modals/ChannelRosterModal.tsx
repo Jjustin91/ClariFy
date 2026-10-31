@@ -23,7 +23,9 @@ export function ChannelRosterModal() {
   const [activeTab, setActiveTab] = useState<'browse' | 'roster' | 'create'>(
     'browse'
   );
-  const [selectedChannelId, setSelectedChannelId] = useState<number>(7);
+  const [selectedChannelId, setSelectedChannelId] = useState<number>(
+    channels[0]?.id || 1
+  );
   const [newMemberId, setNewMemberId] = useState('');
   const [newMemberName, setNewMemberName] = useState('');
 

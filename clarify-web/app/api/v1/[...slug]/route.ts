@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { handleClarifyApiRequest } from '@/src/server/clarify-api-engine';
 import {
   getPostgresStatusInfo,
   handlePostgresApiRequest,
@@ -106,7 +105,7 @@ async function tryProxyToLaravel(
   method: string,
   apiPath: string,
   searchParams: URLSearchParams,
-  authHeader: string | undefined,
+  headers: Record<string, string | undefined>,
   body: Record<string, unknown>
 ): Promise<{ status: number; body: Record<string, unknown> } | null> {
   const laravelBase = process.env.LARAVEL_BACKEND_URL?.trim();
@@ -119,13 +118,24 @@ async function tryProxyToLaravel(
 
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 2000);
+    const timeout = setTimeout(() => controller.abort(), 3500);
     const res = await fetch(targetUrl, {
       method,
       headers: {
         Accept: 'application/json',
         'Content-Type': 'application/json',
-        ...(authHeader ? { Authorization: authHeader } : {}),
+        ...(headers.authorization
+          ? { Authorization: headers.authorization }
+          : {}),
+        ...(headers['x-clarify-institutional-id']
+          ? {
+              'X-Clarify-Institutional-Id':
+                headers['x-clarify-institutional-id'],
+            }
+          : {}),
+        ...(headers['x-clarify-user-id']
+          ? { 'X-Clarify-User-Id': headers['x-clarify-user-id'] }
+          : {}),
       },
       body:
         method === 'GET' || method === 'HEAD'
@@ -172,7 +182,7 @@ async function handleRoute(
           revision: getCurrentRevision(),
         }
       : {
-          driver: 'memory-fallback',
+          driver: 'laravel-postgresql',
           connected: false,
           revision: getCurrentRevision(),
         };
@@ -185,11 +195,17 @@ async function handleRoute(
   });
 
   const authHeader = req.headers.get('authorization') || undefined;
+  const instHeader =
+    req.headers.get('x-clarify-institutional-id') || undefined;
+  const userIdHeader = req.headers.get('x-clarify-user-id') || undefined;
+
   const headers: Record<string, string | undefined> = {
     authorization: authHeader,
+    'x-clarify-institutional-id': instHeader,
+    'x-clarify-user-id': userIdHeader,
   };
 
-  // 1. Direct PostgreSQL execution (persists immediately into local PostgreSQL database)
+  // 1. Direct PostgreSQL execution (persists immediately into PostgreSQL database)
   let result = await handlePostgresApiRequest({
     method: effectiveMethod,
     path: apiPath,
@@ -198,26 +214,30 @@ async function handleRoute(
     body,
   });
 
-  // 2. If direct PostgreSQL is not reachable, try Laravel Backend Proxy if configured
+  // 2. If direct PostgreSQL is not reachable, proxy to Laravel 13 Backend if configured
   if (!result) {
     result = await tryProxyToLaravel(
       effectiveMethod,
       apiPath,
       req.nextUrl.searchParams,
-      authHeader,
+      headers,
       body
     );
   }
 
-  // 3. Fallback to in-memory contract engine for cloud preview environments without local PG
+  // 3. If neither PostgreSQL nor Laravel is reachable, return explicit 503 error (no mock fallback)
   if (!result) {
-    result = handleClarifyApiRequest({
-      method: effectiveMethod,
-      path: apiPath,
-      query,
-      headers,
-      body,
-    });
+    const pgStatus = await getPostgresStatusInfo();
+    return NextResponse.json(
+      {
+        status: 503,
+        message: `PostgreSQL database connection unavailable (${
+          pgStatus.error ||
+          'Check DB_HOST, DB_PORT, DB_DATABASE, DB_USERNAME, DB_PASSWORD in .env'
+        }). Please ensure PostgreSQL is running. See HOW_TO_RUN.md for setup instructions.`,
+      },
+      { status: 503 }
+    );
   }
 
   // Broadcast real-time event whenever a mutation succeeds

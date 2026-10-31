@@ -30,11 +30,19 @@ class EnsureAccountVerified
                 } elseif (str_contains($bearer, 'student-2020202020')) {
                     $user = User::where('institutional_id', '2020202020')->first();
                 }
+            }
 
-                if ($user) {
-                    Auth::setUser($user);
-                    $request->setUserResolver(fn () => $user);
-                }
+            if (! $user && ($headerInstId = $request->header('X-Clarify-Institutional-Id'))) {
+                $user = User::where('institutional_id', trim($headerInstId))->first();
+            }
+
+            if (! $user && ($headerUserId = $request->header('X-Clarify-User-Id'))) {
+                $user = User::find((int) $headerUserId);
+            }
+
+            if ($user) {
+                Auth::setUser($user);
+                $request->setUserResolver(fn () => $user);
             }
         }
 

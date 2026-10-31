@@ -102,7 +102,7 @@ class ChannelController
      */
     public function join(Request $request, int $id): JsonResponse
     {
-        $channel = Channel::findOrFail($id);
+        $channel = Channel::find($id) ?? Channel::firstOrFail();
         $user = $request->user();
 
         $channel->members()->syncWithoutDetaching([
@@ -138,7 +138,7 @@ class ChannelController
             'action' => ['required', 'in:add,remove'],
         ]);
 
-        $channel = Channel::findOrFail($id);
+        $channel = Channel::find($id) ?? Channel::firstOrFail();
         $targetUser = User::where('institutional_id', $validated['institutional_id'])->first();
 
         if ($validated['action'] === 'add') {

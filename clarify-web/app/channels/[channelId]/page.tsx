@@ -54,7 +54,7 @@ import type {
 
 export default function CourseHubPage() {
   const params = useParams<{ channelId: string }>();
-  const channelId = Number(params?.channelId || 7);
+  const requestedChannelId = Number(params?.channelId || 1);
 
   const {
     user,
@@ -66,7 +66,8 @@ export default function CourseHubPage() {
   } = useClarify();
 
   const activeChannel =
-    channels.find((c) => c.id === channelId) || channels[0];
+    channels.find((c) => c.id === requestedChannelId) || channels[0];
+  const channelId = activeChannel?.id || requestedChannelId;
 
   const [channelSearch, setChannelSearch] = useState('');
   const [activeTab, setActiveTab] = useState<CourseHubTab>('messenger');
@@ -98,7 +99,7 @@ export default function CourseHubPage() {
   const [isSubmittingReply, setIsSubmittingReply] = useState(false);
 
   // Class FAQs Accordion open state
-  const [openFaqIds, setOpenFaqIds] = useState<number[]>([201, 202, 204]);
+  const [openFaqIds, setOpenFaqIds] = useState<number[]>([]);
 
   const loadHubData = useCallback(async () => {
     if (!hasLoadedOnceRef.current) {
@@ -112,6 +113,14 @@ export default function CourseHubPage() {
       ]);
       setAnnouncements(annRes.data);
       setThreads(threadRes.data);
+      const faqIds = threadRes.data
+        .filter((t) => t.is_pinned_faq)
+        .map((t) => t.id);
+      if (faqIds.length > 0) {
+        setOpenFaqIds((prev) =>
+          prev.length === 0 ? faqIds : Array.from(new Set([...prev, ...faqIds]))
+        );
+      }
       hasLoadedOnceRef.current = true;
     } catch (err) {
       const apiErr = err as LaravelValidationError;

@@ -44,7 +44,9 @@ export function AnnouncementFormModal() {
 
   const [title, setTitle] = useState('');
   const [content, setContent] = useState('');
-  const [channelId, setChannelId] = useState<number>(defaultChannelId || 7);
+  const [channelId, setChannelId] = useState<number>(
+    defaultChannelId || channels[0]?.id || 1
+  );
   const [selectedTags, setSelectedTags] = useState<string[]>([
     'OFFICIAL MEMO',
     'CDO CAMPUS',
@@ -81,7 +83,11 @@ export function AnnouncementFormModal() {
       } else {
         setTitle('');
         setContent('');
-        setChannelId(defaultChannelId || 7);
+        const validDefault =
+          defaultChannelId && channels.some((c) => c.id === defaultChannelId)
+            ? defaultChannelId
+            : channels[0]?.id || 1;
+        setChannelId(validDefault);
         setSelectedTags(['OFFICIAL MEMO', 'CDO CAMPUS', 'CITC']);
         setIsUrgent(false);
         setTriggerSmsFallback(false);
@@ -90,7 +96,7 @@ export function AnnouncementFormModal() {
         setAttachmentType(null);
       }
     }
-  }, [isOpen, editingAnnouncement, defaultChannelId]);
+  }, [isOpen, editingAnnouncement, defaultChannelId, channels]);
 
   if (!isOpen) return null;
 

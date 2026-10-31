@@ -131,7 +131,7 @@ export default function DashboardPage() {
               Latest Messages
             </h3>
             <Link
-              href="/channels/7"
+              href={`/channels/${channels[0]?.id || 1}`}
               className="text-xs font-bold text-slate-600 hover:text-ustp-navy underline"
             >
               Open Course Hubs &rarr;

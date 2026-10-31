@@ -17,14 +17,11 @@ import type {
 } from '../types/api';
 import {
   getChannelsApi,
-  getCurrentMockUser,
   getMeApi,
   getPersistenceStatusApi,
-  getUseMockApi,
-  setUseMockApi,
-  switchDemoRole,
+  getStoredUser,
+  setStoredUser,
 } from '../lib/api-client';
-import { DEMO_USERS, INITIAL_CHANNELS } from '../mocks/seed-data';
 
 export interface ToastItem {
   id: string;
@@ -35,9 +32,6 @@ export interface ToastItem {
 interface ClarifyContextValue {
   user: User;
   setUser: (user: User) => void;
-  switchRole: (role: 'student' | 'faculty' | 'it_admin') => void;
-  useMock: boolean;
-  toggleApiMode: (nextValue?: boolean) => void;
   persistenceStatus: PersistenceStatus | null;
   isDrawerOpen: boolean;
   setIsDrawerOpen: React.Dispatch<React.SetStateAction<boolean>>;
@@ -66,9 +60,27 @@ interface ClarifyContextValue {
 
 const ClarifyContext = createContext<ClarifyContextValue | undefined>(undefined);
 
+const INITIAL_USER_FALLBACK: User = {
+  id: 1,
+  institutional_id: '2020202020',
+  name: 'Kobeni Higashiyama',
+  email: 'higashiyama.kobeni@ustp.edu.ph',
+  contact_number: '+63 917 842 2020',
+  role: 'student',
+  verification_status: 'approved',
+  academic_profile: {
+    campus: 'CDO Campus',
+    college: 'CITC',
+    department: 'CITC',
+    program: 'BS Information Technology',
+    year_level: 3,
+    section: 'IT3R2',
+    semester_code: '2026-1ST-SEM',
+  },
+};
+
 export function ClarifyProvider({ children }: { children: React.ReactNode }) {
-  const [user, setUserState] = useState<User>(DEMO_USERS.student);
-  const [useMock, setUseMock] = useState<boolean>(false);
+  const [user, setUserState] = useState<User>(INITIAL_USER_FALLBACK);
   const [persistenceStatus, setPersistenceStatus] =
     useState<PersistenceStatus | null>(null);
   const [isDrawerOpen, setIsDrawerOpen] = useState<boolean>(true);
@@ -81,9 +93,9 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
   }>({
     isOpen: false,
     editingAnnouncement: null,
-    defaultChannelId: 7,
+    defaultChannelId: 1,
   });
-  const [channels, setChannels] = useState<Channel[]>(INITIAL_CHANNELS);
+  const [channels, setChannels] = useState<Channel[]>([]);
   const [announcementVersion, setAnnouncementVersion] = useState<number>(0);
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const lastRevisionRef = useRef<number>(0);
@@ -125,22 +137,20 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   useEffect(() => {
-    const initialMock = getUseMockApi();
-    setUseMock(initialMock);
-    setUserState(getCurrentMockUser());
+    const savedUser = getStoredUser();
+    setUserState(savedUser);
     void refreshChannels();
     void refreshPersistenceStatus();
 
-    // Sync active user profile from backend / PostgreSQL
-    if (!initialMock) {
-      getMeApi()
-        .then((res) => {
-          if (res?.data) {
-            setUserState(res.data);
-          }
-        })
-        .catch(() => {});
-    }
+    // Sync active user profile from PostgreSQL / Laravel backend
+    getMeApi()
+      .then((res) => {
+        if (res?.data) {
+          setUserState(res.data);
+          setStoredUser(res.data);
+        }
+      })
+      .catch(() => {});
   }, [refreshChannels, refreshPersistenceStatus]);
 
   // Real-time synchronization via Server-Sent Events (SSE) + BroadcastChannel + fallback polling
@@ -167,7 +177,7 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
 
     // 2. Server-Sent Events (SSE) subscription to /api/v1/realtime/stream
     let eventSource: EventSource | null = null;
-    if (!useMock && 'EventSource' in window) {
+    if ('EventSource' in window) {
       try {
         eventSource = new EventSource('/api/v1/realtime/stream');
         eventSource.onmessage = (e) => {
@@ -191,7 +201,6 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
 
     // 3. Lightweight 2.5s poll fallback (detects external PostgreSQL edits & environments buffering SSE)
     const pollInterval = setInterval(async () => {
-      if (useMock) return;
       try {
         const res = await fetch(
           `/api/v1/realtime/stream?poll=1&since_revision=${lastRevisionRef.current}`,
@@ -227,49 +236,16 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
       }
       clearInterval(pollInterval);
     };
-  }, [useMock, refreshChannels]);
+  }, [refreshChannels]);
 
   const setUser = useCallback(
     (nextUser: User) => {
       setUserState(nextUser);
+      setStoredUser(nextUser);
       void refreshChannels();
       setAnnouncementVersion((v) => v + 1);
     },
     [refreshChannels]
-  );
-
-  const switchRole = useCallback(
-    (role: 'student' | 'faculty' | 'it_admin') => {
-      const nextUser = switchDemoRole(role);
-      setUserState(nextUser);
-      void refreshChannels();
-      setAnnouncementVersion((v) => v + 1);
-      const roleLabels = {
-        student: 'Student View (Kobeni Higashiyama • 2020202020)',
-        faculty: 'Faculty View (Aki Hayakawa • Faculty ID: 10492)',
-        it_admin: 'IT Admin View (Engr. Makima Cruz • ICTO)',
-      };
-      showToast(`Switched active session to ${roleLabels[role]}`, 'info');
-    },
-    [refreshChannels, showToast]
-  );
-
-  const toggleApiMode = useCallback(
-    (nextValue?: boolean) => {
-      const target = nextValue !== undefined ? nextValue : !useMock;
-      setUseMockApi(target);
-      setUseMock(target);
-      showToast(
-        target
-          ? 'API Mode: Client-side USTP Mock Seed active'
-          : 'API Mode: Connected to ClariFy REST API (/api/v1)',
-        'info'
-      );
-      void refreshChannels();
-      void refreshPersistenceStatus();
-      setAnnouncementVersion((v) => v + 1);
-    },
-    [useMock, refreshChannels, refreshPersistenceStatus, showToast]
   );
 
   const openAnnouncementModal = useCallback(
@@ -280,7 +256,7 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
       setAnnouncementModalState({
         isOpen: true,
         editingAnnouncement: options?.editingAnnouncement || null,
-        defaultChannelId: options?.defaultChannelId || channels[0]?.id || 7,
+        defaultChannelId: options?.defaultChannelId || channels[0]?.id || 1,
       });
     },
     [channels]
@@ -304,9 +280,6 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
       value={{
         user,
         setUser,
-        switchRole,
-        useMock,
-        toggleApiMode,
         persistenceStatus,
         isDrawerOpen,
         setIsDrawerOpen,
