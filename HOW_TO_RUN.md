@@ -121,31 +121,29 @@ Next.js includes a direct PostgreSQL adapter (`src/server/postgres-adapter.ts`) 
 
 ---
 
-## 5. Role Accounts for Testing Domain Isolation & Real-Time Sync
+## 5. Seeded IT Admin & Student/Faculty Sign Up Workflow
 
-All mock files and the top-header API toggle button have been removed. Every login authenticates against your PostgreSQL `users` table:
+Only the **IT Administrator** account is seeded in the database. **Student** and **Faculty** users create their own accounts via the **Sign Up** page (`/register`):
 
-| Role Domain | Institutional ID | Password | Capabilities |
+| Role Domain | Institutional ID | Password | How to Access |
 | :--- | :--- | :--- | :--- |
-| **Student** | `2020202020` | `ustp2026` | View & acknowledge announcements, join channels, send Course Hub chat messages, submit & edit Q&A inquiry tickets |
-| **Faculty / Moderator** | `10492` | `ustp2026` | Publish, edit & archive announcements, create Course Hub channels, manage student rosters, answer & resolve Q&A tickets, convert tickets to anonymized Class FAQs |
-| **IT Administrator** | `90001` | `ustp2026` | Approve/reject pending accounts, switch user roles, review announcement edit audit logs, manage all channels & notices |
-| **Pending Student** | `2023309999` | `ustp2026` | Demonstrates FR-08 verification gate until approved by IT Administrator |
+| **IT Administrator (Seeded)** | `90001` | `ustp2026` | Pre-seeded in PostgreSQL (`DatabaseSeeder.php`). Approves/rejects pending Student & Faculty sign-ups, manages roles, triggers PRISMS sync, and reviews announcement audit logs. |
+| **Student** | Created on `/register` | Created on `/register` | Register on `/register` &rarr; Account is saved as `pending` &rarr; IT Admin (`90001`) clicks **Approve** in `/admin` &rarr; Student can now sign in on `/login`. |
+| **Faculty** | Created on `/register` | Created on `/register` | Register on `/register` &rarr; Account is saved as `pending` &rarr; IT Admin (`90001`) clicks **Approve** in `/admin` &rarr; Faculty can now sign in on `/login`. |
 
 ---
 
-## 6. Verifying Database Persistence in PostgreSQL
+## 6. Verifying Registration & Database Persistence in PostgreSQL
 
-To test real-time persistence across roles at the same time:
-
-1. Open **Window 1** (normal browser window) at `http://localhost:3000/login` and sign in as **Faculty** (`10492` / `ustp2026`).
-2. Open **Window 2** (Incognito/Private window) at `http://localhost:3000/login` and sign in as **Student** (`2020202020` / `ustp2026`).
-3. In **Window 1 (Faculty)**, click **Publish Notice** and create a new announcement.
-   - It immediately inserts into the PostgreSQL `announcements` table and appears in **Window 2 (Student)** in real time via Server-Sent Events (`/api/v1/realtime`).
-4. Verify the saved records directly in `psql` or pgAdmin:
+1. Open `http://localhost:3000/register` and create a **Faculty** account and a **Student** account.
+2. Open `http://localhost:3000/login` and sign in as the seeded **IT Administrator** (`90001` / `ustp2026`).
+3. In the **IT Admin Console** (`/admin`), under **1. Account Verification Queue**, click **Approve** on your newly registered Faculty and Student accounts.
+4. Sign in with your newly approved **Faculty** account in one browser window and your **Student** account in an Incognito window to test real-time Announcements, Course Hub Messenger Chat, and Q&A Threads.
+5. Verify the saved records directly in `psql` or pgAdmin:
    ```sql
+   SELECT id, institutional_id, name, email, role, verification_status FROM users ORDER BY id DESC;
    SELECT id, channel_id, publisher_id, title, is_urgent, status, published_at FROM announcements ORDER BY id DESC;
    SELECT id, channel_id, sender_id, subject_hashtag, content, is_resolved, is_pinned_faq FROM messages ORDER BY id DESC;
    SELECT id, course_code, name, channel_type, scope_section FROM channels ORDER BY id;
-   SELECT id, institutional_id, name, role, verification_status FROM users ORDER BY id;
    ```
+

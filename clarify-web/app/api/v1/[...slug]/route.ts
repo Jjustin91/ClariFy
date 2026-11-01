@@ -95,7 +95,11 @@ function classifyMutationEvent(
   if (/^\/channels\/\d+\/(join|members)$/.test(apiPath)) {
     return { type: 'channel.updated' };
   }
-  if (apiPath.startsWith('/admin/') || apiPath === '/profile') {
+  if (
+    apiPath.startsWith('/admin/') ||
+    apiPath === '/profile' ||
+    apiPath === '/auth/register'
+  ) {
     return { type: 'admin.updated' };
   }
   return null;

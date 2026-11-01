@@ -26,19 +26,19 @@ const STORAGE_KEYS = {
 
 const DEFAULT_FALLBACK_USER: User = {
   id: 1,
-  institutional_id: '2020202020',
-  name: 'Kobeni Higashiyama',
-  email: 'higashiyama.kobeni@ustp.edu.ph',
-  contact_number: '+63 917 842 2020',
-  role: 'student',
+  institutional_id: '90001',
+  name: 'Engr. Makima Cruz',
+  email: 'icto.admin@ustp.edu.ph',
+  contact_number: '+63 917 900 0001',
+  role: 'it_admin',
   verification_status: 'approved',
   academic_profile: {
     campus: 'CDO Campus',
-    college: 'CITC',
+    college: 'ICTO',
     department: 'CITC',
-    program: 'BS Information Technology',
-    year_level: 3,
-    section: 'IT3R2',
+    program: null,
+    year_level: null,
+    section: 'Registrar & ICTO',
     semester_code: '2026-1ST-SEM',
   },
 };
@@ -136,7 +136,7 @@ async function requestLaravel<T>(
       message:
         json.message ||
         (response.status === 403
-          ? 'Access Denied: You do not have permission for this action (NFR-01_REV).'
+          ? 'Access Denied: You do not have permission for this action.'
           : 'An unexpected server error occurred.'),
       errors: json.errors,
     };
@@ -167,8 +167,23 @@ async function requestLaravel<T>(
 }
 
 // ============================================================================
-// WORKFLOW 1: AUTH & PROFILE (NFR-01_REV, FR-06, FR-08)
+// WORKFLOW 1: AUTH, REGISTRATION & PROFILE
 // ============================================================================
+
+export async function registerApi(payload: {
+  name: string;
+  institutional_id: string;
+  email: string;
+  password: string;
+  role: 'student' | 'faculty';
+  department: string;
+  section: string;
+}): Promise<SingleResourceResponse<User>> {
+  return requestLaravel<SingleResourceResponse<User>>('/auth/register', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
 
 export async function loginApi(
   institutional_id: string,

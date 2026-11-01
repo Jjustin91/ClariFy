@@ -20,7 +20,7 @@ class ProfileController
             'avatar' => ['nullable', 'file', 'mimes:jpg,jpeg,png,webp', 'max:5120'],
             'avatar_preview_url' => ['nullable', 'string'],
         ], [
-            'contact_number.required' => 'Please provide a valid mobile number for SMS fallback alerts (FR-06).',
+            'contact_number.required' => 'Please provide a valid mobile number for SMS fallback alerts.',
         ]);
 
         $user = $request->user();
@@ -41,7 +41,7 @@ class ProfileController
         $user->save();
 
         return response()->json([
-            'message' => 'Profile settings and SMS fallback number updated (FR-06).',
+            'message' => 'Profile settings and SMS fallback number updated.',
             'data' => new UserResource($user->load('academicProfile')),
         ]);
     }

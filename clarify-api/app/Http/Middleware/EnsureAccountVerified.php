@@ -57,7 +57,7 @@ class EnsureAccountVerified
             return response()->json([
                 'status' => 403,
                 'verification_status' => $user->verification_status,
-                'message' => 'Your account is pending IT Administrator registrar verification (FR-08).',
+                'message' => 'Your account is pending IT Administrator registrar verification.',
             ], 403);
         }
 

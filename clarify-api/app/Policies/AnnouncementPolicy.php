@@ -20,7 +20,7 @@ class AnnouncementPolicy
         if ($user->role === 'student') {
             return Response::denyWithStatus(
                 403,
-                'HTTP 403 Forbidden: Students are not authorized to publish announcements (TC-NFR01).'
+                'HTTP 403 Forbidden: Students are not authorized to publish announcements.'
             );
         }
 
@@ -31,7 +31,7 @@ class AnnouncementPolicy
         if ($channel && in_array($channel->channel_type, ['university', 'college'], true)) {
             return Response::denyWithStatus(
                 403,
-                'HTTP 403 Forbidden: University-wide and College-wide memos are restricted to Department Heads, Deans, and IT Administrators (FR-02).'
+                'HTTP 403 Forbidden: University-wide and College-wide memos are restricted to Department Heads, Deans, and IT Administrators.'
             );
         }
 

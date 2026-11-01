@@ -62,19 +62,19 @@ const ClarifyContext = createContext<ClarifyContextValue | undefined>(undefined)
 
 const INITIAL_USER_FALLBACK: User = {
   id: 1,
-  institutional_id: '2020202020',
-  name: 'Kobeni Higashiyama',
-  email: 'higashiyama.kobeni@ustp.edu.ph',
-  contact_number: '+63 917 842 2020',
-  role: 'student',
+  institutional_id: '90001',
+  name: 'Engr. Makima Cruz',
+  email: 'icto.admin@ustp.edu.ph',
+  contact_number: '+63 917 900 0001',
+  role: 'it_admin',
   verification_status: 'approved',
   academic_profile: {
     campus: 'CDO Campus',
-    college: 'CITC',
+    college: 'ICTO',
     department: 'CITC',
-    program: 'BS Information Technology',
-    year_level: 3,
-    section: 'IT3R2',
+    program: null,
+    year_level: null,
+    section: 'Registrar & ICTO',
     semester_code: '2026-1ST-SEM',
   },
 };

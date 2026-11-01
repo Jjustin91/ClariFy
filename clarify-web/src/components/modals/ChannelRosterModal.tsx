@@ -140,7 +140,7 @@ export function ChannelRosterModal() {
           <div className="flex items-center gap-2">
             <Hash className="w-4 h-4 text-ustp-gold" />
             <h2 id="channel-portal-modal-title" className="text-sm font-bold">
-              Scoped Channel Management & Roster Portal (Workflow 5)
+              Scoped Channel Management &amp; Roster Portal
             </h2>
           </div>
           <button

@@ -183,8 +183,8 @@ export function AnnouncementFormModal() {
         <div className="flex items-center justify-between px-6 py-3.5 bg-ustp-navy text-white">
           <h2 id="announcement-modal-title" className="text-sm font-bold tracking-tight">
             {editingAnnouncement
-              ? `Edit Scoped Announcement #${editingAnnouncement.id} (Logs Audit Trail NFR-03_REV)`
-              : 'Create Scoped Announcement (FR-02)'}
+              ? `Edit Scoped Announcement #${editingAnnouncement.id}`
+              : 'Create Scoped Announcement'}
           </h2>
           <button
             type="button"
@@ -343,7 +343,7 @@ export function AnnouncementFormModal() {
               <span className="text-xs">
                 <span className="font-bold text-ustp-text flex items-center gap-1">
                   <Smartphone className="w-3.5 h-3.5 text-amber-600" />
-                  SMS Fallback (NFR-02)
+                  SMS Fallback
                 </span>
                 <span className="text-slate-600 block text-[11px]">
                   Offline weather/emergency blast

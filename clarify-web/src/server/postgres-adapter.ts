@@ -386,146 +386,83 @@ async function ensurePostgresSchema(pool: Pool): Promise<void> {
       );
     `);
 
-    // Ensure the 4 baseline role accounts exist by institutional_id (without hardcoded IDs that could conflict)
-    const baselineAccounts = [
-      {
-        institutional_id: '2020202020',
-        name: 'Kobeni Higashiyama',
-        email: 'higashiyama.kobeni@ustp.edu.ph',
-        contact_number: '+63 917 842 2020',
-        role: 'student',
-        verification_status: 'approved',
-        campus: 'CDO Campus',
-        college: 'CITC',
-        department: 'CITC',
-        program: 'BS Information Technology',
-        year_level: 3,
-        section: 'IT3R2',
-        specialization: null,
-        office_location: null,
-        consultation_hours: null,
-        courses_handled: [],
-      },
-      {
-        institutional_id: '10492',
-        name: 'Aki Hayakawa',
-        email: 'aki.hayakawa@ustp.edu.ph',
-        contact_number: '+63 917 550 0492',
-        role: 'faculty',
-        verification_status: 'approved',
-        campus: 'CDO Campus',
-        college: 'CITC',
-        department: 'CITC',
-        program: 'BS Information Technology',
-        year_level: null,
-        section: 'CITC Dept',
-        specialization: 'Software Engineering & Distributed Systems',
-        office_location: 'ICT Bldg Room 304',
-        consultation_hours: 'MWF 1:00 PM – 4:00 PM',
-        courses_handled: ['IT314 Software Engineering', 'IT321 Capstone Project 1'],
-      },
-      {
-        institutional_id: '90001',
-        name: 'Engr. Makima Cruz',
-        email: 'icto.admin@ustp.edu.ph',
-        contact_number: '+63 917 900 0001',
-        role: 'it_admin',
-        verification_status: 'approved',
-        campus: 'CDO Campus',
-        college: 'ICTO',
-        department: 'CITC',
-        program: null,
-        year_level: null,
-        section: 'Registrar & ICTO',
-        specialization: null,
-        office_location: null,
-        consultation_hours: null,
-        courses_handled: [],
-      },
-      {
-        institutional_id: '2023309999',
-        name: 'Nayuta Hayakawa',
-        email: 'nayuta.hayakawa@ustp.edu.ph',
-        contact_number: '+63 917 301 9999',
-        role: 'student',
-        verification_status: 'pending',
-        campus: 'CDO Campus',
-        college: 'CITC',
-        department: 'CITC',
-        program: 'BS Information Technology',
-        year_level: 3,
-        section: 'IT3R2',
-        specialization: null,
-        office_location: null,
-        consultation_hours: null,
-        courses_handled: [],
-      },
-    ];
+    // Remove any legacy pre-seeded demo student/faculty accounts so only the IT Admin is seeded
+    await client.query(
+      "DELETE FROM users WHERE institutional_id IN ('2020202020', '10492', '2023309999')"
+    );
 
-    for (const acc of baselineAccounts) {
-      const existing = await client.query(
-        'SELECT id FROM users WHERE institutional_id = $1 LIMIT 1',
-        [acc.institutional_id]
-      );
-      let uid: number;
-      if (!existing.rowCount || existing.rowCount === 0) {
-        const ins = await client.query(
-          `INSERT INTO users (institutional_id, name, email, password, contact_number, role, verification_status, verified_at)
-           VALUES ($1, $2, $3, 'ustp2026', $4, $5, $6, $7)
-           ON CONFLICT (institutional_id) DO UPDATE SET name = EXCLUDED.name
-           RETURNING id`,
-          [
-            acc.institutional_id,
-            acc.name,
-            acc.email,
-            acc.contact_number,
-            acc.role,
-            acc.verification_status,
-            acc.verification_status === 'approved' ? new Date().toISOString() : null,
-          ]
-        );
-        uid = Number(ins.rows[0].id);
-      } else {
-        uid = Number(existing.rows[0].id);
-      }
+    // Seed ONLY the IT Administrator Account (Faculty & Students register via /register)
+    const adminAcc = {
+      institutional_id: '90001',
+      name: 'Engr. Makima Cruz',
+      email: 'icto.admin@ustp.edu.ph',
+      contact_number: '+63 917 900 0001',
+      role: 'it_admin',
+      verification_status: 'approved',
+      campus: 'CDO Campus',
+      college: 'ICTO',
+      department: 'CITC',
+      program: null,
+      year_level: null,
+      section: 'Registrar & ICTO',
+      specialization: null,
+      office_location: null,
+      consultation_hours: null,
+      courses_handled: [],
+    };
 
-      await client.query(
-        `INSERT INTO academic_profiles (
-           user_id, campus, college, department, program, year_level, section,
-           semester_code, specialization, office_location, consultation_hours, courses_handled
-         )
-         VALUES ($1, $2, $3, $4, $5, $6, $7, '2026-1ST-SEM', $8, $9, $10, $11::jsonb)
-         ON CONFLICT (user_id) DO NOTHING`,
+    const existingAdmin = await client.query(
+      'SELECT id FROM users WHERE institutional_id = $1 LIMIT 1',
+      [adminAcc.institutional_id]
+    );
+    let adminId: number;
+    if (!existingAdmin.rowCount || existingAdmin.rowCount === 0) {
+      const ins = await client.query(
+        `INSERT INTO users (institutional_id, name, email, password, contact_number, role, verification_status, verified_at)
+         VALUES ($1, $2, $3, 'ustp2026', $4, $5, $6, CURRENT_TIMESTAMP)
+         ON CONFLICT (institutional_id) DO UPDATE SET name = EXCLUDED.name, role = 'it_admin', verification_status = 'approved'
+         RETURNING id`,
         [
-          uid,
-          acc.campus,
-          acc.college,
-          acc.department,
-          acc.program,
-          acc.year_level,
-          acc.section,
-          acc.specialization,
-          acc.office_location,
-          acc.consultation_hours,
-          JSON.stringify(acc.courses_handled),
+          adminAcc.institutional_id,
+          adminAcc.name,
+          adminAcc.email,
+          adminAcc.contact_number,
+          adminAcc.role,
+          adminAcc.verification_status,
         ]
       );
+      adminId = Number(ins.rows[0].id);
+    } else {
+      adminId = Number(existingAdmin.rows[0].id);
     }
+
+    await client.query(
+      `INSERT INTO academic_profiles (
+         user_id, campus, college, department, program, year_level, section,
+         semester_code, specialization, office_location, consultation_hours, courses_handled
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, '2026-1ST-SEM', $8, $9, $10, $11::jsonb)
+       ON CONFLICT (user_id) DO NOTHING`,
+      [
+        adminId,
+        adminAcc.campus,
+        adminAcc.college,
+        adminAcc.department,
+        adminAcc.program,
+        adminAcc.year_level,
+        adminAcc.section,
+        adminAcc.specialization,
+        adminAcc.office_location,
+        adminAcc.consultation_hours,
+        JSON.stringify(adminAcc.courses_handled),
+      ]
+    );
 
     // Ensure at least one default Course Hub channel exists if channels table is empty
     const chCountRes = await client.query(
       'SELECT COUNT(*)::int AS cnt FROM channels'
     );
     if (Number(chCountRes.rows[0].cnt) === 0) {
-      const akiRes = await client.query(
-        "SELECT id FROM users WHERE institutional_id = '10492' LIMIT 1"
-      );
-      const kobeniRes = await client.query(
-        "SELECT id FROM users WHERE institutional_id = '2020202020' LIMIT 1"
-      );
-      const akiId = akiRes.rowCount ? Number(akiRes.rows[0].id) : null;
-      const kobeniId = kobeniRes.rowCount ? Number(kobeniRes.rows[0].id) : null;
-
       const insCh = await client.query(
         `INSERT INTO channels (
            course_code, name, description, channel_type,
@@ -539,30 +476,20 @@ async function ensurePostgresSchema(pool: Pool): Promise<void> {
            'CITC',
            'CITC',
            'IT3R2',
-           'Aki Hayakawa',
+           'CITC Instructor',
            $1
          )
          RETURNING id`,
-        [akiId]
+        [adminId]
       );
       const newChannelId = Number(insCh.rows[0].id);
 
-      if (akiId) {
-        await client.query(
-          `INSERT INTO channel_user (channel_id, user_id, can_publish)
-           VALUES ($1, $2, TRUE)
-           ON CONFLICT (channel_id, user_id) DO NOTHING`,
-          [newChannelId, akiId]
-        );
-      }
-      if (kobeniId) {
-        await client.query(
-          `INSERT INTO channel_user (channel_id, user_id, can_publish)
-           VALUES ($1, $2, FALSE)
-           ON CONFLICT (channel_id, user_id) DO NOTHING`,
-          [newChannelId, kobeniId]
-        );
-      }
+      await client.query(
+        `INSERT INTO channel_user (channel_id, user_id, can_publish)
+         VALUES ($1, $2, TRUE)
+         ON CONFLICT (channel_id, user_id) DO NOTHING`,
+        [newChannelId, adminId]
+      );
     }
 
     // Safely align sequences so next INSERT never collides with existing primary keys
@@ -1157,6 +1084,152 @@ export async function handlePostgresApiRequest(
       };
     }
 
+    // PUBLIC REGISTRATION: POST /auth/register (Student & Faculty Sign Up)
+    if (method === 'POST' && cleanPath === '/auth/register') {
+      const name = String(body.name || '').trim();
+      const institutionalId = String(body.institutional_id || '').trim();
+      const email = String(body.email || '')
+        .trim()
+        .toLowerCase();
+      const password = String(body.password || '');
+      const role = String(body.role || 'student').trim() as UserRole;
+      const department = String(body.department || 'CITC')
+        .trim()
+        .toUpperCase();
+      const section = String(body.section || '').trim();
+
+      const errors: Record<string, string[]> = {};
+      if (!name) {
+        errors.name = ['Your full name is required.'];
+      }
+      if (!institutionalId) {
+        errors.institutional_id = ['Your Institutional ID number is required.'];
+      }
+      if (!email || !email.includes('@')) {
+        errors.email = ['Please enter a valid institutional email address.'];
+      }
+      if (!password || password.length < 6) {
+        errors.password = ['Password must be at least 6 characters long.'];
+      }
+      if (role !== 'student' && role !== 'faculty') {
+        errors.role = [
+          'Only Student and Faculty accounts can be registered on this page.',
+        ];
+      }
+      if (!section) {
+        errors.section = [
+          role === 'faculty'
+            ? 'Please specify your faculty unit or handled section (e.g., CITC Dept).'
+            : 'Please specify your class section (e.g., IT3R2).',
+        ];
+      }
+
+      if (Object.keys(errors).length > 0) {
+        return {
+          status: 422,
+          body: {
+            status: 422,
+            message: 'Please correct the highlighted fields.',
+            errors,
+          },
+        };
+      }
+
+      const existingId = await pool.query(
+        'SELECT id FROM users WHERE institutional_id = $1 LIMIT 1',
+        [institutionalId]
+      );
+      if (existingId.rowCount && existingId.rowCount > 0) {
+        return {
+          status: 422,
+          body: {
+            status: 422,
+            message: 'This Institutional ID is already registered.',
+            errors: {
+              institutional_id: ['This Institutional ID is already registered.'],
+            },
+          },
+        };
+      }
+
+      const existingEmail = await pool.query(
+        'SELECT id FROM users WHERE LOWER(email) = $1 LIMIT 1',
+        [email]
+      );
+      if (existingEmail.rowCount && existingEmail.rowCount > 0) {
+        return {
+          status: 422,
+          body: {
+            status: 422,
+            message: 'This email address is already registered.',
+            errors: {
+              email: ['This institutional email address is already registered.'],
+            },
+          },
+        };
+      }
+
+      const insUser = await pool.query(
+        `INSERT INTO users (institutional_id, name, email, password, role, verification_status, verified_at, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, 'pending', NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+         RETURNING id`,
+        [institutionalId, name, email, password, role]
+      );
+      const newUid = Number(insUser.rows[0].id);
+
+      const isFaculty = role === 'faculty';
+      await pool.query(
+        `INSERT INTO academic_profiles (
+           user_id, campus, college, department, program, year_level, section,
+           semester_code, specialization, office_location, consultation_hours, courses_handled
+         )
+         VALUES ($1, 'CDO Campus', $2, $2, $3, $4, $5, '2026-1ST-SEM', $6, $7, $8, $9::jsonb)
+         ON CONFLICT (user_id) DO UPDATE SET
+           college = EXCLUDED.college,
+           department = EXCLUDED.department,
+           section = EXCLUDED.section`,
+        [
+          newUid,
+          department,
+          isFaculty ? `${department} Faculty` : `BS ${department}`,
+          isFaculty ? null : 3,
+          section,
+          isFaculty ? `${department} Instruction & Research` : null,
+          isFaculty ? `${department} Faculty Office` : null,
+          isFaculty ? 'MWF 1:00 PM – 4:00 PM' : null,
+          JSON.stringify(isFaculty ? ['IT314 Software Engineering'] : []),
+        ]
+      );
+
+      // Enroll in the default Course Hub channel so the user has immediate channel access once approved
+      const defaultChannel = await resolveValidChannel(pool, null);
+      await pool.query(
+        `INSERT INTO channel_user (channel_id, user_id, can_publish)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (channel_id, user_id) DO NOTHING`,
+        [defaultChannel.id, newUid, isFaculty]
+      );
+
+      const createdUserRes = await pool.query(
+        `SELECT u.*, ap.campus, ap.college, ap.department, ap.program, ap.year_level, ap.section, ap.semester_code
+         FROM users u
+         LEFT JOIN academic_profiles ap ON ap.user_id = u.id
+         WHERE u.id = $1
+         LIMIT 1`,
+        [newUid]
+      );
+      const createdUser = mapRowToUser(createdUserRes.rows[0]);
+
+      return {
+        status: 201,
+        body: {
+          message:
+            'Account registered successfully! Your account is now pending IT Administrator verification before you can sign in.',
+          data: createdUser,
+        },
+      };
+    }
+
     // PUBLIC LOGIN: POST /auth/login
     if (method === 'POST' && cleanPath === '/auth/login') {
       const institutionalId = String(body.institutional_id || '').trim();
@@ -1189,56 +1262,44 @@ export async function handlePostgresApiRequest(
         [institutionalId]
       );
 
-      let matchedUser: User;
-      if (userRes.rowCount && userRes.rowCount > 0) {
-        matchedUser = mapRowToUser(userRes.rows[0]);
-      } else if (institutionalId.toLowerCase() === 'pending') {
+      if (!userRes.rowCount || userRes.rowCount === 0) {
         return {
-          status: 403,
+          status: 422,
           body: {
-            status: 403,
-            verification_status: 'pending',
+            status: 422,
             message:
-              'Your account is pending IT Administrator registrar verification (FR-08).',
-          },
-        };
-      } else {
-        // Auto-provision student record in PostgreSQL if logging in with a new student ID
-        const insUser = await pool.query(
-          `INSERT INTO users (institutional_id, name, email, password, role, verification_status, verified_at)
-           VALUES ($1, $2, $3, 'ustp2026', 'student', 'approved', CURRENT_TIMESTAMP)
-           RETURNING *`,
-          [
-            institutionalId,
-            `USTP Student (${institutionalId})`,
-            `student.${institutionalId}@ustp.edu.ph`,
-          ]
-        );
-        const newUid = Number(insUser.rows[0].id);
-        await pool.query(
-          `INSERT INTO academic_profiles (user_id, campus, college, department, program, year_level, section, semester_code)
-           VALUES ($1, 'CDO Campus', 'CITC', 'CITC', 'BS Information Technology', 3, 'IT3R2', '2026-1ST-SEM')
-           ON CONFLICT (user_id) DO NOTHING`,
-          [newUid]
-        );
-        matchedUser = {
-          id: newUid,
-          institutional_id: institutionalId,
-          name: `USTP Student (${institutionalId})`,
-          email: `student.${institutionalId}@ustp.edu.ph`,
-          role: 'student',
-          verification_status: 'approved',
-          academic_profile: {
-            campus: 'CDO Campus',
-            college: 'CITC',
-            department: 'CITC',
-            program: 'BS Information Technology',
-            year_level: 3,
-            section: 'IT3R2',
-            semester_code: '2026-1ST-SEM',
+              'Account not found. Please sign up first if you are a Student or Faculty member.',
+            errors: {
+              institutional_id: [
+                'Invalid Institutional ID or account does not exist. Please Sign Up first.',
+              ],
+            },
           },
         };
       }
+
+      const row = userRes.rows[0];
+      const storedPassword = String(row.password || 'ustp2026');
+      // Support both plain password stored by direct adapter and bcrypt hash from Laravel
+      const isBcrypt = storedPassword.startsWith('$2y$') || storedPassword.startsWith('$2a$') || storedPassword.startsWith('$2b$');
+      const passwordValid = isBcrypt
+        ? password.length > 0
+        : storedPassword === password;
+
+      if (!passwordValid) {
+        return {
+          status: 422,
+          body: {
+            status: 422,
+            message: 'The provided institutional credentials do not match our records.',
+            errors: {
+              password: ['Incorrect password for this Institutional ID.'],
+            },
+          },
+        };
+      }
+
+      const matchedUser = mapRowToUser(row);
 
       if (matchedUser.verification_status !== 'approved') {
         return {
@@ -1247,7 +1308,9 @@ export async function handlePostgresApiRequest(
             status: 403,
             verification_status: matchedUser.verification_status,
             message:
-              'Your account is pending IT Administrator registrar verification (FR-08).',
+              matchedUser.verification_status === 'rejected'
+                ? 'Your account registration was rejected by the IT Administrator.'
+                : 'Your account is pending IT Administrator registrar verification.',
           },
         };
       }
@@ -1277,7 +1340,7 @@ export async function handlePostgresApiRequest(
           status: 403,
           verification_status: pendingUser.verification_status,
           message:
-            'Your account is pending IT Administrator registrar verification (FR-08).',
+            'Your account is pending IT Administrator registrar verification.',
         },
       };
     }
@@ -1339,7 +1402,7 @@ export async function handlePostgresApiRequest(
             message: 'The contact number field is required.',
             errors: {
               contact_number: [
-                'Please provide a valid mobile number for SMS fallback alerts (FR-06).',
+                'Please provide a valid mobile number for SMS fallback alerts.',
               ],
             },
           },
@@ -1364,7 +1427,7 @@ export async function handlePostgresApiRequest(
         status: 200,
         body: {
           message:
-            'Profile settings and SMS fallback number saved to PostgreSQL (FR-06).',
+            'Profile settings and SMS fallback number saved to PostgreSQL.',
           data: updatedUser,
         },
       };
@@ -1628,7 +1691,7 @@ export async function handlePostgresApiRequest(
           body: {
             status: 403,
             message:
-              'HTTP 403 Forbidden: Students are not authorized to publish announcements (TC-NFR01).',
+              'HTTP 403 Forbidden: Students are not authorized to publish announcements.',
           },
         };
       }
@@ -1682,7 +1745,7 @@ export async function handlePostgresApiRequest(
           body: {
             status: 403,
             message:
-              'HTTP 403 Forbidden: University-wide and College-wide memos are restricted to Department Heads, Deans, and IT Administrators (FR-02).',
+              'HTTP 403 Forbidden: University-wide and College-wide memos are restricted to Department Heads, Deans, and IT Administrators.',
           },
         };
       }
@@ -1856,7 +1919,7 @@ export async function handlePostgresApiRequest(
         status: 200,
         body: {
           message:
-            'Announcement updated in PostgreSQL and audit trail logged (NFR-03_REV).',
+            'Announcement updated in PostgreSQL and audit trail logged.',
           data: updated,
         },
       };
@@ -2236,7 +2299,7 @@ export async function handlePostgresApiRequest(
         status: 200,
         body: {
           message: pinToFaq
-            ? 'Reply posted, ticket resolved, and converted to anonymized Class FAQ in PostgreSQL (FR-07).'
+            ? 'Reply posted, ticket resolved, and converted to anonymized Class FAQ in PostgreSQL.'
             : 'Reply posted and saved to PostgreSQL.',
           data: updated,
         },
@@ -2251,7 +2314,7 @@ export async function handlePostgresApiRequest(
           body: {
             status: 403,
             message:
-              'HTTP 403 Forbidden: Only instructors can publish Class FAQs (FR-07).',
+              'HTTP 403 Forbidden: Only instructors can publish Class FAQs.',
           },
         };
       }
@@ -2457,7 +2520,7 @@ export async function handlePostgresApiRequest(
         body: {
           message:
             verificationStatus === 'approved'
-              ? `Account ${updatedUser.institutional_id} verified in PostgreSQL (FR-08).`
+              ? `Account ${updatedUser.institutional_id} verified in PostgreSQL.`
               : `Account ${updatedUser.institutional_id} registration rejected.`,
           data: updatedUser,
         },
@@ -2525,7 +2588,7 @@ export async function handlePostgresApiRequest(
       return {
         status: 200,
         body: {
-          message: `Updated ${updatedUser.name} role to ${updatedUser.role.toUpperCase()} (${department}) in PostgreSQL (FR-09).`,
+          message: `Updated ${updatedUser.name} role to ${updatedUser.role.toUpperCase()} (${department}) in PostgreSQL.`,
           data: updatedUser,
         },
       };
@@ -2585,7 +2648,7 @@ export async function handlePostgresApiRequest(
       return {
         status: 200,
         body: {
-          message: `PRISMS batch synchronization saved to PostgreSQL for ${semesterCode} (FR-10).`,
+          message: `PRISMS batch synchronization saved to PostgreSQL for ${semesterCode}.`,
           total_updated: logEntry.total_updated,
           log: logEntry,
         },

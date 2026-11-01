@@ -751,7 +751,7 @@ export default function CourseHubPage() {
                       onChange={(e) => setMarkResolved(e.target.checked)}
                       className="accent-ustp-navy"
                     />
-                    <span>Mark as Resolved (TC-FR03)</span>
+                    <span>Mark as Resolved</span>
                   </label>
 
                   <label className="flex items-center gap-2 text-xs font-bold text-ustp-text cursor-pointer">
@@ -761,7 +761,7 @@ export default function CourseHubPage() {
                       onChange={(e) => setPinTicketToFaq(e.target.checked)}
                       className="accent-ustp-navy"
                     />
-                    <span>Pin Ticket (1-Click Anonymized FAQ — FR-07)</span>
+                    <span>Pin Ticket (1-Click Anonymized FAQ)</span>
                   </label>
                 </div>
 

@@ -1,50 +1,53 @@
-# Remove Next.js Mocks, Fix Database Persistence Across All Features & Add Run Guide
+# Implementation Plan: Remove FR/NFR Labels, Add Student & Faculty Sign Up, and Restrict Seeders to IT Admin
 
-## Overview
-We will remove all Next.js mock files and fallbacks, remove the top header API Mode toggle button, fix database persistence so every create/update/delete operation across Announcements, Channels, Q&A Threads, Messenger Chat, Profile Settings, and IT Admin Console writes directly to your PostgreSQL database (via either Next.js direct PostgreSQL or the Laravel 13 API), and provide a step-by-step Markdown guide on how to configure and run the application locally.
+## 1. Remove All `FR-*` and `NFR-*` Texts Across the Application
+We will clean up all Functional Requirement (`FR-01` through `FR-10`, `FR-03_REV`, etc.) and Non-Functional Requirement (`NFR-01` through `NFR-05`, `NFR-01_REV`, `TC-NFR01`, etc.) labels from user-facing UI components, modal headers, subtitles, badges, error messages, and API response messages so the interface reads like a clean production campus platform:
+- **Pages**:
+  - `/clarify-web/app/page.tsx` (Noticeboard headers, scoping descriptions, urgent/pinned badges)
+  - `/clarify-web/app/announcements/page.tsx` (Full-page noticeboard descriptions and empty states)
+  - `/clarify-web/app/channels/[id]/page.tsx` (Course Hub Messenger & Q&A Forum tabs, FAQ conversion labels)
+  - `/clarify-web/app/instructors/page.tsx` (Instructor Directory descriptions and consultation hours labels)
+  - `/clarify-web/app/admin/page.tsx` (IT Admin Console verification queue, role assignment, PRISMS sync, and system telemetry labels)
+  - `/clarify-web/app/login/page.tsx` (Pending verification alert and login form subtitles)
+- **Components & Modals**:
+  - `/clarify-web/src/components/layout/TopHeader.tsx` & `LeftSidebar.tsx`
+  - `/clarify-web/src/components/announcements/AnnouncementCard.tsx`
+  - `/clarify-web/src/components/threads/ThreadList.tsx`
+  - `/clarify-web/src/components/modals/CreateAnnouncementModal.tsx`, `EditProfileModal.tsx`, `AuditHistoryModal.tsx`, `CreateChannelModal.tsx`, `ManageMembersModal.tsx`
+- **API & Validation Messages**:
+  - `/clarify-web/src/server/postgres-adapter.ts` & `/clarify-api/app/Http/Controllers/Api/V1/*.php` & `EnsureAccountVerified.php` (Remove `(FR-08)`, `(FR-09)`, `(NFR-03)` suffixes from HTTP messages).
 
 ---
 
-## Root Cause Analysis (Why Data Was Not Reaching PostgreSQL)
-1. **Stale `localStorage` Mock Mode Flag (`clarify_use_mock_api`):**
-   - `api-client.ts` checked `localStorage.getItem('clarify_use_mock_api')`. Whenever this flag was `'true'` in the browser, all API client functions mutated in-memory JavaScript arrays instead of sending HTTP requests to `/api/v1/*`.
-2. **Silent Fallback to In-Memory Mock Engine (`clarify-api-engine.ts`):**
-   - In `/clarify-web/app/api/v1/[...slug]/route.ts`, if `handlePostgresApiRequest` returned `null` (for instance, due to an `.env` credential mismatch or seed conflict), Next.js silently fell back to `handleClarifyApiRequest` (RAM store) instead of surfacing the database connection error or executing against the real database.
-3. **Database Schema & User/Channel ID Resolution Between Laravel Migrations and Direct PostgreSQL:**
-   - When `php artisan migrate --seed` was run in `clarify-api`, primary keys for Faculty (`Aki Hayakawa`, `id=2`), IT Admin (`Engr. Makima Cruz`, `id=3`), and `# IT314 SoftEng` (`id=1`) differed from hardcoded mock IDs (`10492`, `90001`, `7`).
-   - Token resolution and default channel selection must dynamically resolve the authenticated user by `institutional_id` / Sanctum token and resolve valid database `channel_id` records so foreign key constraints (`publisher_id`, `channel_id`, `sender_id`) always succeed in PostgreSQL.
+## 2. Student & Faculty Sign Up Page (`/register`) & Registration API
+We will build a dedicated Sign Up page (`/clarify-web/app/register/page.tsx`) and link it directly from the Login page (`/clarify-web/app/login/page.tsx`):
+- **Sign Up Form Fields**:
+  - **Role Selection**: `Student` or `Faculty` (IT Admin accounts cannot be self-registered and are provisioned strictly via the database seeder)
+  - **Full Name**: e.g., `Juan Dela Cruz`
+  - **Institutional ID**: e.g., `2024101234` (validated for uniqueness)
+  - **Institutional Email**: e.g., `juan.delacruz@ustp.edu.ph` (validated for uniqueness and email format)
+  - **Department & Section**:
+    - Department selector (e.g., `CITC`, `CEA`, `CSM`, `COT`, `CSTE`, `SHS`)
+    - Section / Academic Unit input (e.g., `IT3R2` for Students or `CITC Dept` for Faculty)
+  - **Password & Confirm Password**: Minimum 6 characters
+- **Pending Verification Workflow**:
+  - Submitting the Sign Up form calls `POST /api/v1/auth/register`.
+  - The newly created Student or Faculty account is saved to PostgreSQL (`users` + `academic_profiles`) and auto-enrolled in matching default/department channels with `verification_status = 'pending'`.
+  - Upon registration, the user sees a clear confirmation screen explaining that their account has been created with **Pending Verification** status and must be approved by the **IT Administrator** before signing in.
+  - When the IT Admin signs in (`90001`), the newly registered Student or Faculty account immediately appears in the **Pending Registrar Verification Queue** on `/admin` (and syncs in real time), where the IT Admin can click **Approve** to grant login access.
+- **Backend Registration Endpoints**:
+  - **Next.js Direct PostgreSQL Adapter** (`/clarify-web/src/server/postgres-adapter.ts`): Handle `POST /api/v1/auth/register`, validate required fields and uniqueness of `institutional_id` and `email`, insert into `users` (`verification_status = 'pending'`) and `academic_profiles`, and enroll the user into matching channels.
+  - **Laravel 13 Backend** (`/clarify-api/app/Http/Controllers/Api/V1/AuthController.php` & `/clarify-api/routes/api.php`): Add `POST /api/v1/auth/register` with `Hash::make($password)`, `AcademicProfile::create(...)`, and channel membership sync.
+  - **Frontend API Client** (`/clarify-web/src/lib/api-client.ts`): Add `registerApi(payload)` helper.
 
 ---
 
-## Planned Changes
-
-### 1. Remove Header API Mode Button (`focus-mode` Target)
-- **`/clarify-web/src/components/layout/AppShell.tsx`**:
-  - Remove the `<button>` (`div:nth-of-type(2) > header:nth-of-type(1) > div:nth-of-type(2) > button:nth-of-type(1)`) that toggles `useMock` / displays the API badge in the top-right header bar, leaving only the `USTP` badge in the top-right header.
-
-### 2. Delete Next.js Mock Files & Strip All Mock Fallbacks
-- **Delete `/clarify-web/src/mocks/seed-data.ts`** and **`/clarify-web/src/server/clarify-api-engine.ts`**.
-- **`/clarify-web/src/lib/api-client.ts`**:
-  - Remove all mock arrays, `USE_MOCK_API`, `getUseMockApi`, `setUseMockApi`, and in-memory mock branches.
-  - Clear any legacy `clarify_use_mock_api` entry from `localStorage` automatically.
-  - Route 100% of API calls (`loginApi`, `logoutApi`, `getMeApi`, `updateProfileApi`, `getChannelsApi`, `createChannelApi`, `joinChannelApi`, `manageChannelMemberApi`, `getAnnouncementsApi`, `createAnnouncementApi`, `updateAnnouncementApi`, `deleteAnnouncementApi`, `acknowledgeAnnouncementApi`, `getChannelThreadsApi`, `createThreadApi`, `updateThreadApi`, `deleteThreadApi`, `replyToThreadApi`, `convertThreadToFaqApi`, `getChannelChatMessagesApi`, `sendChannelChatMessageApi`, `getInstructorsApi`, `getPendingUsersApi`, `verifyUserAccountApi`, `getAllUsersApi`, `updateUserRoleApi`, `triggerPrismsSyncApi`, `getAdminMetricsApi`) strictly through `/api/v1/*`.
-- **`/clarify-web/src/context/ClarifyContext.tsx`** & **`/clarify-web/src/components/threads/MessengerChatBox.tsx`**:
-  - Remove `useMock`, `toggleApiMode`, and hardcoded `INITIAL_CHANNEL_CHAT_MESSAGES`.
-  - Load user session, channels, announcements, Q&A threads, and chat messages strictly from the backend database.
-
-### 3. Fix PostgreSQL & Laravel Persistence Across All Workflows
-- **`/clarify-web/src/server/postgres-adapter.ts`**:
-  - Remove dependency on `src/mocks/seed-data.ts` and remove automatic mock data seeding on connection; ensure schema creation (`CREATE TABLE IF NOT EXISTS` matching the exact Laravel migrations) is clean and non-destructive.
-  - Dynamically resolve authenticated users from `Bearer` tokens by querying `users` by `institutional_id` or Laravel Sanctum `personal_access_tokens`, ensuring Faculty (`10492`), Student (`2020202020`), and IT Admin (`90001`) always map to their real PostgreSQL `users.id`.
-  - Ensure `POST /announcements`, `PATCH /announcements/:id`, `DELETE /announcements/:id`, `POST /announcements/:id/acknowledge`, `POST /channels`, `POST /channels/:id/join`, `POST /channels/:id/members`, `POST /channels/:id/threads`, `PATCH /threads/:id`, `DELETE /threads/:id`, `POST /threads/:id/replies`, `POST /threads/:id/convert-faq`, `POST /channels/:id/chat`, `PATCH /profile`, and all `/admin/*` endpoints execute real SQL `INSERT`/`UPDATE`/`DELETE` statements and return clear error messages if the database connection is down.
-- **`/clarify-web/app/api/v1/[...slug]/route.ts`** & **`/clarify-web/app/api/announcements/create/route.ts`**:
-  - Remove the in-memory `handleClarifyApiRequest` fallback.
-  - Support both **Laravel API proxy** (`LARAVEL_BACKEND_URL`) and **Direct PostgreSQL connection** (`postgres-adapter.ts`), returning an explicit `503 Database Connection Error` with diagnostic details if neither PostgreSQL nor the Laravel server is reachable.
-
-### 4. Add Step-by-Step Setup & Run Instructions (`HOW_TO_RUN.md` & `README.md`)
-- Create **`/HOW_TO_RUN.md`** (and update `/clarify-web/README.md`) covering:
-  - Prerequisites (PostgreSQL, Node.js, PHP 8.2+ & Composer if running Laravel).
-  - Configuring `.env` in both `/clarify-api/.env` and `/clarify-web/.env.local` (`DB_HOST`, `DB_PORT`, `DB_DATABASE`, `DB_USERNAME`, `DB_PASSWORD`, `LARAVEL_BACKEND_URL`).
-  - Running database migrations and initial registrar seed (`php artisan migrate --seed`).
-  - Starting the app in **Option A: Full Stack (Laravel API + Next.js + PostgreSQL)** or **Option B: Next.js Direct PostgreSQL Mode**.
-  - Verifying real-time persistence in pgAdmin / `psql` across Student, Faculty, and IT Admin logins.
+## 3. Restrict Seeders to IT Administrator Only & Update Login Quick-Fill
+- **Laravel Seeder (`/clarify-api/database/seeders/DatabaseSeeder.php`)**:
+  - Seed **only** the IT Administrator account (`institutional_id: '90001'`, `name: 'Engr. Makima Cruz'`, `role: 'it_admin'`, `verification_status: 'approved'`) and its `AcademicProfile`, plus the initial default `# IT314 SoftEng` Course Hub channel and initial PRISMS sync log so the campus workspace is ready for newly registered Faculty and Students.
+  - Remove the pre-seeded Student (`2020202020`), Faculty (`10492`), and Pending Student (`2023309999`) accounts from the seeder.
+- **Next.js PostgreSQL Bootstrap (`/clarify-web/src/server/postgres-adapter.ts`)**:
+  - Update `ensurePostgresSchema` so that only the IT Administrator account (`90001`) and default `# IT314 SoftEng` channel are seeded on bootstrap, and remove any existing pre-seeded demo users (`2020202020`, `10492`, `2023309999`) if they were auto-created by previous bootstrap runs.
+- **Login Page (`/clarify-web/app/login/page.tsx`)**:
+  - Keep **only** the **IT Admin (`90001`)** quick-fill demo button on the left institutional panel.
+  - Add a prominent **"Create Student or Faculty Account (Sign Up)"** button/link on both the left institutional card and below the Sign In form to navigate to `/register`.

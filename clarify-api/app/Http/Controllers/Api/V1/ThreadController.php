@@ -190,7 +190,7 @@ class ThreadController
 
         return response()->json([
             'message' => $pinToFaq
-                ? 'Reply posted, ticket resolved, and converted to anonymized Class FAQ (FR-07).'
+                ? 'Reply posted, ticket resolved, and converted to anonymized Class FAQ.'
                 : 'Faculty reply posted.',
             'data' => new ThreadResource($thread->fresh(['sender', 'replies.sender'])),
         ]);
@@ -205,7 +205,7 @@ class ThreadController
         if (! $user->canPublishOrManage()) {
             return response()->json([
                 'status' => 403,
-                'message' => 'HTTP 403 Forbidden: Only instructors can publish Class FAQs (FR-07).',
+                'message' => 'HTTP 403 Forbidden: Only instructors can publish Class FAQs.',
             ], 403);
         }
 

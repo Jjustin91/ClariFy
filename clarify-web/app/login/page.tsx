@@ -1,8 +1,15 @@
 'use client';
 
 import React, { useState } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { AlertCircle, ShieldAlert, ShieldCheck, UserCheck } from 'lucide-react';
+import {
+  AlertCircle,
+  ShieldAlert,
+  ShieldCheck,
+  UserCheck,
+  UserPlus,
+} from 'lucide-react';
 import { loginApi } from '@/src/lib/api-client';
 import { getFieldValidationError } from '@/src/lib/domain-logic';
 import { useClarify } from '@/src/context/ClarifyContext';
@@ -12,7 +19,7 @@ export default function LoginPage() {
   const router = useRouter();
   const { setUser, showToast } = useClarify();
 
-  const [institutionalId, setInstitutionalId] = useState('2020202020');
+  const [institutionalId, setInstitutionalId] = useState('90001');
   const [password, setPassword] = useState('ustp2026');
   const [isLoading, setIsLoading] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string[]>>({});
@@ -49,10 +56,13 @@ export default function LoginPage() {
       } else if (
         apiErr.status === 403 &&
         (apiErr.verification_status === 'pending' ||
-          apiErr.message.includes('pending'))
+          apiErr.verification_status === 'rejected' ||
+          apiErr.message.includes('pending') ||
+          apiErr.message.includes('rejected'))
       ) {
         setPendingNotice(
-          'Your account is pending IT Administrator registrar verification (FR-08).'
+          apiErr.message ||
+            'Your account is pending IT Administrator registrar verification.'
         );
       } else {
         setGeneralError(apiErr.message || 'Authentication failed.');
@@ -96,75 +106,59 @@ export default function LoginPage() {
             University of Science and Technology of Southern Philippines — Cagayan de Oro Campus (IT314 Software Engineering • IT3R2 Group 5)
           </p>
 
-          {/* Role Domain Sign-In Presets */}
-          <div className="mt-8 pt-6 border-t border-slate-300 text-left">
-            <p className="text-xs font-extrabold uppercase tracking-wider text-slate-600 mb-2.5 flex items-center gap-1.5">
-              <UserCheck className="w-4 h-4 text-ustp-navy" />
-              Select Isolated User Domain to Sign In
-            </p>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-              <button
-                type="button"
-                onClick={() => {
-                  fillDemoAccount('2020202020', 'ustp2026');
-                  void authenticateWithCredentials('2020202020', 'ustp2026');
-                }}
-                className="px-3.5 py-2.5 text-left text-xs bg-white hover:bg-amber-50 border border-slate-300 rounded flex items-center justify-between cursor-pointer"
-              >
-                <div>
-                  <span className="block font-extrabold text-ustp-navy">Student Domain</span>
-                  <span className="text-[11px] text-slate-600">Kobeni Higashiyama (IT3R2)</span>
-                </div>
-                <span className="font-mono text-slate-600 tabular-nums font-bold">2020202020</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  fillDemoAccount('10492', 'ustp2026');
-                  void authenticateWithCredentials('10492', 'ustp2026');
-                }}
-                className="px-3.5 py-2.5 text-left text-xs bg-white hover:bg-amber-50 border border-slate-300 rounded flex items-center justify-between cursor-pointer"
-              >
-                <div>
-                  <span className="block font-extrabold text-ustp-navy">Faculty Domain</span>
-                  <span className="text-[11px] text-slate-600">Aki Hayakawa (CITC Faculty)</span>
-                </div>
-                <span className="font-mono text-slate-600 tabular-nums font-bold">10492</span>
-              </button>
+          {/* Seeded IT Admin Quick-Fill & Student/Faculty Registration Link */}
+          <div className="mt-8 pt-6 border-t border-slate-300 text-left space-y-4">
+            <div>
+              <p className="text-xs font-extrabold uppercase tracking-wider text-slate-600 mb-2 flex items-center gap-1.5">
+                <UserCheck className="w-4 h-4 text-ustp-navy" />
+                Seeded System Administrator Account
+              </p>
               <button
                 type="button"
                 onClick={() => {
                   fillDemoAccount('90001', 'ustp2026');
                   void authenticateWithCredentials('90001', 'ustp2026');
                 }}
-                className="px-3.5 py-2.5 text-left text-xs bg-white hover:bg-amber-50 border border-slate-300 rounded flex items-center justify-between cursor-pointer"
+                className="w-full px-4 py-3 text-left text-xs bg-white hover:bg-amber-50 border border-slate-300 rounded flex items-center justify-between cursor-pointer"
               >
                 <div>
-                  <span className="block font-extrabold text-ustp-navy">IT Admin Domain</span>
-                  <span className="text-[11px] text-slate-600">Engr. Makima Cruz (ICTO)</span>
+                  <span className="block font-extrabold text-ustp-navy">
+                    IT Admin Domain (Pre-Seeded)
+                  </span>
+                  <span className="text-[11px] text-slate-600">
+                    Engr. Makima Cruz (ICTO Registrar &amp; Admin Console)
+                  </span>
                 </div>
-                <span className="font-mono text-slate-600 tabular-nums font-bold">90001</span>
+                <span className="font-mono text-slate-700 tabular-nums font-bold">
+                  ID: 90001
+                </span>
               </button>
-              <button
-                type="button"
-                onClick={() => fillDemoAccount('2023309999', 'ustp2026')}
-                className="px-3.5 py-2.5 text-left text-xs bg-red-50 hover:bg-red-100 border border-red-300 rounded flex items-center justify-between cursor-pointer"
+            </div>
+
+            <div className="pt-2 border-t border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <p className="text-xs font-extrabold text-ustp-navy">
+                  Student or Faculty Member?
+                </p>
+                <p className="text-[11px] text-slate-600">
+                  Register your Student or Faculty account and get verified by the IT Admin.
+                </p>
+              </div>
+              <Link
+                href="/register"
+                className="inline-flex items-center justify-center gap-1.5 px-4 py-2.5 bg-ustp-navy text-ustp-gold text-xs font-extrabold rounded hover:opacity-95 whitespace-nowrap shrink-0"
               >
-                <div>
-                  <span className="block font-extrabold text-red-800">Pending Account</span>
-                  <span className="text-[11px] text-red-700">FR-08 Verification Test</span>
-                </div>
-                <span className="font-mono text-red-700 tabular-nums font-bold">2023309999</span>
-              </button>
+                <UserPlus className="w-3.5 h-3.5" />
+                <span>Sign Up</span>
+              </Link>
             </div>
           </div>
         </div>
       </div>
 
-      {/* Right Side (30% width on desktop): Full-height ustp-orange (#ff9718) vertical login panel matching Wireframe Page 1 */}
+      {/* Right Side (30% width on desktop): Full-height ustp-orange (#ff9718) vertical login panel */}
       <div className="w-full lg:w-[30%] bg-ustp-orange text-ustp-text p-8 sm:p-10 flex flex-col items-center justify-center border-l border-amber-700/30">
         <div className="w-full max-w-xs space-y-6">
-          {/* Circular User/Mascot Emblem at the top matching Page 1 */}
           <div className="flex flex-col items-center">
             <div className="w-28 h-28 rounded-full bg-ustp-gold border-4 border-ustp-navy flex flex-col items-center justify-center shadow-md">
               <ShieldCheck className="w-12 h-12 text-ustp-navy stroke-[2.2]" />
@@ -176,11 +170,11 @@ export default function LoginPage() {
               Institutional Sign In
             </h2>
             <p className="text-xs font-semibold text-ustp-text/80">
-              POST /api/v1/auth/login
+              Enter your Institutional ID &amp; Password
             </p>
           </div>
 
-          {/* 403 Forbidden Pending Verification Banner (FR-08) */}
+          {/* 403 Forbidden Pending Verification Banner */}
           {pendingNotice && (
             <div
               role="alert"
@@ -188,7 +182,7 @@ export default function LoginPage() {
             >
               <div className="font-extrabold flex items-center gap-1.5 text-red-900">
                 <ShieldAlert className="w-4 h-4 shrink-0" />
-                <span>HTTP 403 Forbidden — Verification Pending</span>
+                <span>Verification Pending</span>
               </div>
               <p className="font-semibold leading-relaxed">{pendingNotice}</p>
             </div>
@@ -214,7 +208,7 @@ export default function LoginPage() {
                 type="text"
                 value={institutionalId}
                 onChange={(e) => setInstitutionalId(e.target.value)}
-                placeholder="ID Number e.g., 2020202020"
+                placeholder="ID Number e.g., 90001"
                 className="w-full px-3.5 py-2.5 text-sm font-mono tabular-nums bg-white text-ustp-text placeholder:text-slate-400 border-2 border-white focus:border-ustp-navy rounded focus:outline-none"
               />
               {idError && (
@@ -249,7 +243,13 @@ export default function LoginPage() {
               )}
             </div>
 
-            <div className="flex justify-end">
+            <div className="flex items-center justify-between">
+              <Link
+                href="/register"
+                className="text-xs font-extrabold text-ustp-navy hover:underline"
+              >
+                Create Account (Sign Up)
+              </Link>
               <button
                 type="button"
                 onClick={() =>

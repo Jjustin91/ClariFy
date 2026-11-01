@@ -47,7 +47,7 @@ export function ProfileSettingsModal() {
       const res = await updateProfileApi(formData);
       setUser(res.data);
       showToast(
-        res.message || 'Profile settings updated (FR-06).',
+        res.message || 'Profile settings updated.',
         'success'
       );
       setIsSettingsModalOpen(false);
@@ -76,7 +76,7 @@ export function ProfileSettingsModal() {
         <div className="flex items-center justify-between px-6 py-4 bg-ustp-navy text-white">
           <div>
             <h2 id="profile-settings-title" className="text-sm font-bold">
-              Profile & SMS Fallback Settings (FR-06)
+              Profile &amp; SMS Fallback Settings
             </h2>
             <p className="text-xs text-slate-300 mt-0.5">
               RA 10173 Encrypted Contact & Avatar Configuration
@@ -123,7 +123,7 @@ export function ProfileSettingsModal() {
               htmlFor="profile-contact-number"
               className="block text-xs font-bold text-ustp-text mb-1"
             >
-              Encrypted Mobile Contact Number (Offline SMS Broadcast — NFR-02)
+              Encrypted Mobile Contact Number (Offline SMS Broadcast)
             </label>
             <div className="relative">
               <Phone className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />

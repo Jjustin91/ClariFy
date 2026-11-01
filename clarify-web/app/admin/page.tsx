@@ -152,7 +152,7 @@ export default function AdminConsolePage() {
           <div className="bg-white border-2 border-ustp-navy rounded-lg p-6 text-center space-y-3 shadow-sm">
             <ShieldCheck className="w-10 h-10 text-ustp-navy mx-auto" />
             <h2 className="text-lg font-extrabold text-ustp-navy">
-              IT Administrator Domain Isolated (NFR-01_REV)
+              IT Administrator Domain Isolated
             </h2>
             <p className="text-xs text-slate-600 leading-relaxed">
               You are currently signed in to the{' '}
@@ -183,7 +183,7 @@ export default function AdminConsolePage() {
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
             <div className="bg-white border border-slate-200 rounded-lg p-4">
               <p className="text-xs font-bold text-slate-500">
-                Pending Verifications (FR-08)
+                Pending Verifications
               </p>
               <p className="text-2xl font-extrabold text-ustp-navy font-mono tabular-nums mt-1">
                 {pendingUsers.length}
@@ -191,7 +191,7 @@ export default function AdminConsolePage() {
             </div>
             <div className="bg-white border border-slate-200 rounded-lg p-4">
               <p className="text-xs font-bold text-slate-500">
-                PRISMS Synced Accounts (FR-10)
+                PRISMS Synced Accounts
               </p>
               <p className="text-2xl font-extrabold text-ustp-navy font-mono tabular-nums mt-1">
                 {metrics.active_users_count.toLocaleString()}
@@ -199,7 +199,7 @@ export default function AdminConsolePage() {
             </div>
             <div className="bg-white border border-slate-200 rounded-lg p-4">
               <p className="text-xs font-bold text-slate-500">
-                Urgent Push Latency (NFR-02 &le;2.0s)
+                Urgent Push Latency (&le;2.0s)
               </p>
               <p className="text-2xl font-extrabold text-emerald-700 font-mono tabular-nums mt-1">
                 {metrics.push_queue_latency_seconds}s
@@ -207,7 +207,7 @@ export default function AdminConsolePage() {
             </div>
             <div className="bg-white border border-slate-200 rounded-lg p-4">
               <p className="text-xs font-bold text-slate-500">
-                Immutable Edit Audits (NFR-03_REV)
+                Immutable Edit Audits
               </p>
               <p className="text-2xl font-extrabold text-ustp-navy font-mono tabular-nums mt-1">
                 {metrics.announcement_audits.length}
@@ -249,7 +249,7 @@ export default function AdminConsolePage() {
             }`}
           >
             <ShieldCheck className="w-3.5 h-3.5" />
-            <span>2. RBAC Role Management (FR-09)</span>
+            <span>2. RBAC Role Management</span>
           </button>
 
           <button
@@ -264,7 +264,7 @@ export default function AdminConsolePage() {
             }`}
           >
             <Database className="w-3.5 h-3.5" />
-            <span>3. PRISMS Database Sync Console (FR-10)</span>
+            <span>3. PRISMS Database Sync Console</span>
           </button>
 
           <button
@@ -279,7 +279,7 @@ export default function AdminConsolePage() {
             }`}
           >
             <History className="w-3.5 h-3.5" />
-            <span>4. System Metrics &amp; Audit Trail (NFR-03_REV)</span>
+            <span>4. System Metrics &amp; Audit Trail</span>
           </button>
         </div>
 
@@ -288,12 +288,12 @@ export default function AdminConsolePage() {
         ) : error ? (
           <ErrorBanner message={error} onRetry={loadAdminData} />
         ) : activeTab === 'verifications' ? (
-          /* TAB 1: ACCOUNT VERIFICATION QUEUE (FR-08) */
+          /* TAB 1: ACCOUNT VERIFICATION QUEUE */
           <section className="bg-white border border-slate-200 rounded-lg overflow-hidden">
             <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between">
               <div>
                 <h2 className="text-sm font-extrabold text-ustp-text">
-                  Registrar Account Verification Queue (FR-08 • GET /api/v1/admin/users/pending)
+                  Registrar Account Verification Queue
                 </h2>
                 <p className="text-xs text-slate-500">
                   Cross-check pending Student and Faculty registrations against USTP Registrar records.
@@ -369,7 +369,7 @@ export default function AdminConsolePage() {
           <section className="bg-white border border-slate-200 rounded-lg overflow-hidden">
             <div className="px-5 py-4 border-b border-slate-200">
               <h2 className="text-sm font-extrabold text-ustp-text">
-                Role-Based Access Control (RBAC) Directory (FR-09 • PATCH /api/v1/admin/users/&#123;id&#125;/role)
+                Role-Based Access Control (RBAC) Directory
               </h2>
               <p className="text-xs text-slate-500">
                 Assign, modify, or revoke institutional roles and department scopes.
@@ -430,7 +430,7 @@ export default function AdminConsolePage() {
           <section className="space-y-5">
             <div className="bg-white border border-slate-200 rounded-lg p-5">
               <h2 className="text-sm font-extrabold text-ustp-text">
-                USTP PRISMS Roster &amp; Scoped Channel Synchronization (FR-10 • POST /api/v1/admin/sync-prisms)
+                USTP PRISMS Roster &amp; Scoped Channel Synchronization
               </h2>
               <p className="text-xs text-slate-500 mt-0.5">
                 Automated midnight batch job runs every 24h. Trigger a manual sync below to provision semester channels and rosters immediately.
@@ -541,7 +541,7 @@ export default function AdminConsolePage() {
                   <h2 className="text-sm font-extrabold text-ustp-text flex items-center gap-2">
                     <Activity className="w-4 h-4 text-ustp-navy" />
                     <span>
-                      Immutable Announcement Audit Trail (NFR-03_REV • announcement_audits)
+                      Immutable Announcement Audit Trail
                     </span>
                   </h2>
                   <p className="text-xs text-slate-500 mt-0.5">

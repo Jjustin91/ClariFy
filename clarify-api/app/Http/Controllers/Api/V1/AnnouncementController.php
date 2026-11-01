@@ -233,7 +233,7 @@ class AnnouncementController
         ]);
 
         return response()->json([
-            'message' => 'Announcement updated and audit trail logged (NFR-03_REV).',
+            'message' => 'Announcement updated and audit trail logged.',
             'data' => new AnnouncementResource($announcement->fresh(['publisher.academicProfile', 'channel', 'reads'])),
         ]);
     }

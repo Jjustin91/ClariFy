@@ -60,7 +60,7 @@ class AccountController
 
         return response()->json([
             'message' => $validated['verification_status'] === 'approved'
-                ? "Account {$user->institutional_id} verified against registrar records (FR-08)."
+                ? "Account {$user->institutional_id} verified against registrar records."
                 : "Account {$user->institutional_id} registration rejected.",
             'data' => new UserResource($user),
         ]);
@@ -117,7 +117,7 @@ class AccountController
         );
 
         return response()->json([
-            'message' => "Updated {$user->name} role to " . strtoupper($user->role) . " ({$validated['department']}) (FR-09).",
+            'message' => "Updated {$user->name} role to " . strtoupper($user->role) . " ({$validated['department']}).",
             'data' => new UserResource($user->fresh('academicProfile')),
         ]);
     }
@@ -148,7 +148,7 @@ class AccountController
         }
 
         return response()->json([
-            'message' => "PRISMS batch synchronization completed for {$validated['semester_code']} (FR-10).",
+            'message' => "PRISMS batch synchronization completed for {$validated['semester_code']}.",
             'total_updated' => $latestLog?->total_updated ?? 1432,
             'log' => [
                 'id' => $latestLog?->id ?? 902,
