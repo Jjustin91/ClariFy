@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { FileText, Image as ImageIcon, Search } from 'lucide-react';
 import { AppShell } from '@/src/components/layout/AppShell';
 import { AnnouncementCard } from '@/src/components/announcements/AnnouncementCard';
@@ -29,6 +30,7 @@ const FILTER_TAGS = [
 ];
 
 export default function AnnouncementsPage() {
+  const router = useRouter();
   const { user, announcementVersion, openAnnouncementModal } = useClarify();
 
   const [search, setSearch] = useState('');
@@ -50,6 +52,9 @@ export default function AnnouncementsPage() {
   const hasLoadedOnceRef = useRef(false);
 
   const fetchAnnouncements = useCallback(async () => {
+    if (user.role === 'it_admin') {
+      return;
+    }
     if (!hasLoadedOnceRef.current) {
       setIsLoading(true);
     }
@@ -74,11 +79,19 @@ export default function AnnouncementsPage() {
     } finally {
       setIsLoading(false);
     }
-  }, [search, selectedTag, sortBy, page]);
+  }, [search, selectedTag, sortBy, page, user.role]);
 
   useEffect(() => {
+    if (user.role === 'it_admin') {
+      router.replace('/admin');
+      return;
+    }
     fetchAnnouncements();
-  }, [fetchAnnouncements, announcementVersion]);
+  }, [fetchAnnouncements, announcementVersion, user.role, router]);
+
+  if (user.role === 'it_admin') {
+    return null;
+  }
 
   const canPublish = canPublishOrManageAnnouncements(user.role);
 

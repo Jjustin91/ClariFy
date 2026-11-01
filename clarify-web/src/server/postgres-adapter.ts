@@ -463,7 +463,7 @@ async function ensurePostgresSchema(pool: Pool): Promise<void> {
       'SELECT COUNT(*)::int AS cnt FROM channels'
     );
     if (Number(chCountRes.rows[0].cnt) === 0) {
-      const insCh = await client.query(
+      await client.query(
         `INSERT INTO channels (
            course_code, name, description, channel_type,
            scope_college, scope_department, scope_section, instructor_name, created_by
@@ -477,18 +477,8 @@ async function ensurePostgresSchema(pool: Pool): Promise<void> {
            'CITC',
            'IT3R2',
            'CITC Instructor',
-           $1
-         )
-         RETURNING id`,
-        [adminId]
-      );
-      const newChannelId = Number(insCh.rows[0].id);
-
-      await client.query(
-        `INSERT INTO channel_user (channel_id, user_id, can_publish)
-         VALUES ($1, $2, TRUE)
-         ON CONFLICT (channel_id, user_id) DO NOTHING`,
-        [newChannelId, adminId]
+           NULL
+         )`
       );
     }
 
@@ -1183,13 +1173,14 @@ export async function handlePostgresApiRequest(
            user_id, campus, college, department, program, year_level, section,
            semester_code, specialization, office_location, consultation_hours, courses_handled
          )
-         VALUES ($1, 'CDO Campus', $2, $2, $3, $4, $5, '2026-1ST-SEM', $6, $7, $8, $9::jsonb)
+         VALUES ($1, 'CDO Campus', $2, $3, $4, $5, $6, '2026-1ST-SEM', $7, $8, $9, $10::jsonb)
          ON CONFLICT (user_id) DO UPDATE SET
            college = EXCLUDED.college,
            department = EXCLUDED.department,
            section = EXCLUDED.section`,
         [
           newUid,
+          department,
           department,
           isFaculty ? `${department} Faculty` : `BS ${department}`,
           isFaculty ? null : 3,
@@ -1435,6 +1426,12 @@ export async function handlePostgresApiRequest(
 
     // WORKFLOW 5: SCOPED CHANNELS & ROSTER
     if (method === 'GET' && cleanPath === '/channels') {
+      if (activeUser.role === 'it_admin') {
+        return {
+          status: 200,
+          body: { data: [] },
+        };
+      }
       const search = (query.search || '').trim().toLowerCase();
       const type = query.type || 'all';
       const allChannels = await fetchChannelsFromPg(pool);
@@ -1457,6 +1454,16 @@ export async function handlePostgresApiRequest(
     }
 
     if (method === 'POST' && cleanPath === '/channels') {
+      if (activeUser.role === 'it_admin' || activeUser.role === 'student') {
+        return {
+          status: 403,
+          body: {
+            status: 403,
+            message:
+              'HTTP 403 Forbidden: Only Faculty and Department Heads can create Course Hub channels.',
+          },
+        };
+      }
       const courseCode = String(body.course_code || '').trim();
       const name = String(body.name || '').trim();
       const description = String(body.description || '').trim();
@@ -1507,7 +1514,7 @@ export async function handlePostgresApiRequest(
         `INSERT INTO channel_user (channel_id, user_id, can_publish)
          VALUES ($1, $2, $3)
          ON CONFLICT (channel_id, user_id) DO NOTHING`,
-        [newChannelId, activeUser.id, activeUser.role !== 'student']
+        [newChannelId, activeUser.id, true]
       );
 
       const allChannels = await fetchChannelsFromPg(pool);
@@ -1637,6 +1644,20 @@ export async function handlePostgresApiRequest(
 
     // WORKFLOWS 2 & 3: SCOPED ANNOUNCEMENTS, READ REACH & AUDITS
     if (method === 'GET' && cleanPath === '/announcements') {
+      if (activeUser.role === 'it_admin') {
+        return {
+          status: 200,
+          body: {
+            data: [],
+            meta: {
+              current_page: 1,
+              last_page: 1,
+              per_page: 4,
+              total: 0,
+            },
+          },
+        };
+      }
       const includeDrafts = canPublishOrManageAnnouncements(activeUser.role);
       let channelId: number | undefined = undefined;
       if (query.channel_id) {
@@ -1953,6 +1974,16 @@ export async function handlePostgresApiRequest(
 
     const ackMatch = cleanPath.match(/^\/announcements\/(\d+)\/acknowledge$/);
     if (method === 'POST' && ackMatch) {
+      if (activeUser.role === 'it_admin') {
+        return {
+          status: 403,
+          body: {
+            status: 403,
+            message:
+              'HTTP 403 Forbidden: IT Administrator accounts are restricted to the IT Admin Console.',
+          },
+        };
+      }
       const id = Number(ackMatch[1]);
       await pool.query(
         `INSERT INTO announcement_reads (announcement_id, user_id, acknowledged_at)
@@ -2448,6 +2479,17 @@ export async function handlePostgresApiRequest(
     }
 
     // WORKFLOW 6: IT ADMIN CONSOLE
+    if (cleanPath.startsWith('/admin') && activeUser.role !== 'it_admin') {
+      return {
+        status: 403,
+        body: {
+          status: 403,
+          message:
+            'HTTP 403 Forbidden: Only verified IT Administrators can access the IT Admin Console.',
+        },
+      };
+    }
+
     if (method === 'GET' && cleanPath === '/admin/users/pending') {
       const q = (query.search || '').trim().toLowerCase();
       const res = await pool.query(`
@@ -2484,19 +2526,21 @@ export async function handlePostgresApiRequest(
     const verifyMatch = cleanPath.match(/^\/admin\/users\/(\d+)\/verify$/);
     if (method === 'PATCH' && verifyMatch) {
       const userId = Number(verifyMatch[1]);
-      const verificationStatus = String(
-        body.verification_status || 'approved'
-      ) as 'approved' | 'rejected';
+      const verificationStatus: 'approved' | 'rejected' =
+        String(body.verification_status || 'approved') === 'rejected'
+          ? 'rejected'
+          : 'approved';
+      const isApproved = verificationStatus === 'approved';
 
       const upd = await pool.query(
         `UPDATE users
-         SET verification_status = $1,
-             verified_at = CASE WHEN $1 = 'approved' THEN CURRENT_TIMESTAMP ELSE NULL END,
-             verified_by = $2,
+         SET verification_status = $1::varchar,
+             verified_at = CASE WHEN $2::boolean THEN CURRENT_TIMESTAMP ELSE NULL END,
+             verified_by = $3,
              updated_at = CURRENT_TIMESTAMP
-         WHERE id = $3
+         WHERE id = $4
          RETURNING id`,
-        [verificationStatus, activeUser.id, userId]
+        [verificationStatus, isApproved, activeUser.id, userId]
       );
 
       if (!upd.rowCount || upd.rowCount === 0) {
@@ -2514,6 +2558,20 @@ export async function handlePostgresApiRequest(
         [userId]
       );
       const updatedUser = mapRowToUser(userRes.rows[0]);
+
+      if (isApproved && updatedUser.role !== 'it_admin') {
+        const defaultChannel = await resolveValidChannel(pool, null);
+        await pool.query(
+          `INSERT INTO channel_user (channel_id, user_id, can_publish)
+           VALUES ($1, $2, $3)
+           ON CONFLICT (channel_id, user_id) DO UPDATE SET can_publish = EXCLUDED.can_publish`,
+          [
+            defaultChannel.id,
+            updatedUser.id,
+            updatedUser.role === 'faculty' || updatedUser.role === 'dept_head',
+          ]
+        );
+      }
 
       return {
         status: 200,
@@ -2559,7 +2617,7 @@ export async function handlePostgresApiRequest(
       const department = String(body.department || 'CITC');
 
       const upd = await pool.query(
-        'UPDATE users SET role = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 RETURNING id',
+        'UPDATE users SET role = $1::varchar, updated_at = CURRENT_TIMESTAMP WHERE id = $2 RETURNING id',
         [newRole, userId]
       );
       if (!upd.rowCount || upd.rowCount === 0) {
@@ -2571,9 +2629,9 @@ export async function handlePostgresApiRequest(
 
       await pool.query(
         `INSERT INTO academic_profiles (user_id, campus, college, department, section, semester_code)
-         VALUES ($1, 'CDO Campus', $2, $2, $3, '2026-1ST-SEM')
-         ON CONFLICT (user_id) DO UPDATE SET college = $2, department = $2`,
-        [userId, department, `${department} Scope`]
+         VALUES ($1, 'CDO Campus', $2, $3, $4, '2026-1ST-SEM')
+         ON CONFLICT (user_id) DO UPDATE SET college = EXCLUDED.college, department = EXCLUDED.department`,
+        [userId, department, department, `${department} Scope`]
       );
 
       const userRes = await pool.query(

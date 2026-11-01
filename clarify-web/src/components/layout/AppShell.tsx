@@ -43,25 +43,34 @@ export function AppShell({
   };
 
   const primaryChannelId = channels[0]?.id || 1;
+  const isAdmin = user.role === 'it_admin';
 
-  const navItems = [
-    { label: 'Dashboard', href: '/', active: pathname === '/' },
-    {
-      label: 'All Announcements',
-      href: '/announcements',
-      active: pathname.startsWith('/announcements'),
-    },
-    {
-      label: 'View Faculty',
-      href: '/instructors',
-      active: pathname.startsWith('/instructors'),
-    },
-    {
-      label: 'View Messages',
-      href: `/channels/${primaryChannelId}`,
-      active: pathname.startsWith('/channels'),
-    },
-  ];
+  const navItems = isAdmin
+    ? [
+        {
+          label: 'Admin Console',
+          href: '/admin',
+          active: pathname.startsWith('/admin'),
+        },
+      ]
+    : [
+        { label: 'Dashboard', href: '/', active: pathname === '/' },
+        {
+          label: 'All Announcements',
+          href: '/announcements',
+          active: pathname.startsWith('/announcements'),
+        },
+        {
+          label: 'View Faculty',
+          href: '/instructors',
+          active: pathname.startsWith('/instructors'),
+        },
+        {
+          label: 'View Messages',
+          href: `/channels/${primaryChannelId}`,
+          active: pathname.startsWith('/channels'),
+        },
+      ];
 
   const avatarInitial = user.name ? user.name.charAt(0).toUpperCase() : 'U';
   const idDisplay =
@@ -76,16 +85,18 @@ export function AppShell({
       ? `${user.academic_profile?.section || 'IT3R2'} • ${
           user.academic_profile?.department || 'CITC'
         } 3rd Year`
+      : user.role === 'it_admin'
+      ? 'ICTO System Administration'
       : `${user.academic_profile?.department || 'CITC'} Dept`;
 
   return (
     <div className="min-h-screen flex flex-col bg-ustp-cream text-ustp-text">
-      {/* Persistent Sticky Top Header Bar (ustp-navy #1a1851) matching MVP Screenshots & Wireframes */}
+      {/* Persistent Sticky Top Header Bar (ustp-navy #1a1851) */}
       <header className="sticky top-0 h-14 bg-ustp-navy text-white px-4 lg:px-6 flex items-center justify-between gap-4 border-b border-slate-800 shrink-0 z-30">
         {/* Left: ClariFy in bold ustp-gold + active view/hub title in white */}
         <div className="flex items-center gap-3 min-w-0">
           <Link
-            href="/"
+            href={isAdmin ? '/admin' : '/'}
             className="text-xl font-extrabold tracking-tight text-ustp-gold hover:opacity-95 whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-ustp-gold rounded"
           >
             ClariFy
@@ -128,7 +139,7 @@ export function AppShell({
           </button>
         )}
 
-        {/* Right-Hand Sticky Fixed-Size Profile & Navigation Drawer (ustp-orange #ff9718 — Wireframes pp. 2–9) */}
+        {/* Right-Hand Sticky Fixed-Size Profile & Navigation Drawer (ustp-orange #ff9718) */}
         <aside
           aria-label="User Profile and Navigation Drawer"
           className={`sticky top-14 h-[calc(100vh-3.5rem)] self-start bg-ustp-orange text-ustp-text border-l border-amber-600/40 shrink-0 flex flex-col justify-between transition-transform duration-200 ease-out ${
@@ -138,7 +149,7 @@ export function AppShell({
           }`}
         >
           <div>
-            {/* Top-left Chevron Toggle Button matching Wireframes pp. 3–8 */}
+            {/* Top-left Chevron Toggle Button */}
             <div className="p-2.5 flex items-center justify-between">
               <button
                 type="button"
@@ -169,7 +180,7 @@ export function AppShell({
               </p>
             </div>
 
-            {/* Vertical Navigation Stack (Full-width bordered rows, active item in deeper orange #ff6418) */}
+            {/* Vertical Navigation Stack */}
             <nav aria-label="Primary Navigation" className="divide-y divide-amber-700/30 border-b border-amber-700/30">
               {navItems.map((item) => (
                 <Link
@@ -184,24 +195,10 @@ export function AppShell({
                   {item.label}
                 </Link>
               ))}
-
-              {/* Replaces second wireframe "idk +" placeholder -> Admin Console (visible when role === 'it_admin') */}
-              {user.role === 'it_admin' && (
-                <Link
-                  href="/admin"
-                  className={`block w-full px-5 py-3 text-right text-sm font-bold transition-colors ${
-                    pathname.startsWith('/admin')
-                      ? 'bg-ustp-orange-dark text-ustp-text font-extrabold'
-                      : 'hover:bg-ustp-orange-dark/50 text-ustp-text'
-                  }`}
-                >
-                  Admin Console +
-                </Link>
-              )}
             </nav>
           </div>
 
-          {/* Bottom Pinned Links: Settings (FR-06) & Logout */}
+          {/* Bottom Pinned Links: Settings & Logout */}
           <div className="p-4 space-y-2 border-t border-amber-700/30">
             <button
               type="button"
@@ -224,9 +221,9 @@ export function AppShell({
       </div>
 
       {/* Global Modals */}
-      <AnnouncementFormModal />
+      {!isAdmin && <AnnouncementFormModal />}
       <ProfileSettingsModal />
-      <ChannelRosterModal />
+      {!isAdmin && <ChannelRosterModal />}
 
       {/* Toast Notification Stack */}
       {toasts.length > 0 && (

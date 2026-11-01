@@ -116,6 +116,11 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const refreshChannels = useCallback(async () => {
+    const activeRole = getStoredUser().role;
+    if (activeRole === 'it_admin') {
+      setChannels([]);
+      return;
+    }
     try {
       const res = await getChannelsApi();
       setChannels(res.data);
@@ -139,7 +144,11 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     const savedUser = getStoredUser();
     setUserState(savedUser);
-    void refreshChannels();
+    if (savedUser.role !== 'it_admin') {
+      void refreshChannels();
+    } else {
+      setChannels([]);
+    }
     void refreshPersistenceStatus();
 
     // Sync active user profile from PostgreSQL / Laravel backend
@@ -148,6 +157,9 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
         if (res?.data) {
           setUserState(res.data);
           setStoredUser(res.data);
+          if (res.data.role === 'it_admin') {
+            setChannels([]);
+          }
         }
       })
       .catch(() => {});

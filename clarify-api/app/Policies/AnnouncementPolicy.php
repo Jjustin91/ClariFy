@@ -17,21 +17,21 @@ class AnnouncementPolicy
      */
     public function create(User $user, ?Channel $channel = null): Response
     {
-        if ($user->role === 'student') {
+        if ($user->role === 'student' || $user->role === 'it_admin') {
             return Response::denyWithStatus(
                 403,
-                'HTTP 403 Forbidden: Students are not authorized to publish announcements.'
+                'HTTP 403 Forbidden: Only Faculty and Department Heads are authorized to publish announcements.'
             );
         }
 
-        if (in_array($user->role, ['dept_head', 'it_admin'], true)) {
+        if ($user->role === 'dept_head') {
             return Response::allow();
         }
 
         if ($channel && in_array($channel->channel_type, ['university', 'college'], true)) {
             return Response::denyWithStatus(
                 403,
-                'HTTP 403 Forbidden: University-wide and College-wide memos are restricted to Department Heads, Deans, and IT Administrators.'
+                'HTTP 403 Forbidden: University-wide and College-wide memos are restricted to Department Heads and Deans.'
             );
         }
 
@@ -40,15 +40,15 @@ class AnnouncementPolicy
 
     public function update(User $user, Announcement $announcement): Response
     {
-        if ($user->role === 'student') {
+        if ($user->role === 'student' || $user->role === 'it_admin') {
             return Response::denyWithStatus(
                 403,
-                'HTTP 403 Forbidden: Students cannot edit announcements.'
+                'HTTP 403 Forbidden: Only Faculty and Department Heads can edit announcements.'
             );
         }
 
         if (
-            in_array($user->role, ['dept_head', 'it_admin'], true) ||
+            $user->role === 'dept_head' ||
             $announcement->publisher_id === $user->id
         ) {
             return Response::allow();

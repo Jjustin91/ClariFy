@@ -84,6 +84,6 @@ class User extends Authenticatable
 
     public function canPublishOrManage(): bool
     {
-        return in_array($this->role, ['faculty', 'dept_head', 'it_admin'], true);
+        return in_array($this->role, ['faculty', 'dept_head'], true);
     }
 }

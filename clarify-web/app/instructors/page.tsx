@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useCallback, useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { Search } from 'lucide-react';
 import { AppShell } from '@/src/components/layout/AppShell';
 import {
@@ -19,7 +20,8 @@ import type {
 const DEPARTMENTS = ['ALL', 'CITC', 'CEA', 'COT', 'CSM'] as const;
 
 export default function InstructorsPage() {
-  const { announcementVersion, showToast } = useClarify();
+  const router = useRouter();
+  const { user, announcementVersion, showToast } = useClarify();
 
   const [search, setSearch] = useState('');
   const [department, setDepartment] = useState<string>('ALL');
@@ -39,6 +41,9 @@ export default function InstructorsPage() {
     useState<Instructor | null>(null);
 
   const loadInstructors = useCallback(async () => {
+    if (user.role === 'it_admin') {
+      return;
+    }
     setIsLoading(true);
     setError(null);
     try {
@@ -59,11 +64,19 @@ export default function InstructorsPage() {
     } finally {
       setIsLoading(false);
     }
-  }, [search, department, sortBy, page]);
+  }, [search, department, sortBy, page, user.role]);
 
   useEffect(() => {
+    if (user.role === 'it_admin') {
+      router.replace('/admin');
+      return;
+    }
     loadInstructors();
-  }, [loadInstructors, announcementVersion]);
+  }, [loadInstructors, announcementVersion, user.role, router]);
+
+  if (user.role === 'it_admin') {
+    return null;
+  }
 
   return (
     <AppShell title="View Instructors">

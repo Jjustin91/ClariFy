@@ -2,6 +2,7 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { Plus } from 'lucide-react';
 import { AppShell } from '@/src/components/layout/AppShell';
 import { AnnouncementCard } from '@/src/components/announcements/AnnouncementCard';
@@ -16,6 +17,7 @@ import { canPublishOrManageAnnouncements } from '@/src/lib/domain-logic';
 import type { Announcement, LaravelValidationError } from '@/src/types/api';
 
 export default function DashboardPage() {
+  const router = useRouter();
   const {
     user,
     channels,
@@ -29,6 +31,9 @@ export default function DashboardPage() {
   const hasLoadedOnceRef = useRef(false);
 
   const loadDashboardData = useCallback(async () => {
+    if (user.role === 'it_admin') {
+      return;
+    }
     if (!hasLoadedOnceRef.current) {
       setIsLoading(true);
     }
@@ -50,11 +55,19 @@ export default function DashboardPage() {
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [user.role]);
 
   useEffect(() => {
+    if (user.role === 'it_admin') {
+      router.replace('/admin');
+      return;
+    }
     loadDashboardData();
-  }, [loadDashboardData, announcementVersion]);
+  }, [loadDashboardData, announcementVersion, user.role, router]);
+
+  if (user.role === 'it_admin') {
+    return null;
+  }
 
   const canPublish = canPublishOrManageAnnouncements(user.role);
 

@@ -2,7 +2,7 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
-import { useParams } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 import {
   ChevronDown,
   ChevronLeft,
@@ -53,6 +53,7 @@ import type {
 } from '@/src/types/api';
 
 export default function CourseHubPage() {
+  const router = useRouter();
   const params = useParams<{ channelId: string }>();
   const requestedChannelId = Number(params?.channelId || 1);
 
@@ -102,6 +103,9 @@ export default function CourseHubPage() {
   const [openFaqIds, setOpenFaqIds] = useState<number[]>([]);
 
   const loadHubData = useCallback(async () => {
+    if (user.role === 'it_admin') {
+      return;
+    }
     if (!hasLoadedOnceRef.current) {
       setIsLoading(true);
     }
@@ -130,11 +134,15 @@ export default function CourseHubPage() {
     } finally {
       setIsLoading(false);
     }
-  }, [channelId]);
+  }, [channelId, user.role]);
 
   useEffect(() => {
+    if (user.role === 'it_admin') {
+      router.replace('/admin');
+      return;
+    }
     loadHubData();
-  }, [loadHubData, announcementVersion]);
+  }, [loadHubData, announcementVersion, user.role, router]);
 
   const canPublish = canPublishOrManageAnnouncements(user.role);
   const canResolve = canResolveOrPinThreads(user.role);
@@ -266,6 +274,10 @@ export default function CourseHubPage() {
         ''
       )} Hub`
     : 'IT3R2 — Software Engineering Hub';
+
+  if (user.role === 'it_admin') {
+    return null;
+  }
 
   return (
     <AppShell title={hubHeaderTitle}>

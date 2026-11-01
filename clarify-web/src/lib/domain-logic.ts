@@ -59,19 +59,20 @@ export function formatSubjectHashtag(rawInput: string): string {
 }
 
 /**
- * Role-Based Access Control (FR-02, FR-04_REV, NFR-01_REV):
- * Students are strictly prohibited from creating, editing, or deleting announcements.
+ * Role-Based Access Control:
+ * Only Faculty and Department Heads can create, edit, or delete announcements.
+ * Students and IT Administrators are prohibited from publishing announcements.
  */
 export function canPublishOrManageAnnouncements(role: UserRole): boolean {
-  return role === 'faculty' || role === 'dept_head' || role === 'it_admin';
+  return role === 'faculty' || role === 'dept_head';
 }
 
 /**
- * Role-Based Access Control (FR-03_REV, FR-07):
- * Only Faculty, Department Heads, and IT Admins can resolve tickets or pin to Class FAQs.
+ * Role-Based Access Control:
+ * Only Faculty and Department Heads can resolve tickets or pin to Class FAQs.
  */
 export function canResolveOrPinThreads(role: UserRole): boolean {
-  return role === 'faculty' || role === 'dept_head' || role === 'it_admin';
+  return role === 'faculty' || role === 'dept_head';
 }
 
 /**
