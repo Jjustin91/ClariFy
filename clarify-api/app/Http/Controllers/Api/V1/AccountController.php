@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api\V1;
 
+use App\Events\RealtimeStateUpdated;
 use App\Http\Resources\UserResource;
 use App\Models\AnnouncementAudit;
 use App\Models\PrismsSyncLog;
@@ -57,6 +58,8 @@ class AccountController
         $user->verified_at = now();
         $user->verified_by = $request->user()?->id;
         $user->save();
+
+        RealtimeStateUpdated::safeDispatch('admin.updated', null, (int) ($request->user()?->id ?? 0));
 
         return response()->json([
             'message' => $validated['verification_status'] === 'approved'
@@ -115,6 +118,8 @@ class AccountController
                 'department' => $validated['department'],
             ]
         );
+
+        RealtimeStateUpdated::safeDispatch('admin.updated', null, (int) ($request->user()?->id ?? 0));
 
         return response()->json([
             'message' => "Updated {$user->name} role to " . strtoupper($user->role) . " ({$validated['department']}).",

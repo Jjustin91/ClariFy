@@ -45,23 +45,46 @@ async function parseRequestBody(
 function classifyMutationEvent(
   method: string,
   apiPath: string,
-  body: Record<string, unknown>
-): { type: RealtimeEvent['type']; channel_id?: number } | null {
+  body: Record<string, unknown>,
+  responseBody: Record<string, unknown>
+): {
+  type: RealtimeEvent['type'];
+  channel_id?: number;
+  announcement?: RealtimeEvent['announcement'];
+  message?: RealtimeEvent['message'];
+  thread?: RealtimeEvent['thread'];
+} | null {
   const m = method.toUpperCase();
   if (m === 'GET' || m === 'HEAD') return null;
 
+  const data = (responseBody?.data || undefined) as
+    | Record<string, unknown>
+    | undefined;
+
   if (apiPath === '/announcements' || apiPath === '/announcements/create') {
+    const isUrgent = Boolean(data?.is_urgent || body.is_urgent === true || body.is_urgent === 'true');
     return {
-      type: 'announcement.created',
-      channel_id: body.channel_id ? Number(body.channel_id) : undefined,
+      type: isUrgent ? 'announcement.urgent' : 'announcement.created',
+      channel_id: Number(data?.channel_id || body.channel_id || 1),
+      announcement: data as unknown as RealtimeEvent['announcement'],
     };
   }
   if (/^\/announcements\/\d+\/acknowledge$/.test(apiPath)) {
-    return { type: 'announcement.acknowledged' };
+    return {
+      type: 'announcement.acknowledged',
+      channel_id: data?.channel_id ? Number(data.channel_id) : undefined,
+      announcement: data as unknown as RealtimeEvent['announcement'],
+    };
   }
   if (/^\/announcements\/\d+$/.test(apiPath)) {
+    if (m === 'DELETE') {
+      return { type: 'announcement.deleted' };
+    }
+    const isUrgent = Boolean(data?.is_urgent || body.is_urgent === true);
     return {
-      type: m === 'DELETE' ? 'announcement.deleted' : 'announcement.updated',
+      type: isUrgent ? 'announcement.urgent' : 'announcement.updated',
+      channel_id: data?.channel_id ? Number(data.channel_id) : undefined,
+      announcement: data as unknown as RealtimeEvent['announcement'],
     };
   }
   const chatMatch = apiPath.match(/^\/channels\/(\d+)\/chat$/);
@@ -69,6 +92,7 @@ function classifyMutationEvent(
     return {
       type: 'chat.message',
       channel_id: Number(chatMatch[1]),
+      message: data as unknown as RealtimeEvent['message'],
     };
   }
   const threadCreateMatch = apiPath.match(/^\/channels\/(\d+)\/threads$/);
@@ -76,17 +100,28 @@ function classifyMutationEvent(
     return {
       type: 'thread.created',
       channel_id: Number(threadCreateMatch[1]),
+      thread: data as unknown as RealtimeEvent['thread'],
     };
   }
   if (/^\/threads\/\d+\/replies$/.test(apiPath)) {
-    return { type: 'thread.replied' };
+    return {
+      type: 'thread.replied',
+      channel_id: data?.channel_id ? Number(data.channel_id) : undefined,
+      thread: data as unknown as RealtimeEvent['thread'],
+    };
   }
   if (/^\/threads\/\d+\/convert-faq$/.test(apiPath)) {
-    return { type: 'thread.faq_pinned' };
+    return {
+      type: 'thread.faq_pinned',
+      channel_id: data?.channel_id ? Number(data.channel_id) : undefined,
+      thread: data as unknown as RealtimeEvent['thread'],
+    };
   }
   if (/^\/threads\/\d+$/.test(apiPath)) {
     return {
       type: m === 'DELETE' ? 'thread.deleted' : 'thread.updated',
+      channel_id: data?.channel_id ? Number(data.channel_id) : undefined,
+      thread: data as unknown as RealtimeEvent['thread'],
     };
   }
   if (apiPath === '/channels') {
@@ -246,9 +281,19 @@ async function handleRoute(
 
   // Broadcast real-time event whenever a mutation succeeds
   if (result.status >= 200 && result.status < 300) {
-    const ev = classifyMutationEvent(effectiveMethod, apiPath, body);
+    const ev = classifyMutationEvent(
+      effectiveMethod,
+      apiPath,
+      body,
+      result.body
+    );
     if (ev) {
-      emitRealtimeEvent(ev.type, { channel_id: ev.channel_id });
+      emitRealtimeEvent(ev.type, {
+        channel_id: ev.channel_id,
+        announcement: ev.announcement,
+        message: ev.message,
+        thread: ev.thread,
+      });
     }
   }
 

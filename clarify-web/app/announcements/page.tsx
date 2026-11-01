@@ -31,7 +31,13 @@ const FILTER_TAGS = [
 
 export default function AnnouncementsPage() {
   const router = useRouter();
-  const { user, announcementVersion, openAnnouncementModal } = useClarify();
+  const {
+    user,
+    isAuthenticated,
+    isAuthReady,
+    announcementVersion,
+    openAnnouncementModal,
+  } = useClarify();
 
   const [search, setSearch] = useState('');
   const [selectedTag, setSelectedTag] = useState('ALL');
@@ -52,7 +58,7 @@ export default function AnnouncementsPage() {
   const hasLoadedOnceRef = useRef(false);
 
   const fetchAnnouncements = useCallback(async () => {
-    if (user.role === 'it_admin') {
+    if (!isAuthReady || !isAuthenticated || user.role === 'it_admin') {
       return;
     }
     if (!hasLoadedOnceRef.current) {
@@ -79,17 +85,35 @@ export default function AnnouncementsPage() {
     } finally {
       setIsLoading(false);
     }
-  }, [search, selectedTag, sortBy, page, user.role]);
+  }, [
+    search,
+    selectedTag,
+    sortBy,
+    page,
+    isAuthReady,
+    isAuthenticated,
+    user.role,
+  ]);
 
   useEffect(() => {
+    if (!isAuthReady || !isAuthenticated) {
+      return;
+    }
     if (user.role === 'it_admin') {
       router.replace('/admin');
       return;
     }
     fetchAnnouncements();
-  }, [fetchAnnouncements, announcementVersion, user.role, router]);
+  }, [
+    fetchAnnouncements,
+    announcementVersion,
+    isAuthReady,
+    isAuthenticated,
+    user.role,
+    router,
+  ]);
 
-  if (user.role === 'it_admin') {
+  if (!isAuthReady || !isAuthenticated || user.role === 'it_admin') {
     return null;
   }
 

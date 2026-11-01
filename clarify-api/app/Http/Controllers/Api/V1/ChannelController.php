@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api\V1;
 
+use App\Events\RealtimeStateUpdated;
 use App\Http\Resources\ChannelResource;
 use App\Models\Channel;
 use App\Models\User;
@@ -91,6 +92,8 @@ class ChannelController
             ],
         ]);
 
+        RealtimeStateUpdated::safeDispatch('channel.created', (int) $channel->id, (int) $user->id);
+
         return response()->json([
             'message' => 'Scoped channel created successfully.',
             'data' => new ChannelResource($channel->load('members.academicProfile')),
@@ -111,6 +114,8 @@ class ChannelController
                 'joined_at' => now(),
             ],
         ]);
+
+        RealtimeStateUpdated::safeDispatch('channel.updated', (int) $channel->id, (int) $user->id);
 
         return response()->json([
             'message' => "Enrolled in {$channel->name} roster.",
@@ -163,6 +168,8 @@ class ChannelController
         } elseif ($targetUser) {
             $channel->members()->detach($targetUser->id);
         }
+
+        RealtimeStateUpdated::safeDispatch('channel.updated', (int) $channel->id, (int) $user->id);
 
         return response()->json([
             'message' => $validated['action'] === 'add'

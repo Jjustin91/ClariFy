@@ -8,6 +8,7 @@ import React, {
   useCallback,
   useRef,
 } from 'react';
+import { usePathname, useRouter } from 'next/navigation';
 import type {
   Announcement,
   Channel,
@@ -16,12 +17,20 @@ import type {
   User,
 } from '../types/api';
 import {
+  clearStoredSession,
+  getAnnouncementsApi,
   getChannelsApi,
   getMeApi,
   getPersistenceStatusApi,
+  getStoredSessionUser,
+  getStoredToken,
   getStoredUser,
   setStoredUser,
 } from '../lib/api-client';
+import {
+  type ReverbBroadcastPayload,
+  subscribeGlobalReverb,
+} from '../lib/reverb-client';
 
 export interface ToastItem {
   id: string;
@@ -29,9 +38,14 @@ export interface ToastItem {
   variant: 'success' | 'error' | 'info';
 }
 
+type RealtimeEventListener = (event: RealtimeEvent) => void;
+
 interface ClarifyContextValue {
   user: User;
+  isAuthenticated: boolean;
+  isAuthReady: boolean;
   setUser: (user: User) => void;
+  clearSession: () => void;
   persistenceStatus: PersistenceStatus | null;
   isDrawerOpen: boolean;
   setIsDrawerOpen: React.Dispatch<React.SetStateAction<boolean>>;
@@ -49,6 +63,9 @@ interface ClarifyContextValue {
     defaultChannelId?: number;
   }) => void;
   closeAnnouncementModal: () => void;
+  urgentPopupAnnouncement: Announcement | null;
+  dismissUrgentPopup: (announcementId: number) => void;
+  subscribeRealtimeEvents: (listener: RealtimeEventListener) => () => void;
   channels: Channel[];
   refreshChannels: () => Promise<void>;
   announcementVersion: number;
@@ -60,27 +77,32 @@ interface ClarifyContextValue {
 
 const ClarifyContext = createContext<ClarifyContextValue | undefined>(undefined);
 
-const INITIAL_USER_FALLBACK: User = {
-  id: 1,
-  institutional_id: '90001',
-  name: 'Engr. Makima Cruz',
-  email: 'icto.admin@ustp.edu.ph',
-  contact_number: '+63 917 900 0001',
-  role: 'it_admin',
-  verification_status: 'approved',
+const GUEST_USER_PLACEHOLDER: User = {
+  id: 0,
+  institutional_id: '',
+  name: 'Guest',
+  email: '',
+  contact_number: null,
+  role: 'student',
+  verification_status: 'pending',
   academic_profile: {
     campus: 'CDO Campus',
-    college: 'ICTO',
+    college: 'CITC',
     department: 'CITC',
     program: null,
     year_level: null,
-    section: 'Registrar & ICTO',
+    section: null,
     semester_code: '2026-1ST-SEM',
   },
 };
 
 export function ClarifyProvider({ children }: { children: React.ReactNode }) {
-  const [user, setUserState] = useState<User>(INITIAL_USER_FALLBACK);
+  const pathname = usePathname();
+  const router = useRouter();
+
+  const [user, setUserState] = useState<User>(GUEST_USER_PLACEHOLDER);
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
+  const [isAuthReady, setIsAuthReady] = useState<boolean>(false);
   const [persistenceStatus, setPersistenceStatus] =
     useState<PersistenceStatus | null>(null);
   const [isDrawerOpen, setIsDrawerOpen] = useState<boolean>(true);
@@ -95,10 +117,15 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
     editingAnnouncement: null,
     defaultChannelId: 1,
   });
+  const [urgentPopupAnnouncement, setUrgentPopupAnnouncement] =
+    useState<Announcement | null>(null);
   const [channels, setChannels] = useState<Channel[]>([]);
   const [announcementVersion, setAnnouncementVersion] = useState<number>(0);
   const [toasts, setToasts] = useState<ToastItem[]>([]);
+
   const lastRevisionRef = useRef<number>(0);
+  const dismissedUrgentIdsRef = useRef<Set<number>>(new Set());
+  const eventListenersRef = useRef<Set<RealtimeEventListener>>(new Set());
 
   const showToast = useCallback(
     (message: string, variant: ToastItem['variant'] = 'info') => {
@@ -115,9 +142,37 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
 
+  const subscribeRealtimeEvents = useCallback(
+    (listener: RealtimeEventListener) => {
+      eventListenersRef.current.add(listener);
+      return () => {
+        eventListenersRef.current.delete(listener);
+      };
+    },
+    []
+  );
+
+  const notifyEventListeners = useCallback((event: RealtimeEvent) => {
+    eventListenersRef.current.forEach((listener) => {
+      try {
+        listener(event);
+      } catch {
+        // Ignore subscriber error
+      }
+    });
+  }, []);
+
+  const dismissUrgentPopup = useCallback((announcementId: number) => {
+    dismissedUrgentIdsRef.current.add(announcementId);
+    setUrgentPopupAnnouncement((prev) =>
+      prev && prev.id === announcementId ? null : prev
+    );
+  }, []);
+
   const refreshChannels = useCallback(async () => {
-    const activeRole = getStoredUser().role;
-    if (activeRole === 'it_admin') {
+    const sessionUser = getStoredSessionUser();
+    const token = getStoredToken();
+    if (!sessionUser || !token || sessionUser.role === 'it_admin') {
       setChannels([]);
       return;
     }
@@ -126,6 +181,41 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
       setChannels(res.data);
     } catch {
       // Retain existing channels if backend is unreachable
+    }
+  }, []);
+
+  const checkUnacknowledgedUrgentAnnouncement = useCallback(async () => {
+    const sessionUser = getStoredSessionUser();
+    const token = getStoredToken();
+    if (!sessionUser || !token || sessionUser.role === 'it_admin') {
+      return;
+    }
+    try {
+      const res = await getAnnouncementsApi({
+        sort: 'latest',
+        page: 1,
+        per_page: 6,
+      });
+      const urgentCandidate = res.data.find(
+        (ann) =>
+          ann.is_urgent &&
+          ann.status === 'published' &&
+          !ann.read_reach.has_current_user_acknowledged &&
+          ann.publisher.id !== sessionUser.id &&
+          !dismissedUrgentIdsRef.current.has(ann.id)
+      );
+      if (urgentCandidate) {
+        setUrgentPopupAnnouncement(urgentCandidate);
+      } else {
+        // Also keep live acknowledgment counter synced if modal is currently open
+        setUrgentPopupAnnouncement((current) => {
+          if (!current) return null;
+          const updatedMatch = res.data.find((a) => a.id === current.id);
+          return updatedMatch || current;
+        });
+      }
+    } catch {
+      // Ignore errors
     }
   }, []);
 
@@ -141,11 +231,34 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  const clearSession = useCallback(() => {
+    clearStoredSession();
+    setUserState(GUEST_USER_PLACEHOLDER);
+    setIsAuthenticated(false);
+    setChannels([]);
+    setUrgentPopupAnnouncement(null);
+  }, []);
+
+  // Resolve per-tab session on mount
   useEffect(() => {
-    const savedUser = getStoredUser();
+    const savedUser = getStoredSessionUser();
+    const savedToken = getStoredToken();
+
+    if (!savedUser || !savedToken) {
+      setUserState(GUEST_USER_PLACEHOLDER);
+      setIsAuthenticated(false);
+      setIsAuthReady(true);
+      void refreshPersistenceStatus();
+      return;
+    }
+
     setUserState(savedUser);
+    setIsAuthenticated(true);
+    setIsAuthReady(true);
+
     if (savedUser.role !== 'it_admin') {
       void refreshChannels();
+      void checkUnacknowledgedUrgentAnnouncement();
     } else {
       setChannels([]);
     }
@@ -157,37 +270,153 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
         if (res?.data) {
           setUserState(res.data);
           setStoredUser(res.data);
+          setIsAuthenticated(true);
           if (res.data.role === 'it_admin') {
             setChannels([]);
           }
         }
       })
-      .catch(() => {});
-  }, [refreshChannels, refreshPersistenceStatus]);
+      .catch((err: { status?: number }) => {
+        if (err?.status === 401 || err?.status === 403) {
+          clearSession();
+        }
+      });
+  }, [
+    refreshChannels,
+    checkUnacknowledgedUrgentAnnouncement,
+    refreshPersistenceStatus,
+    clearSession,
+  ]);
 
-  // Real-time synchronization via Server-Sent Events (SSE) + BroadcastChannel + fallback polling
+  // Enforce login-first route protection when unauthenticated
   useEffect(() => {
-    if (typeof window === 'undefined') return;
+    if (!isAuthReady) return;
+    const isPublicAuthPage =
+      pathname === '/login' || pathname === '/register';
 
-    const handleRealtimeTrigger = () => {
+    if (!isAuthenticated && !isPublicAuthPage) {
+      router.replace('/login');
+    }
+  }, [isAuthReady, isAuthenticated, pathname, router]);
+
+  // Real-time synchronization via Laravel Reverb WebSockets + SSE + BroadcastChannel + fallback polling
+  useEffect(() => {
+    if (typeof window === 'undefined' || !isAuthenticated) return;
+
+    const handleIncomingRealtimeEvent = (event: RealtimeEvent) => {
+      const activeUser = getStoredUser();
+
+      // 1. Urgent Announcement Popup trigger
+      if (
+        (event.type === 'announcement.urgent' ||
+          event.type === 'announcement.created' ||
+          event.type === 'announcement.updated') &&
+        event.announcement?.is_urgent &&
+        event.announcement.status === 'published' &&
+        activeUser.role !== 'it_admin'
+      ) {
+        const incomingAnn = event.announcement;
+        const isPublisher = incomingAnn.publisher.id === activeUser.id;
+        if (!isPublisher) {
+          dismissedUrgentIdsRef.current.delete(incomingAnn.id);
+          setUrgentPopupAnnouncement({
+            ...incomingAnn,
+            read_reach: {
+              ...incomingAnn.read_reach,
+              has_current_user_acknowledged: false,
+            },
+          });
+        }
+      }
+
+      // 2. Live Acknowledgment Counter update inside open Urgent Popup
+      if (
+        event.type === 'announcement.acknowledged' &&
+        event.announcement
+      ) {
+        const updatedAnn = event.announcement;
+        setUrgentPopupAnnouncement((current) => {
+          if (!current || current.id !== updatedAnn.id) return current;
+          return {
+            ...current,
+            read_reach: {
+              ...updatedAnn.read_reach,
+              has_current_user_acknowledged:
+                current.read_reach.has_current_user_acknowledged,
+            },
+          };
+        });
+      }
+
+      notifyEventListeners(event);
       void refreshChannels();
+      void checkUnacknowledgedUrgentAnnouncement();
       setAnnouncementVersion((v) => v + 1);
     };
 
-    // 1. Cross-tab BroadcastChannel for instant zero-latency local browser sync
+    // 1. Laravel Reverb (Laravel Echo + Pusher-js WebSocket subscription)
+    const unsubscribeReverb = subscribeGlobalReverb(
+      (payload: ReverbBroadcastPayload) => {
+        const normalizedEvent: RealtimeEvent = {
+          revision: Date.now(),
+          type: payload.type || 'db.changed',
+          channel_id: payload.channel_id,
+          actor_id: payload.actor_id,
+          announcement: payload.announcement,
+          message: payload.message,
+          thread: payload.thread,
+          timestamp: payload.timestamp || new Date().toISOString(),
+        };
+        handleIncomingRealtimeEvent(normalizedEvent);
+      }
+    );
+
+    // 2. Cross-tab BroadcastChannel for instant zero-latency local browser sync
     let bc: BroadcastChannel | null = null;
     if ('BroadcastChannel' in window) {
       try {
         bc = new BroadcastChannel('clarify_realtime_sync');
-        bc.onmessage = () => {
-          handleRealtimeTrigger();
+        bc.onmessage = (msgEvent) => {
+          const msgData = msgEvent.data as {
+            endpoint?: string;
+            data?: Record<string, unknown>;
+          };
+          const endpoint = String(msgData?.endpoint || '');
+          let evType: RealtimeEvent['type'] = 'db.changed';
+          let announcement: Announcement | undefined;
+          let message: RealtimeEvent['message'];
+          let thread: RealtimeEvent['thread'];
+
+          if (endpoint.includes('/announcements') && endpoint.endsWith('/acknowledge')) {
+            evType = 'announcement.acknowledged';
+            announcement = msgData?.data as unknown as Announcement;
+          } else if (endpoint.includes('/announcements')) {
+            const ann = msgData?.data as unknown as Announcement | undefined;
+            evType = ann?.is_urgent ? 'announcement.urgent' : 'announcement.created';
+            announcement = ann;
+          } else if (endpoint.includes('/chat')) {
+            evType = 'chat.message';
+            message = msgData?.data as unknown as RealtimeEvent['message'];
+          } else if (endpoint.includes('/threads')) {
+            evType = 'thread.updated';
+            thread = msgData?.data as unknown as RealtimeEvent['thread'];
+          }
+
+          handleIncomingRealtimeEvent({
+            revision: Date.now(),
+            type: evType,
+            announcement,
+            message,
+            thread,
+            timestamp: new Date().toISOString(),
+          });
         };
       } catch {
         bc = null;
       }
     }
 
-    // 2. Server-Sent Events (SSE) subscription to /api/v1/realtime/stream
+    // 3. Server-Sent Events (SSE) subscription to /api/v1/realtime/stream
     let eventSource: EventSource | null = null;
     if ('EventSource' in window) {
       try {
@@ -199,7 +428,7 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
               const isInitialConnect = payload.type === 'connected';
               lastRevisionRef.current = payload.revision;
               if (!isInitialConnect) {
-                handleRealtimeTrigger();
+                handleIncomingRealtimeEvent(payload);
               }
             }
           } catch {
@@ -211,7 +440,7 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
       }
     }
 
-    // 3. Lightweight 2.5s poll fallback (detects external PostgreSQL edits & environments buffering SSE)
+    // 4. Lightweight 2.0s poll fallback (detects external PostgreSQL edits & environments buffering SSE)
     const pollInterval = setInterval(async () => {
       try {
         const res = await fetch(
@@ -227,15 +456,21 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
           const hadPriorRevision = lastRevisionRef.current > 0;
           lastRevisionRef.current = data.revision;
           if (hadPriorRevision) {
-            handleRealtimeTrigger();
+            const latestEv = data.events[data.events.length - 1] || {
+              revision: data.revision,
+              type: 'db.changed',
+              timestamp: new Date().toISOString(),
+            };
+            handleIncomingRealtimeEvent(latestEv);
           }
         }
       } catch {
         // Ignore transient network errors
       }
-    }, 2500);
+    }, 2000);
 
     return () => {
+      unsubscribeReverb();
       if (bc) {
         try {
           bc.close();
@@ -248,16 +483,30 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
       }
       clearInterval(pollInterval);
     };
-  }, [refreshChannels]);
+  }, [
+    isAuthenticated,
+    refreshChannels,
+    checkUnacknowledgedUrgentAnnouncement,
+    notifyEventListeners,
+  ]);
 
   const setUser = useCallback(
     (nextUser: User) => {
       setUserState(nextUser);
       setStoredUser(nextUser);
-      void refreshChannels();
+      setIsAuthenticated(true);
+      setIsAuthReady(true);
+      dismissedUrgentIdsRef.current.clear();
+      if (nextUser.role !== 'it_admin') {
+        void refreshChannels();
+        void checkUnacknowledgedUrgentAnnouncement();
+      } else {
+        setChannels([]);
+        setUrgentPopupAnnouncement(null);
+      }
       setAnnouncementVersion((v) => v + 1);
     },
-    [refreshChannels]
+    [refreshChannels, checkUnacknowledgedUrgentAnnouncement]
   );
 
   const openAnnouncementModal = useCallback(
@@ -285,13 +534,17 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
   const triggerAnnouncementRefresh = useCallback(() => {
     setAnnouncementVersion((v) => v + 1);
     void refreshChannels();
-  }, [refreshChannels]);
+    void checkUnacknowledgedUrgentAnnouncement();
+  }, [refreshChannels, checkUnacknowledgedUrgentAnnouncement]);
 
   return (
     <ClarifyContext.Provider
       value={{
         user,
+        isAuthenticated,
+        isAuthReady,
         setUser,
+        clearSession,
         persistenceStatus,
         isDrawerOpen,
         setIsDrawerOpen,
@@ -302,6 +555,9 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
         announcementModalState,
         openAnnouncementModal,
         closeAnnouncementModal,
+        urgentPopupAnnouncement,
+        dismissUrgentPopup,
+        subscribeRealtimeEvents,
         channels,
         refreshChannels,
         announcementVersion,

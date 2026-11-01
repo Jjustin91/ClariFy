@@ -31,7 +31,13 @@ export function getCurrentRevision(): number {
 
 export function emitRealtimeEvent(
   type: RealtimeEvent['type'],
-  options?: { channel_id?: number; actor_id?: number }
+  options?: {
+    channel_id?: number;
+    actor_id?: number;
+    announcement?: RealtimeEvent['announcement'];
+    message?: RealtimeEvent['message'];
+    thread?: RealtimeEvent['thread'];
+  }
 ): RealtimeEvent {
   const bus = getBus();
   bus.revision += 1;
@@ -40,6 +46,9 @@ export function emitRealtimeEvent(
     type,
     channel_id: options?.channel_id,
     actor_id: options?.actor_id,
+    announcement: options?.announcement,
+    message: options?.message,
+    thread: options?.thread,
     timestamp: new Date().toISOString(),
   };
 

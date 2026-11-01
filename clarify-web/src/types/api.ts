@@ -201,6 +201,7 @@ export interface RealtimeEvent {
   revision: number;
   type:
     | 'connected'
+    | 'announcement.urgent'
     | 'announcement.created'
     | 'announcement.updated'
     | 'announcement.deleted'
@@ -217,6 +218,9 @@ export interface RealtimeEvent {
     | 'db.changed';
   channel_id?: number;
   actor_id?: number;
+  announcement?: Announcement;
+  message?: ChatMessage;
+  thread?: QaThread;
   timestamp: string;
 }
 

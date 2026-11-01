@@ -20,7 +20,7 @@ class EnsureAccountVerified
         if (! $user) {
             $bearer = $request->bearerToken();
             if ($bearer) {
-                if (preg_match('/^clarify-jwt-([a-z_]+)-(.+)$/i', $bearer, $matches)) {
+                if (preg_match('/^clarify-jwt-([a-z_]+)-([^-]+)(?:-[a-f0-9]+)?$/i', $bearer, $matches)) {
                     $instId = $matches[2];
                     $user = User::where('institutional_id', $instId)->first();
                 } elseif (str_contains($bearer, 'faculty-10492')) {

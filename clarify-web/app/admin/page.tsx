@@ -37,7 +37,13 @@ import type {
 type AdminTab = 'verifications' | 'rbac' | 'prisms' | 'metrics';
 
 export default function AdminConsolePage() {
-  const { user, announcementVersion, showToast } = useClarify();
+  const {
+    user,
+    isAuthenticated,
+    isAuthReady,
+    announcementVersion,
+    showToast,
+  } = useClarify();
 
   const [activeTab, setActiveTab] = useState<AdminTab>('verifications');
   const [pendingUsers, setPendingUsers] = useState<User[]>([]);
@@ -53,7 +59,7 @@ export default function AdminConsolePage() {
   const [syncErrors, setSyncErrors] = useState<Record<string, string[]>>({});
 
   const loadAdminData = useCallback(async () => {
-    if (user.role !== 'it_admin') {
+    if (!isAuthReady || !isAuthenticated || user.role !== 'it_admin') {
       setIsLoading(false);
       return;
     }
@@ -79,11 +85,14 @@ export default function AdminConsolePage() {
     } finally {
       setIsLoading(false);
     }
-  }, [user.role]);
+  }, [isAuthReady, isAuthenticated, user.role]);
 
   useEffect(() => {
+    if (!isAuthReady || !isAuthenticated) {
+      return;
+    }
     loadAdminData();
-  }, [loadAdminData, announcementVersion]);
+  }, [loadAdminData, announcementVersion, isAuthReady, isAuthenticated]);
 
   const handleVerifyUser = async (
     userId: number,
@@ -144,6 +153,10 @@ export default function AdminConsolePage() {
   };
 
   const semesterError = getFieldValidationError(syncErrors, 'semester_code');
+
+  if (!isAuthReady || !isAuthenticated) {
+    return null;
+  }
 
   if (user.role !== 'it_admin') {
     return (

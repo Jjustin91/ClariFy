@@ -40,6 +40,10 @@ import {
   updateThreadApi,
 } from '@/src/lib/api-client';
 import {
+  type ReverbBroadcastPayload,
+  subscribeChannelReverb,
+} from '@/src/lib/reverb-client';
+import {
   canPublishOrManageAnnouncements,
   canResolveOrPinThreads,
   canStudentModifyOwnInquiry,
@@ -50,6 +54,7 @@ import type {
   Announcement,
   LaravelValidationError,
   QaThread,
+  RealtimeEvent,
 } from '@/src/types/api';
 
 export default function CourseHubPage() {
@@ -59,10 +64,13 @@ export default function CourseHubPage() {
 
   const {
     user,
+    isAuthenticated,
+    isAuthReady,
     channels,
     announcementVersion,
     openAnnouncementModal,
     setIsChannelModalOpen,
+    subscribeRealtimeEvents,
     showToast,
   } = useClarify();
 
@@ -103,7 +111,7 @@ export default function CourseHubPage() {
   const [openFaqIds, setOpenFaqIds] = useState<number[]>([]);
 
   const loadHubData = useCallback(async () => {
-    if (user.role === 'it_admin') {
+    if (!isAuthReady || !isAuthenticated || user.role === 'it_admin') {
       return;
     }
     if (!hasLoadedOnceRef.current) {
@@ -134,15 +142,95 @@ export default function CourseHubPage() {
     } finally {
       setIsLoading(false);
     }
-  }, [channelId, user.role]);
+  }, [channelId, isAuthReady, isAuthenticated, user.role]);
 
   useEffect(() => {
+    if (!isAuthReady || !isAuthenticated) {
+      return;
+    }
     if (user.role === 'it_admin') {
       router.replace('/admin');
       return;
     }
     loadHubData();
-  }, [loadHubData, announcementVersion, user.role, router]);
+  }, [
+    loadHubData,
+    announcementVersion,
+    isAuthReady,
+    isAuthenticated,
+    user.role,
+    router,
+  ]);
+
+  // Subscribe to Laravel Reverb channel & SSE/BroadcastChannel for real-time Discussion Threads & Q&A and Noticeboard Feed updates
+  useEffect(() => {
+    if (!isAuthReady || !isAuthenticated || user.role === 'it_admin') {
+      return;
+    }
+
+    const handleChannelEvent = (
+      event: RealtimeEvent | ReverbBroadcastPayload
+    ) => {
+      if (event.channel_id && Number(event.channel_id) !== Number(channelId)) {
+        return;
+      }
+
+      if (
+        event.type === 'thread.created' ||
+        event.type === 'thread.updated' ||
+        event.type === 'thread.replied' ||
+        event.type === 'thread.faq_pinned'
+      ) {
+        if (event.thread && typeof event.thread.id === 'number') {
+          const incomingThread = event.thread;
+          setThreads((prev) => {
+            const exists = prev.some((t) => t.id === incomingThread.id);
+            if (exists) {
+              return prev.map((t) =>
+                t.id === incomingThread.id ? incomingThread : t
+              );
+            }
+            return [incomingThread, ...prev];
+          });
+          if (incomingThread.is_pinned_faq) {
+            setOpenFaqIds((prev) =>
+              prev.includes(incomingThread.id)
+                ? prev
+                : [incomingThread.id, ...prev]
+            );
+          }
+        } else {
+          void loadHubData();
+        }
+        return;
+      }
+
+      if (
+        event.type === 'thread.deleted' ||
+        event.type.startsWith('announcement.')
+      ) {
+        void loadHubData();
+      }
+    };
+
+    const unsubscribeReverb = subscribeChannelReverb(
+      channelId,
+      handleChannelEvent
+    );
+    const unsubscribeStream = subscribeRealtimeEvents(handleChannelEvent);
+
+    return () => {
+      unsubscribeReverb();
+      unsubscribeStream();
+    };
+  }, [
+    channelId,
+    isAuthReady,
+    isAuthenticated,
+    user.role,
+    loadHubData,
+    subscribeRealtimeEvents,
+  ]);
 
   const canPublish = canPublishOrManageAnnouncements(user.role);
   const canResolve = canResolveOrPinThreads(user.role);
@@ -275,7 +363,7 @@ export default function CourseHubPage() {
       )} Hub`
     : 'IT3R2 — Software Engineering Hub';
 
-  if (user.role === 'it_admin') {
+  if (!isAuthReady || !isAuthenticated || user.role === 'it_admin') {
     return null;
   }
 

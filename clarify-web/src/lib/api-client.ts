@@ -24,28 +24,32 @@ const STORAGE_KEYS = {
   USER: 'clarify_active_user',
 };
 
-const DEFAULT_FALLBACK_USER: User = {
-  id: 1,
-  institutional_id: '90001',
-  name: 'Engr. Makima Cruz',
-  email: 'icto.admin@ustp.edu.ph',
-  contact_number: '+63 917 900 0001',
-  role: 'it_admin',
-  verification_status: 'approved',
+const UNAUTHENTICATED_PLACEHOLDER_USER: User = {
+  id: 0,
+  institutional_id: '',
+  name: 'Guest',
+  email: '',
+  contact_number: null,
+  role: 'student',
+  verification_status: 'pending',
   academic_profile: {
     campus: 'CDO Campus',
-    college: 'ICTO',
+    college: 'CITC',
     department: 'CITC',
     program: null,
     year_level: null,
-    section: 'Registrar & ICTO',
+    section: null,
     semester_code: '2026-1ST-SEM',
   },
 };
 
-export function getStoredUser(): User {
+/**
+ * Returns the authenticated user for the current browser tab (from sessionStorage),
+ * or null if this tab is not signed in.
+ */
+export function getStoredSessionUser(): User | null {
   if (typeof window !== 'undefined') {
-    const raw = window.localStorage.getItem(STORAGE_KEYS.USER);
+    const raw = window.sessionStorage.getItem(STORAGE_KEYS.USER);
     if (raw) {
       try {
         const parsed = JSON.parse(raw) as User;
@@ -57,38 +61,60 @@ export function getStoredUser(): User {
       }
     }
   }
-  return DEFAULT_FALLBACK_USER;
+  return null;
+}
+
+export function getStoredUser(): User {
+  return getStoredSessionUser() || UNAUTHENTICATED_PLACEHOLDER_USER;
 }
 
 export function setStoredUser(user: User | null): void {
   if (typeof window !== 'undefined') {
-    if (user) {
-      window.localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(user));
-      window.localStorage.setItem(STORAGE_KEYS.ROLE, user.role);
-    } else {
+    // Clean up any legacy shared localStorage keys so tabs remain strictly isolated
+    try {
       window.localStorage.removeItem(STORAGE_KEYS.USER);
+      window.localStorage.removeItem(STORAGE_KEYS.ROLE);
+    } catch {
+      // Ignore storage access errors
+    }
+
+    if (user && user.institutional_id) {
+      window.sessionStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(user));
+      window.sessionStorage.setItem(STORAGE_KEYS.ROLE, user.role);
+    } else {
+      window.sessionStorage.removeItem(STORAGE_KEYS.USER);
+      window.sessionStorage.removeItem(STORAGE_KEYS.ROLE);
     }
   }
 }
 
-export function getStoredToken(): string {
+export function getStoredToken(): string | null {
   if (typeof window !== 'undefined') {
-    const saved = window.localStorage.getItem(STORAGE_KEYS.TOKEN);
+    const saved = window.sessionStorage.getItem(STORAGE_KEYS.TOKEN);
     if (saved) return saved;
-    const currentUser = getStoredUser();
-    return `clarify-jwt-${currentUser.role}-${currentUser.institutional_id}`;
   }
-  return `clarify-jwt-${DEFAULT_FALLBACK_USER.role}-${DEFAULT_FALLBACK_USER.institutional_id}`;
+  return null;
 }
 
 export function setStoredToken(token: string | null): void {
   if (typeof window !== 'undefined') {
-    if (token) {
-      window.localStorage.setItem(STORAGE_KEYS.TOKEN, token);
-    } else {
+    try {
       window.localStorage.removeItem(STORAGE_KEYS.TOKEN);
+    } catch {
+      // Ignore storage access errors
+    }
+
+    if (token) {
+      window.sessionStorage.setItem(STORAGE_KEYS.TOKEN, token);
+    } else {
+      window.sessionStorage.removeItem(STORAGE_KEYS.TOKEN);
     }
   }
+}
+
+export function clearStoredSession(): void {
+  setStoredToken(null);
+  setStoredUser(null);
 }
 
 async function requestLaravel<T>(
@@ -96,7 +122,7 @@ async function requestLaravel<T>(
   options: RequestInit = {}
 ): Promise<T> {
   const token = getStoredToken();
-  const activeUser = getStoredUser();
+  const activeUser = getStoredSessionUser();
   const isFormData = options.body instanceof FormData;
 
   const headers: Record<string, string> = {
@@ -117,10 +143,10 @@ async function requestLaravel<T>(
   });
 
   if (response.status === 401) {
-    setStoredToken(null);
+    clearStoredSession();
     const err: LaravelValidationError = {
       status: 401,
-      message: 'Your session has expired. Please log in again.',
+      message: 'Please sign in to access ClariFy.',
     };
     throw err;
   }
@@ -155,6 +181,7 @@ async function requestLaravel<T>(
       bc.postMessage({
         type: 'mutation',
         endpoint,
+        data: json?.data,
         timestamp: Date.now(),
       });
       bc.close();
@@ -207,7 +234,7 @@ export async function logoutApi(): Promise<{ message: string }> {
   } catch {
     // Ignore logout errors if token already invalidated
   }
-  setStoredToken(null);
+  clearStoredSession();
   return { message: 'Logged out successfully.' };
 }
 

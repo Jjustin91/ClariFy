@@ -20,6 +20,8 @@ export default function DashboardPage() {
   const router = useRouter();
   const {
     user,
+    isAuthenticated,
+    isAuthReady,
     channels,
     announcementVersion,
     openAnnouncementModal,
@@ -31,7 +33,7 @@ export default function DashboardPage() {
   const hasLoadedOnceRef = useRef(false);
 
   const loadDashboardData = useCallback(async () => {
-    if (user.role === 'it_admin') {
+    if (!isAuthReady || !isAuthenticated || user.role === 'it_admin') {
       return;
     }
     if (!hasLoadedOnceRef.current) {
@@ -55,17 +57,27 @@ export default function DashboardPage() {
     } finally {
       setIsLoading(false);
     }
-  }, [user.role]);
+  }, [isAuthReady, isAuthenticated, user.role]);
 
   useEffect(() => {
+    if (!isAuthReady || !isAuthenticated) {
+      return;
+    }
     if (user.role === 'it_admin') {
       router.replace('/admin');
       return;
     }
     loadDashboardData();
-  }, [loadDashboardData, announcementVersion, user.role, router]);
+  }, [
+    loadDashboardData,
+    announcementVersion,
+    isAuthReady,
+    isAuthenticated,
+    user.role,
+    router,
+  ]);
 
-  if (user.role === 'it_admin') {
+  if (!isAuthReady || !isAuthenticated || user.role === 'it_admin') {
     return null;
   }
 

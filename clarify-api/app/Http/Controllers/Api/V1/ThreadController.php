@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api\V1;
 
+use App\Events\RealtimeStateUpdated;
 use App\Http\Resources\ThreadResource;
 use App\Models\Channel;
 use App\Models\Message;
@@ -80,9 +81,20 @@ class ThreadController
             'is_pinned_faq' => false,
         ]);
 
+        $threadPayload = (new ThreadResource($thread->load(['sender', 'replies.sender'])))->resolve($request);
+
+        RealtimeStateUpdated::safeDispatch(
+            'thread.created',
+            (int) $resolvedChannelId,
+            (int) $request->user()->id,
+            null,
+            null,
+            $threadPayload
+        );
+
         return response()->json([
             'message' => 'Academic inquiry ticket submitted to Course Hub.',
-            'data' => new ThreadResource($thread->load(['sender', 'replies.sender'])),
+            'data' => $threadPayload,
         ], 201);
     }
 
@@ -119,9 +131,20 @@ class ThreadController
         $thread->content = trim($validated['content']);
         $thread->save();
 
+        $threadPayload = (new ThreadResource($thread->load(['sender', 'replies.sender'])))->resolve($request);
+
+        RealtimeStateUpdated::safeDispatch(
+            'thread.updated',
+            (int) $thread->channel_id,
+            (int) $user->id,
+            null,
+            null,
+            $threadPayload
+        );
+
         return response()->json([
             'message' => 'Inquiry updated.',
-            'data' => new ThreadResource($thread->load(['sender', 'replies.sender'])),
+            'data' => $threadPayload,
         ]);
     }
 
@@ -140,7 +163,14 @@ class ThreadController
             ], 403);
         }
 
+        $channelId = (int) $thread->channel_id;
         $thread->delete();
+
+        RealtimeStateUpdated::safeDispatch(
+            'thread.deleted',
+            $channelId,
+            (int) $user->id
+        );
 
         return response()->json([
             'message' => 'Inquiry ticket deleted.',
@@ -188,11 +218,22 @@ class ThreadController
         }
         $thread->save();
 
+        $threadPayload = (new ThreadResource($thread->fresh(['sender', 'replies.sender'])))->resolve($request);
+
+        RealtimeStateUpdated::safeDispatch(
+            $pinToFaq ? 'thread.faq_pinned' : 'thread.replied',
+            (int) $thread->channel_id,
+            (int) $user->id,
+            null,
+            null,
+            $threadPayload
+        );
+
         return response()->json([
             'message' => $pinToFaq
                 ? 'Reply posted, ticket resolved, and converted to anonymized Class FAQ.'
                 : 'Faculty reply posted.',
-            'data' => new ThreadResource($thread->fresh(['sender', 'replies.sender'])),
+            'data' => $threadPayload,
         ]);
     }
 
@@ -215,9 +256,20 @@ class ThreadController
         $thread->is_private = false;
         $thread->save();
 
+        $threadPayload = (new ThreadResource($thread->fresh(['sender', 'replies.sender'])))->resolve($request);
+
+        RealtimeStateUpdated::safeDispatch(
+            'thread.faq_pinned',
+            (int) $thread->channel_id,
+            (int) $user->id,
+            null,
+            null,
+            $threadPayload
+        );
+
         return response()->json([
             'message' => 'Pinned to Class FAQs with student identity masked as "Anonymous Student" (RA 10173).',
-            'data' => new ThreadResource($thread->fresh(['sender', 'replies.sender'])),
+            'data' => $threadPayload,
         ]);
     }
 }

@@ -693,7 +693,7 @@ async function resolveUserFromRequestHeaders(
         userId = state.tokens[token];
       }
 
-      const jwtMatch = token.match(/^clarify-jwt-([a-z_]+)-(.+)$/i);
+      const jwtMatch = token.match(/^clarify-jwt-([a-z_]+)-([^-]+)(?:-[a-f0-9]+)?$/i);
       if (jwtMatch) {
         instId = jwtMatch[2];
       } else if (token.includes('student-2020202020')) {
@@ -1306,7 +1306,8 @@ export async function handlePostgresApiRequest(
         };
       }
 
-      const token = `clarify-jwt-${matchedUser.role}-${matchedUser.institutional_id}`;
+      const sessionSuffix = crypto.randomBytes(6).toString('hex');
+      const token = `clarify-jwt-${matchedUser.role}-${matchedUser.institutional_id}-${sessionSuffix}`;
       state.tokens[token] = matchedUser.id;
 
       return {
@@ -1319,7 +1320,19 @@ export async function handlePostgresApiRequest(
       };
     }
 
-    // RESOLVE AUTHENTICATED USER
+    // LOGOUT CAN ALWAYS SUCCEED EVEN IF TOKEN EXPIRED
+    if (method === 'POST' && cleanPath === '/auth/logout') {
+      if (authHeader) {
+        const rawToken = authHeader.replace(/^Bearer\s+/i, '').trim();
+        delete state.tokens[rawToken];
+      }
+      return {
+        status: 200,
+        body: { message: 'Logged out successfully.' },
+      };
+    }
+
+    // RESOLVE AUTHENTICATED USER (NO DEFAULT ADMIN AUTO-LOGIN FALLBACK)
     const { user, pendingUser } = await resolveUserFromRequestHeaders(
       pool,
       req.headers
@@ -1336,40 +1349,17 @@ export async function handlePostgresApiRequest(
       };
     }
 
-    let activeUser: User | null = user;
-    if (!activeUser) {
-      const defRes = await pool.query(
-        `SELECT u.*, ap.campus, ap.college, ap.department, ap.program, ap.year_level, ap.section, ap.semester_code
-         FROM users u
-         LEFT JOIN academic_profiles ap ON ap.user_id = u.id
-         WHERE u.verification_status = 'approved'
-         ORDER BY u.id ASC
-         LIMIT 1`
-      );
-      if (defRes.rowCount && defRes.rowCount > 0) {
-        activeUser = mapRowToUser(defRes.rows[0]);
-      } else {
-        return {
-          status: 401,
-          body: {
-            status: 401,
-            message: 'No verified user accounts found in PostgreSQL database.',
-          },
-        };
-      }
-    }
-
-    // WORKFLOW 1: AUTH & PROFILE
-    if (method === 'POST' && cleanPath === '/auth/logout') {
-      if (authHeader) {
-        const rawToken = authHeader.replace(/^Bearer\s+/i, '').trim();
-        delete state.tokens[rawToken];
-      }
+    if (!user) {
       return {
-        status: 200,
-        body: { message: 'Logged out successfully.' },
+        status: 401,
+        body: {
+          status: 401,
+          message: 'Please sign in to access ClariFy.',
+        },
       };
     }
+
+    const activeUser: User = user;
 
     if (method === 'GET' && cleanPath === '/auth/me') {
       return {

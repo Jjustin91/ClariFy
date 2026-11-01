@@ -18,7 +18,11 @@ import {
   getChannelChatMessagesApi,
   sendChannelChatMessageApi,
 } from '../../lib/api-client';
-import type { Channel, ChatMessage, User } from '../../types/api';
+import {
+  type ReverbBroadcastPayload,
+  subscribeChannelReverb,
+} from '../../lib/reverb-client';
+import type { Channel, ChatMessage, RealtimeEvent, User } from '../../types/api';
 
 export type CourseHubTab = 'messenger' | 'feed' | 'threads' | 'send_inquiry';
 
@@ -45,8 +49,14 @@ export function MessengerChatBox({
   onMessageSentToast,
   childrenWhenNotMessenger,
 }: MessengerChatBoxProps) {
-  const { announcementVersion, triggerAnnouncementRefresh, showToast } =
-    useClarify();
+  const {
+    isAuthenticated,
+    isAuthReady,
+    announcementVersion,
+    triggerAnnouncementRefresh,
+    subscribeRealtimeEvents,
+    showToast,
+  } = useClarify();
   const channelKey = channel?.id || 1;
   const [messagesByChannel, setMessagesByChannel] = useState<
     Record<number, ChatMessage[]>
@@ -60,7 +70,24 @@ export function MessengerChatBox({
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const streamContainerRef = useRef<HTMLDivElement | null>(null);
 
+  const appendMessageIdempotently = useCallback(
+    (targetChannelId: number, incomingMessage: ChatMessage) => {
+      setMessagesByChannel((prev) => {
+        const existing = prev[targetChannelId] || [];
+        if (existing.some((m) => String(m.id) === String(incomingMessage.id))) {
+          return prev;
+        }
+        return {
+          ...prev,
+          [targetChannelId]: [...existing, incomingMessage],
+        };
+      });
+    },
+    []
+  );
+
   const loadChatMessages = useCallback(async () => {
+    if (!isAuthReady || !isAuthenticated) return;
     try {
       const res = await getChannelChatMessagesApi(channelKey);
       if (Array.isArray(res.data)) {
@@ -72,11 +99,49 @@ export function MessengerChatBox({
     } catch {
       // Retain existing messages if offline
     }
-  }, [channelKey]);
+  }, [channelKey, isAuthReady, isAuthenticated]);
 
   useEffect(() => {
+    if (!isAuthReady || !isAuthenticated) return;
     void loadChatMessages();
-  }, [loadChatMessages, announcementVersion]);
+  }, [loadChatMessages, announcementVersion, isAuthReady, isAuthenticated]);
+
+  // Subscribe to Laravel Reverb channel & SSE/BroadcastChannel for instant Live Channel Chat
+  useEffect(() => {
+    if (!isAuthReady || !isAuthenticated) return;
+
+    const handleRealtimeChatEvent = (
+      event: RealtimeEvent | ReverbBroadcastPayload
+    ) => {
+      if (event.type !== 'chat.message') return;
+      if (event.channel_id && Number(event.channel_id) !== Number(channelKey)) {
+        return;
+      }
+      if (event.message && event.message.id !== undefined) {
+        appendMessageIdempotently(channelKey, event.message);
+      } else {
+        void loadChatMessages();
+      }
+    };
+
+    const unsubscribeReverb = subscribeChannelReverb(
+      channelKey,
+      handleRealtimeChatEvent
+    );
+    const unsubscribeStream = subscribeRealtimeEvents(handleRealtimeChatEvent);
+
+    return () => {
+      unsubscribeReverb();
+      unsubscribeStream();
+    };
+  }, [
+    channelKey,
+    isAuthReady,
+    isAuthenticated,
+    appendMessageIdempotently,
+    loadChatMessages,
+    subscribeRealtimeEvents,
+  ]);
 
   const conversationMessages = messagesByChannel[channelKey] || [];
 
@@ -106,10 +171,7 @@ export function MessengerChatBox({
     setIsSending(true);
     try {
       const res = await sendChannelChatMessageApi(channelKey, finalContent);
-      setMessagesByChannel((prev) => ({
-        ...prev,
-        [channelKey]: [...(prev[channelKey] || []), res.data],
-      }));
+      appendMessageIdempotently(channelKey, res.data);
       setMessageText('');
       setStagedAttachment(null);
       triggerAnnouncementRefresh();

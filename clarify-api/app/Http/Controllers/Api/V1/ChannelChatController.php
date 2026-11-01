@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api\V1;
 
+use App\Events\RealtimeStateUpdated;
 use App\Models\Channel;
 use App\Models\Message;
 use Illuminate\Http\JsonResponse;
@@ -71,20 +72,30 @@ class ChannelChatController
 
         $msg->load('sender');
 
+        $chatPayload = [
+            'id' => $msg->id,
+            'channel_id' => $msg->channel_id,
+            'content' => $msg->content,
+            'created_at' => $msg->created_at?->toIso8601String(),
+            'author' => [
+                'id' => $user->id,
+                'name' => $user->name,
+                'role' => $user->role,
+                'avatar_url' => $user->avatar_url,
+            ],
+        ];
+
+        RealtimeStateUpdated::safeDispatch(
+            'chat.message',
+            (int) $resolvedChannelId,
+            (int) $user->id,
+            null,
+            $chatPayload
+        );
+
         return response()->json([
             'message' => 'Message sent to Course Hub chat.',
-            'data' => [
-                'id' => $msg->id,
-                'channel_id' => $msg->channel_id,
-                'content' => $msg->content,
-                'created_at' => $msg->created_at?->toIso8601String(),
-                'author' => [
-                    'id' => $user->id,
-                    'name' => $user->name,
-                    'role' => $user->role,
-                    'avatar_url' => $user->avatar_url,
-                ],
-            ],
+            'data' => $chatPayload,
         ], 201);
     }
 }

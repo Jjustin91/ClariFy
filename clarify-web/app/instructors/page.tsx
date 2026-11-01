@@ -21,7 +21,13 @@ const DEPARTMENTS = ['ALL', 'CITC', 'CEA', 'COT', 'CSM'] as const;
 
 export default function InstructorsPage() {
   const router = useRouter();
-  const { user, announcementVersion, showToast } = useClarify();
+  const {
+    user,
+    isAuthenticated,
+    isAuthReady,
+    announcementVersion,
+    showToast,
+  } = useClarify();
 
   const [search, setSearch] = useState('');
   const [department, setDepartment] = useState<string>('ALL');
@@ -41,7 +47,7 @@ export default function InstructorsPage() {
     useState<Instructor | null>(null);
 
   const loadInstructors = useCallback(async () => {
-    if (user.role === 'it_admin') {
+    if (!isAuthReady || !isAuthenticated || user.role === 'it_admin') {
       return;
     }
     setIsLoading(true);
@@ -64,17 +70,35 @@ export default function InstructorsPage() {
     } finally {
       setIsLoading(false);
     }
-  }, [search, department, sortBy, page, user.role]);
+  }, [
+    search,
+    department,
+    sortBy,
+    page,
+    isAuthReady,
+    isAuthenticated,
+    user.role,
+  ]);
 
   useEffect(() => {
+    if (!isAuthReady || !isAuthenticated) {
+      return;
+    }
     if (user.role === 'it_admin') {
       router.replace('/admin');
       return;
     }
     loadInstructors();
-  }, [loadInstructors, announcementVersion, user.role, router]);
+  }, [
+    loadInstructors,
+    announcementVersion,
+    isAuthReady,
+    isAuthenticated,
+    user.role,
+    router,
+  ]);
 
-  if (user.role === 'it_admin') {
+  if (!isAuthReady || !isAuthenticated || user.role === 'it_admin') {
     return null;
   }
 

@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api\V1;
 
+use App\Events\RealtimeStateUpdated;
 use App\Http\Resources\UserResource;
 use App\Models\AcademicProfile;
 use App\Models\Channel;
@@ -69,6 +70,8 @@ class AuthController
                 ],
             ]);
         }
+
+        RealtimeStateUpdated::safeDispatch('admin.updated', null, (int) $user->id);
 
         return response()->json([
             'message' => 'Account registered successfully! Your account is now pending IT Administrator verification before you can sign in.',

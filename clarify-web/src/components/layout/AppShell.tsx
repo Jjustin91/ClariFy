@@ -15,6 +15,7 @@ import { logoutApi } from '../../lib/api-client';
 import { AnnouncementFormModal } from '../modals/AnnouncementFormModal';
 import { ProfileSettingsModal } from '../modals/ProfileSettingsModal';
 import { ChannelRosterModal } from '../modals/ChannelRosterModal';
+import { UrgentAnnouncementModal } from '../modals/UrgentAnnouncementModal';
 
 export function AppShell({
   title,
@@ -27,6 +28,9 @@ export function AppShell({
   const router = useRouter();
   const {
     user,
+    isAuthenticated,
+    isAuthReady,
+    clearSession,
     channels,
     isDrawerOpen,
     setIsDrawerOpen,
@@ -38,9 +42,25 @@ export function AppShell({
 
   const handleLogout = async () => {
     await logoutApi();
+    clearSession();
     showToast('Signed out of ClariFy session.', 'info');
-    router.push('/login');
+    router.replace('/login');
   };
+
+  if (!isAuthReady || !isAuthenticated) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-ustp-navy text-white p-6">
+        <div className="text-center space-y-2">
+          <div className="inline-flex items-center justify-center w-14 h-14 rounded-lg bg-ustp-navy text-ustp-gold font-extrabold text-lg border-2 border-ustp-gold">
+            USTP
+          </div>
+          <p className="text-xs font-bold tracking-wider uppercase text-ustp-gold">
+            Redirecting to ClariFy Sign In...
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   const primaryChannelId = channels[0]?.id || 1;
   const isAdmin = user.role === 'it_admin';
@@ -224,6 +244,7 @@ export function AppShell({
       {!isAdmin && <AnnouncementFormModal />}
       <ProfileSettingsModal />
       {!isAdmin && <ChannelRosterModal />}
+      {!isAdmin && <UrgentAnnouncementModal />}
 
       {/* Toast Notification Stack */}
       {toasts.length > 0 && (

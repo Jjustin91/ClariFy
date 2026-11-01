@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api\V1;
 
+use App\Events\RealtimeStateUpdated;
 use App\Http\Resources\AnnouncementResource;
 use App\Jobs\DispatchUrgentPushAlerts;
 use App\Jobs\TriggerSmsFallbackBatch;
@@ -188,11 +189,20 @@ class AnnouncementController
             TriggerSmsFallbackBatch::dispatch($announcement);
         }
 
+        $resourcePayload = (new AnnouncementResource($announcement->load(['publisher.academicProfile', 'channel', 'reads'])))->resolve($request);
+
+        RealtimeStateUpdated::safeDispatch(
+            $isUrgent ? 'announcement.urgent' : 'announcement.created',
+            (int) $announcement->channel_id,
+            (int) $user->id,
+            $resourcePayload
+        );
+
         return response()->json([
             'message' => $isUrgent
                 ? 'Urgent Announcement published! Push alerts queued (<= 2.0s) and pinned to top.'
                 : 'Announcement published to Course Hub.',
-            'data' => new AnnouncementResource($announcement->load(['publisher.academicProfile', 'channel', 'reads'])),
+            'data' => $resourcePayload,
         ], 201);
     }
 
@@ -232,9 +242,19 @@ class AnnouncementController
             'is_edited' => true,
         ]);
 
+        $freshAnnouncement = $announcement->fresh(['publisher.academicProfile', 'channel', 'reads']);
+        $resourcePayload = (new AnnouncementResource($freshAnnouncement))->resolve($request);
+
+        RealtimeStateUpdated::safeDispatch(
+            $freshAnnouncement->is_urgent ? 'announcement.urgent' : 'announcement.updated',
+            (int) $freshAnnouncement->channel_id,
+            (int) ($request->user()?->id ?? $freshAnnouncement->publisher_id),
+            $resourcePayload
+        );
+
         return response()->json([
             'message' => 'Announcement updated and audit trail logged.',
-            'data' => new AnnouncementResource($announcement->fresh(['publisher.academicProfile', 'channel', 'reads'])),
+            'data' => $resourcePayload,
         ]);
     }
 
@@ -253,8 +273,15 @@ class AnnouncementController
             ], 403);
         }
 
+        $channelId = (int) $announcement->channel_id;
         $announcement->update(['status' => 'archived']);
         $announcement->delete();
+
+        RealtimeStateUpdated::safeDispatch(
+            'announcement.deleted',
+            $channelId,
+            (int) ($request->user()?->id ?? 0)
+        );
 
         return response()->json([
             'message' => 'Announcement archived and removed from active noticeboard.',
@@ -276,9 +303,19 @@ class AnnouncementController
             'acknowledged_at' => now(),
         ]);
 
+        $freshAnnouncement = $announcement->fresh(['publisher.academicProfile', 'channel', 'reads']);
+        $resourcePayload = (new AnnouncementResource($freshAnnouncement))->resolve($request);
+
+        RealtimeStateUpdated::safeDispatch(
+            'announcement.acknowledged',
+            (int) $freshAnnouncement->channel_id,
+            (int) $user->id,
+            $resourcePayload
+        );
+
         return response()->json([
             'message' => 'Announcement marked as read and acknowledged.',
-            'data' => new AnnouncementResource($announcement->fresh(['publisher.academicProfile', 'channel', 'reads'])),
+            'data' => $resourcePayload,
         ]);
     }
 }
