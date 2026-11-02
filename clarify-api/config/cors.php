@@ -6,8 +6,8 @@ return [
     |--------------------------------------------------------------------------
     | Cross-Origin Resource Sharing (CORS) Configuration
     |--------------------------------------------------------------------------
-    | Configured for ClariFy Next.js Web Portal (Vercel & Localhost)
-    | and React Native Expo Mobile Client.
+    | Allows cross-origin requests from any Vercel deployment (*.vercel.app),
+    | local environments, and supports custom X-Clarify-* headers.
     */
 
     'paths' => ['api/*', 'sanctum/csrf-cookie'],
