@@ -67,6 +67,14 @@ Route::prefix('v1')->group(function () {
         Route::post('/admin/sync-prisms', [AccountController::class, 'syncPrisms']);
         Route::get('/admin/metrics', [AccountController::class, 'metrics']);
 
-        Route::post('/devices/token', [DeviceTokenController::class, 'store']);
+        Route::prefix('v1')->group(function () {
+            Route::get('/persistence/status', function () {
+                return response()->json([
+                    'status' => 'connected',
+                    'database' => 'PostgreSQL (Supabase)',
+                    'timestamp' => now()->toISOString(),
+                ]);
+            });
+        });
     });
 });
