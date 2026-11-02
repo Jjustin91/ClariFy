@@ -22,7 +22,7 @@ const nextConfig: NextConfig = {
     return [
       {
         source: '/api/v1/:path*',
-        destination: 'https://clarify-api.onrender.com/api/v1/:path*',
+        destination: 'https://clarify-api-4jwj.onrender.com/api/v1/:path*',
       },
     ];
   },
