@@ -1,6 +1,6 @@
 {
-  "summary": "Implementation plan to replace the ClariFy text wordmark with the official ClariFy logo across the header and auth pages, and rework the View Messages workspace into a Discord-style expandable Course Hub tree with built-in Noticeboard Feed, Isolated Q&A Threads, #general chat, and custom sub-channels per Course Hub.",
-  "updatedAt": "2026-11-02T17:34:21.424988858Z",
+  "summary": "Updated implementation plan to remove the workspace tab bar header shown in the screenshot, remove '+ Add Channel in Course Hub' from the '+ Add Course Hub' modal, move '+ Ask in Q&A Thread' inside the Isolated Q&A Threads channel view, and strip the dark-blue box background around the ClariFy letters so the logo is completely transparent across the navbar, Login, and Register pages.",
+  "updatedAt": "2026-11-02T18:32:55.852282390Z",
   "requestFeedback": true,
   "userFacing": true
 }

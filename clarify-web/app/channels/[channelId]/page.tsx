@@ -14,6 +14,7 @@ import {
   Lock,
   Megaphone,
   MessageSquare,
+  MessageSquarePlus,
   Plus,
   Search,
   Star,
@@ -788,15 +789,8 @@ export default function CourseHubPage() {
           <MessengerChatBox
             channel={activeChannel}
             chatChannel={activeSubChannel || activeChannel}
-            threadsCount={visibleThreads.length}
             currentUser={user}
             activeTab={activeTab}
-            onTabChange={(tab) => setActiveTab(tab)}
-            isStudent={isStudent}
-            onOpenCreateAnnouncement={() =>
-              openAnnouncementModal({ defaultChannelId: channelId })
-            }
-            onOpenAddSubChannel={() => openAddSubChannelModal(channelId)}
             onMessageSentToast={(msg) => showToast(msg, 'success')}
             childrenWhenNotMessenger={
               isLoading ? (
@@ -913,48 +907,105 @@ export default function CourseHubPage() {
                 </section>
               ) : activeTab === 'feed' ? (
                 /* SEPARATE TAB: NOTICEBOARD FEED */
-                announcements.length === 0 ? (
-                  <EmptyState
-                    title={`No Announcements in ${
-                      activeChannel?.name || 'Course Hub'
-                    }`}
-                    description="Official course memos and room reassignments will appear here chronologically with urgent notices pinned on top."
-                    actionLabel={
-                      canPublish ? '+ Create First Announcement' : undefined
-                    }
-                    onAction={
-                      canPublish
-                        ? () =>
-                            openAnnouncementModal({ defaultChannelId: channelId })
-                        : undefined
-                    }
-                  />
-                ) : (
-                  <div className="space-y-4">
-                    {announcements.map((ann) => (
-                      <AnnouncementCard
-                        key={ann.id}
-                        announcement={ann}
-                        variant="feed"
-                        onUpdated={() => void loadHubData(channelId)}
-                      />
-                    ))}
-                  </div>
-                )
-              ) : visibleThreads.length === 0 ? (
-                /* SEPARATE TAB: ISOLATED Q&A THREADS (EMPTY STATE) */
-                <EmptyState
-                  title="No Academic Inquiries Submitted Yet"
-                  description="Students can submit structured questions or clarifications without cluttering the official noticeboard."
-                  actionLabel={isStudent ? '+ Ask in Q&A Thread' : undefined}
-                  onAction={
-                    isStudent ? () => setActiveTab('send_inquiry') : undefined
-                  }
-                />
-              ) : (
-                /* SEPARATE TAB: ISOLATED Q&A THREADS (STRUCTURED TICKET CARDS) */
                 <div className="space-y-4">
-                  {visibleThreads.map((thread) => {
+                  <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-slate-200">
+                    <div>
+                      <h3 className="text-sm sm:text-base font-extrabold text-ustp-navy">
+                        Noticeboard Feed ({announcements.length})
+                      </h3>
+                      <p className="text-xs text-slate-500">
+                        Official memos and scoped announcements for{' '}
+                        {activeChannel
+                          ? formatCourseHubName(activeChannel)
+                          : 'this Course Hub'}
+                      </p>
+                    </div>
+                    {canPublish && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          openAnnouncementModal({ defaultChannelId: channelId })
+                        }
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-extrabold bg-ustp-navy text-white hover:opacity-95 whitespace-nowrap shrink-0 cursor-pointer"
+                      >
+                        <Plus className="w-3.5 h-3.5 text-ustp-gold" />
+                        <span>+ Create Announcement</span>
+                      </button>
+                    )}
+                  </div>
+
+                  {announcements.length === 0 ? (
+                    <EmptyState
+                      title={`No Announcements in ${
+                        activeChannel?.name || 'Course Hub'
+                      }`}
+                      description="Official course memos and room reassignments will appear here chronologically with urgent notices pinned on top."
+                      actionLabel={
+                        canPublish ? '+ Create First Announcement' : undefined
+                      }
+                      onAction={
+                        canPublish
+                          ? () =>
+                              openAnnouncementModal({
+                                defaultChannelId: channelId,
+                              })
+                          : undefined
+                      }
+                    />
+                  ) : (
+                    <div className="space-y-4">
+                      {announcements.map((ann) => (
+                        <AnnouncementCard
+                          key={ann.id}
+                          announcement={ann}
+                          variant="feed"
+                          onUpdated={() => void loadHubData(channelId)}
+                        />
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                /* SEPARATE TAB: ISOLATED Q&A THREADS (WITH + ASK IN Q&A THREAD INSIDE THIS CHANNEL) */
+                <div className="space-y-4">
+                  <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-slate-200">
+                    <div>
+                      <h3 className="text-sm sm:text-base font-extrabold text-ustp-navy">
+                        Isolated Q&amp;A Threads ({visibleThreads.length})
+                      </h3>
+                      <p className="text-xs text-slate-500">
+                        Structured academic inquiries and clarifications for{' '}
+                        {activeChannel
+                          ? formatCourseHubName(activeChannel)
+                          : 'this Course Hub'}
+                      </p>
+                    </div>
+                    {isStudent && (
+                      <button
+                        type="button"
+                        onClick={() => setActiveTab('send_inquiry')}
+                        className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-md text-xs font-extrabold bg-ustp-gold text-ustp-navy hover:opacity-95 whitespace-nowrap shrink-0 cursor-pointer"
+                      >
+                        <MessageSquarePlus className="w-3.5 h-3.5" />
+                        <span>+ Ask in Q&amp;A Thread</span>
+                      </button>
+                    )}
+                  </div>
+
+                  {visibleThreads.length === 0 ? (
+                    <EmptyState
+                      title="No Academic Inquiries Submitted Yet"
+                      description="Students can submit structured questions or clarifications without cluttering the official noticeboard."
+                      actionLabel={isStudent ? '+ Ask in Q&A Thread' : undefined}
+                      onAction={
+                        isStudent
+                          ? () => setActiveTab('send_inquiry')
+                          : undefined
+                      }
+                    />
+                  ) : (
+                    <div className="space-y-4">
+                      {visibleThreads.map((thread) => {
                     const canStudentEdit = canStudentModifyOwnInquiry(
                       user,
                       thread
@@ -1119,6 +1170,8 @@ export default function CourseHubPage() {
                       </article>
                     );
                   })}
+                    </div>
+                  )}
                 </div>
               )
             }

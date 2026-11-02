@@ -101,12 +101,12 @@ export default function RegisterPage() {
       {/* Left Side: Institutional Branding Card */}
       <div className="w-full lg:w-[55%] bg-ustp-navy text-white p-8 lg:p-16 flex flex-col items-center justify-center">
         <div className="bg-slate-100 text-ustp-text border-2 border-ustp-gold rounded-lg p-8 sm:p-10 max-w-xl w-full text-center shadow-lg">
-          <div className="inline-flex items-center justify-center px-5 py-3 rounded-xl bg-ustp-navy border-2 border-ustp-gold mb-4 shadow-sm">
+          <div className="inline-flex items-center justify-center mb-3">
             <Image
               src="/assets/aistudio/image_07899ab9.png"
               alt="ClariFy"
-              width={180}
-              height={56}
+              width={200}
+              height={68}
               unoptimized
               className="h-12 sm:h-14 w-auto object-contain"
             />

@@ -6,9 +6,7 @@ import {
   FileText,
   Image as ImageIcon,
   MessageCircle,
-  MessageSquarePlus,
   Mic,
-  Plus,
   Settings,
   Trash2,
   UserPlus,
@@ -24,7 +22,6 @@ import {
   sendChannelChatMessageApi,
 } from '../../lib/api-client';
 import {
-  formatCourseHubName,
   formatSubChannelDisplayName,
   getCleanChannelDescription,
   getFieldValidationError,
@@ -47,13 +44,8 @@ export type CourseHubTab = 'messenger' | 'feed' | 'threads' | 'send_inquiry';
 interface MessengerChatBoxProps {
   channel: Channel | undefined;
   chatChannel?: Channel | undefined;
-  threadsCount: number;
   currentUser: User;
   activeTab: CourseHubTab;
-  onTabChange: (tab: CourseHubTab) => void;
-  isStudent: boolean;
-  onOpenCreateAnnouncement: () => void;
-  onOpenAddSubChannel?: () => void;
   onMessageSentToast?: (message: string) => void;
   childrenWhenNotMessenger?: React.ReactNode;
 }
@@ -99,13 +91,8 @@ function shouldShowTimestampDivider(
 export function MessengerChatBox({
   channel,
   chatChannel,
-  threadsCount,
   currentUser,
   activeTab,
-  onTabChange,
-  isStudent,
-  onOpenCreateAnnouncement,
-  onOpenAddSubChannel,
   onMessageSentToast,
   childrenWhenNotMessenger,
 }: MessengerChatBoxProps) {
@@ -377,13 +364,22 @@ export function MessengerChatBox({
       aria-label="Course Hub Messenger Box"
       className="flex-1 min-h-0 h-full flex flex-col bg-white overflow-hidden"
     >
-      {/* Top Gray Header Bar: Row 1 (Course Title + Gear Icon) & Row 2 (Messenger Chat | Noticeboard Feed | Isolated Q&A Threads + Action Button) */}
-      <div className="sticky top-0 z-20 bg-slate-200/95 border-b border-slate-300 px-3 sm:px-5 py-2.5 space-y-2 relative shrink-0">
-        {/* Header Row 1: Course Title + Settings Gear Icon */}
+      {/* Top Gray Header Bar: Course Title + Active Channel/View Indicator + Settings Gear Icon */}
+      <div className="sticky top-0 z-20 bg-slate-200/95 border-b border-slate-300 px-3 sm:px-5 py-2.5 relative shrink-0">
         <div className="flex items-center justify-between gap-2">
-          <h2 className="text-sm sm:text-lg font-extrabold text-ustp-text truncate">
-            {courseHeaderTitle}
-          </h2>
+          <div className="flex items-center gap-2 min-w-0">
+            <h2 className="text-sm sm:text-lg font-extrabold text-ustp-text truncate">
+              {courseHeaderTitle}
+            </h2>
+            <span className="text-xs font-mono font-bold text-slate-600 shrink-0">
+              ·{' '}
+              {activeTab === 'feed'
+                ? 'Noticeboard Feed'
+                : activeTab === 'threads' || activeTab === 'send_inquiry'
+                ? 'Isolated Q&A Threads'
+                : activeChatChannelLabel}
+            </span>
+          </div>
 
           <button
             type="button"
@@ -394,82 +390,6 @@ export function MessengerChatBox({
           >
             <Settings className="w-5 h-5 stroke-[2.2]" />
           </button>
-        </div>
-
-        {/* Header Row 2: 3 Separate Workspace Tabs (Messenger Chat | Noticeboard Feed | Isolated Q&A Threads) + Primary Action Button */}
-        <div className="flex flex-wrap items-center justify-between gap-2 pt-1.5 border-t border-slate-300/70">
-          <div
-            className="flex items-center gap-1.5 overflow-x-auto max-w-full pb-0.5 sm:pb-0"
-            role="tablist"
-            aria-label="Course Hub Workspace Views"
-          >
-            <button
-              type="button"
-              role="tab"
-              aria-selected={activeTab === 'messenger'}
-              onClick={() => onTabChange('messenger')}
-              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-bold transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                activeTab === 'messenger'
-                  ? 'bg-ustp-navy text-white shadow-2xs'
-                  : 'bg-white/85 text-slate-700 hover:bg-white border border-slate-300'
-              }`}
-            >
-              <MessageCircle className="w-3.5 h-3.5 text-ustp-gold" />
-              <span>Messenger Chat</span>
-            </button>
-
-            <button
-              type="button"
-              role="tab"
-              aria-selected={activeTab === 'feed'}
-              onClick={() => onTabChange('feed')}
-              className={`px-3 py-1.5 rounded-md text-xs font-bold transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                activeTab === 'feed'
-                  ? 'bg-ustp-navy text-white shadow-2xs'
-                  : 'bg-white/85 text-slate-700 hover:bg-white border border-slate-300'
-              }`}
-            >
-              Noticeboard Feed
-            </button>
-
-            <button
-              type="button"
-              role="tab"
-              aria-selected={activeTab === 'threads'}
-              onClick={() => onTabChange('threads')}
-              className={`px-3 py-1.5 rounded-md text-xs font-bold transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                activeTab === 'threads'
-                  ? 'bg-ustp-navy text-white shadow-2xs'
-                  : 'bg-white/85 text-slate-700 hover:bg-white border border-slate-300'
-              }`}
-            >
-              Isolated Q&amp;A Threads ({threadsCount})
-            </button>
-          </div>
-
-          {isStudent ? (
-            <button
-              type="button"
-              onClick={() => onTabChange('send_inquiry')}
-              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-extrabold transition-opacity whitespace-nowrap shrink-0 cursor-pointer ${
-                activeTab === 'send_inquiry'
-                  ? 'bg-ustp-navy text-ustp-gold ring-2 ring-ustp-gold'
-                  : 'bg-ustp-gold text-ustp-navy hover:opacity-95'
-              }`}
-            >
-              <MessageSquarePlus className="w-3.5 h-3.5" />
-              <span>+ Ask in Q&amp;A Thread</span>
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={onOpenCreateAnnouncement}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-extrabold bg-ustp-navy text-white hover:opacity-95 whitespace-nowrap shrink-0 cursor-pointer"
-            >
-              <Plus className="w-3.5 h-3.5 text-ustp-gold" />
-              <span>+ Create Announcement</span>
-            </button>
-          )}
         </div>
 
         {showSettingsMenu && (

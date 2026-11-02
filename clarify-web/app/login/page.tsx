@@ -93,12 +93,12 @@ export default function LoginPage() {
       {/* Left Side (70% width on desktop): Deep ustp-navy (#1a1851) background with centered institutional branding card */}
       <div className="w-full lg:w-[70%] bg-ustp-navy text-white p-8 lg:p-16 flex flex-col items-center justify-center">
         <div className="bg-slate-100 text-ustp-text border-2 border-ustp-gold rounded-lg p-8 sm:p-12 max-w-xl w-full text-center shadow-lg">
-          <div className="inline-flex items-center justify-center px-6 py-3.5 rounded-xl bg-ustp-navy border-2 border-ustp-gold mb-4 shadow-sm">
+          <div className="inline-flex items-center justify-center mb-3">
             <Image
               src="/assets/aistudio/image_07899ab9.png"
               alt="ClariFy"
-              width={200}
-              height={64}
+              width={220}
+              height={76}
               unoptimized
               className="h-14 sm:h-16 w-auto object-contain"
             />
@@ -164,15 +164,13 @@ export default function LoginPage() {
       <div className="w-full lg:w-[30%] bg-ustp-orange text-ustp-text p-8 sm:p-10 flex flex-col items-center justify-center border-l border-amber-700/30">
         <div className="w-full max-w-xs space-y-6">
           <div className="flex flex-col items-center">
-            <div className="px-5 py-3 rounded-2xl bg-ustp-navy border-4 border-ustp-gold flex flex-col items-center justify-center shadow-md">
-              <Image
-                src="/assets/aistudio/image_07899ab9.png"
-                alt="ClariFy"
-                width={140}
-                height={44}
-                unoptimized
-                className="h-11 w-auto object-contain"
-              />
+            <div className="w-20 h-20 rounded-full bg-ustp-navy border-4 border-ustp-gold flex flex-col items-center justify-center shadow-md">
+              <span className="text-2xl font-extrabold text-ustp-gold tracking-tight">
+                C
+              </span>
+              <span className="text-[10px] font-bold text-white uppercase tracking-widest">
+                USTP
+              </span>
             </div>
             <h2 className="mt-4 text-lg font-extrabold text-ustp-navy">
               Institutional Sign In

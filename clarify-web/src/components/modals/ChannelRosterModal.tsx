@@ -237,51 +237,39 @@ export function ChannelRosterModal() {
           </button>
         </div>
 
-        {/* Navigation Tabs */}
-        <div className="flex flex-wrap items-center gap-2 px-6 pt-3 border-b border-slate-200 bg-ustp-cream">
-          <button
-            type="button"
-            onClick={() => {
-              setFieldErrors({});
-              setActiveTab('create_hub');
-            }}
-            className={`px-3.5 py-2 text-xs font-extrabold border-b-2 transition-colors cursor-pointer ${
-              activeTab === 'create_hub'
-                ? 'border-ustp-navy text-ustp-navy'
-                : 'border-transparent text-slate-600 hover:text-ustp-text'
-            }`}
-          >
-            + Add Course Hub
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setFieldErrors({});
-              setActiveTab('create_channel');
-            }}
-            className={`px-3.5 py-2 text-xs font-extrabold border-b-2 transition-colors cursor-pointer ${
-              activeTab === 'create_channel'
-                ? 'border-ustp-navy text-ustp-navy'
-                : 'border-transparent text-slate-600 hover:text-ustp-text'
-            }`}
-          >
-            + Add Channel in Course Hub
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setFieldErrors({});
-              setActiveTab('browse');
-            }}
-            className={`px-3.5 py-2 text-xs font-bold border-b-2 transition-colors cursor-pointer ${
-              activeTab === 'browse'
-                ? 'border-ustp-navy text-ustp-navy'
-                : 'border-transparent text-slate-600 hover:text-ustp-text'
-            }`}
-          >
-            Browse Course Hubs ({courseHubs.length})
-          </button>
-        </div>
+        {/* Navigation Tabs (shown only when creating/browsing Course Hubs) */}
+        {activeTab !== 'create_channel' && (
+          <div className="flex flex-wrap items-center gap-2 px-6 pt-3 border-b border-slate-200 bg-ustp-cream">
+            <button
+              type="button"
+              onClick={() => {
+                setFieldErrors({});
+                setActiveTab('create_hub');
+              }}
+              className={`px-3.5 py-2 text-xs font-extrabold border-b-2 transition-colors cursor-pointer ${
+                activeTab === 'create_hub'
+                  ? 'border-ustp-navy text-ustp-navy'
+                  : 'border-transparent text-slate-600 hover:text-ustp-text'
+              }`}
+            >
+              + Add Course Hub
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setFieldErrors({});
+                setActiveTab('browse');
+              }}
+              className={`px-3.5 py-2 text-xs font-bold border-b-2 transition-colors cursor-pointer ${
+                activeTab === 'browse'
+                  ? 'border-ustp-navy text-ustp-navy'
+                  : 'border-transparent text-slate-600 hover:text-ustp-text'
+              }`}
+            >
+              Browse Course Hubs ({courseHubs.length})
+            </button>
+          </div>
+        )}
 
         <div className="p-6 max-h-[72vh] overflow-y-auto">
           {activeTab === 'create_hub' && (
