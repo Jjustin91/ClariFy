@@ -16,7 +16,8 @@ import type {
 } from '../types/api';
 
 // Always route browser requests through same-origin /api/v1 (which connects to PostgreSQL directly or proxies to LARAVEL_BACKEND_URL)
-export const API_BASE_URL = '/api/v1';
+const RAW_API_URL = process.env.NEXT_PUBLIC_API_URL || 'https://clarify-api.onrender.com/api/v1';
+export const API_BASE_URL = RAW_API_URL.replace(/\/+$/, '');
 
 const STORAGE_KEYS = {
   TOKEN: 'clarify_bearer_token',
@@ -202,13 +203,17 @@ export async function registerApi(payload: {
   institutional_id: string;
   email: string;
   password: string;
+  password_confirmation?: string;
   role: 'student' | 'faculty';
   department: string;
   section: string;
 }): Promise<SingleResourceResponse<User>> {
   return requestLaravel<SingleResourceResponse<User>>('/auth/register', {
     method: 'POST',
-    body: JSON.stringify(payload),
+    body: JSON.stringify({
+      ...payload,
+      password_confirmation: payload.password_confirmation || payload.password,
+    }),
   });
 }
 
