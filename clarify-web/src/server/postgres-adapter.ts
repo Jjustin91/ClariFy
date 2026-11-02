@@ -1761,7 +1761,8 @@ export async function handlePostgresApiRequest(
       const perPage = Math.max(1, Number(query.per_page || 4));
       const total = sorted.length;
       const lastPage = Math.max(1, Math.ceil(total / perPage));
-      const start = (page - 1) * perPage;
+      const safePage = Math.min(page, lastPage);
+      const start = (safePage - 1) * perPage;
       const sliced = sorted.slice(start, start + perPage);
 
       return {
@@ -1769,7 +1770,7 @@ export async function handlePostgresApiRequest(
         body: {
           data: sliced,
           meta: {
-            current_page: page,
+            current_page: safePage,
             last_page: lastPage,
             per_page: perPage,
             total,
@@ -2542,17 +2543,18 @@ export async function handlePostgresApiRequest(
         });
 
       const page = Math.max(1, Number(query.page || 1));
-      const perPage = Math.max(1, Number(query.per_page || 12));
+      const perPage = Math.max(1, Number(query.per_page || 6));
       const total = filtered.length;
       const lastPage = Math.max(1, Math.ceil(total / perPage));
-      const start = (page - 1) * perPage;
+      const safePage = Math.min(page, lastPage);
+      const start = (safePage - 1) * perPage;
 
       return {
         status: 200,
         body: {
           data: filtered.slice(start, start + perPage),
           meta: {
-            current_page: page,
+            current_page: safePage,
             last_page: lastPage,
             per_page: perPage,
             total,

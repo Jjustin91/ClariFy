@@ -420,13 +420,13 @@ export default function CourseHubPage() {
         />
       )}
 
-      <div className="flex-1 flex flex-col lg:flex-row lg:items-start min-h-[calc(100vh-6.25rem)] lg:min-h-[calc(100vh-3.5rem)] relative">
+      <div className="flex-1 min-h-0 flex flex-col lg:flex-row lg:items-stretch overflow-hidden relative">
         {/* LEFT COLUMN: ustp-navy (#1a1851) Scoped Channels Sidebar
             - Mobile (<1024px): Slide-out left drawer
             - Desktop (lg+): Sticky docked sidebar */}
         <aside
           aria-label="Scoped Channels Sidebar"
-          className={`fixed lg:sticky left-0 top-14 z-40 lg:z-10 h-[calc(100vh-3.5rem)] w-72 lg:w-60 overflow-y-auto lg:self-start bg-ustp-navy text-white border-r border-slate-800 shrink-0 flex flex-col justify-between p-3.5 transition-transform duration-200 ease-out shadow-2xl lg:shadow-none ${
+          className={`fixed lg:sticky left-0 top-14 z-40 lg:z-10 h-[calc(100dvh-3.5rem)] lg:h-full w-72 lg:w-60 overflow-y-auto lg:self-start bg-ustp-navy text-white border-r border-slate-800 shrink-0 flex flex-col justify-between p-3.5 transition-transform duration-200 ease-out shadow-2xl lg:shadow-none ${
             isMobileChannelsOpen
               ? 'translate-x-0'
               : '-translate-x-full lg:translate-x-0 pointer-events-none lg:pointer-events-auto'
@@ -549,7 +549,7 @@ export default function CourseHubPage() {
         </aside>
 
         {/* CENTER COLUMN: Full-Height Messenger Chat Box & Course Hub Workspace */}
-        <div className="flex-1 min-w-0 flex flex-col h-[calc(100vh-6.25rem)] lg:h-[calc(100vh-3.5rem)] overflow-hidden bg-white">
+        <div className="flex-1 min-w-0 min-h-0 flex flex-col h-full overflow-hidden bg-white">
           <MessengerChatBox
             channel={activeChannel}
             threadsCount={visibleThreads.length}
@@ -890,7 +890,7 @@ export default function CourseHubPage() {
             - Desktop (lg+): Sticky docked sidebar */}
         <aside
           aria-label="Class FAQs and Answer Ticket Panel"
-          className={`fixed lg:sticky right-0 top-14 z-40 lg:z-10 h-[calc(100vh-3.5rem)] w-80 sm:w-88 lg:w-72 xl:w-80 overflow-y-auto lg:self-start bg-white border-l border-slate-200 shrink-0 p-4 space-y-4 transition-transform duration-200 ease-out shadow-2xl lg:shadow-none ${
+          className={`fixed lg:sticky right-0 top-14 z-40 lg:z-10 h-[calc(100dvh-3.5rem)] lg:h-full w-80 sm:w-88 lg:w-72 xl:w-80 overflow-y-auto lg:self-start bg-white border-l border-slate-200 shrink-0 p-4 space-y-4 transition-transform duration-200 ease-out shadow-2xl lg:shadow-none ${
             isMobileFaqOpen
               ? 'translate-x-0'
               : 'translate-x-full lg:translate-x-0 pointer-events-none lg:pointer-events-auto'

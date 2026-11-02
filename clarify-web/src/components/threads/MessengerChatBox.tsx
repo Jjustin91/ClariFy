@@ -355,10 +355,10 @@ export function MessengerChatBox({
   return (
     <section
       aria-label="Course Hub Messenger Box"
-      className="flex-1 min-h-0 flex flex-col bg-white overflow-hidden"
+      className="flex-1 min-h-0 h-full flex flex-col bg-white overflow-hidden"
     >
       {/* Top Gray Header Bar: Row 1 (Course Title + Gear Icon) & Row 2 (Messenger Chat | Noticeboard Feed | Isolated Q&A Threads + Action Button) */}
-      <div className="bg-slate-200/90 border-b border-slate-300 px-3 sm:px-5 py-2.5 space-y-2 relative shrink-0">
+      <div className="sticky top-0 z-20 bg-slate-200/95 border-b border-slate-300 px-3 sm:px-5 py-2.5 space-y-2 relative shrink-0">
         {/* Header Row 1: Course Title + Settings Gear Icon */}
         <div className="flex items-center justify-between gap-2">
           <h2 className="text-sm sm:text-lg font-extrabold text-ustp-text truncate">
@@ -609,7 +609,7 @@ export function MessengerChatBox({
 
       {/* When viewing Noticeboard Feed, Isolated Q&A Threads, or Send an Inquiry, render that separate tab content */}
       {activeTab !== 'messenger' ? (
-        <div className="flex-1 min-h-0 overflow-y-auto p-4 sm:p-5 lg:p-6 bg-slate-50/70">
+        <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain p-4 sm:p-5 lg:p-6 bg-slate-50/70">
           {childrenWhenNotMessenger}
         </div>
       ) : (
@@ -617,7 +617,7 @@ export function MessengerChatBox({
           {/* Center White Full-Height Scrollable Messenger Stream matching Attached Reference UI */}
           <div
             ref={streamContainerRef}
-            className="flex-1 min-h-0 px-3 sm:px-6 py-4 sm:py-5 space-y-3.5 overflow-y-auto bg-white"
+            className="flex-1 min-h-0 px-3 sm:px-6 py-4 sm:py-5 space-y-3.5 overflow-y-auto overscroll-contain bg-white"
           >
             {conversationMessages.length === 0 ? (
               <div className="h-full flex flex-col items-center justify-center text-center py-12 px-4">
@@ -755,7 +755,7 @@ export function MessengerChatBox({
 
           {/* Staged Attachment Chip */}
           {stagedAttachment && (
-            <div className="px-4 py-1.5 bg-ustp-cream border-t border-amber-200/80 flex items-center justify-between text-xs shrink-0">
+            <div className="sticky bottom-14 z-20 px-4 py-1.5 bg-ustp-cream border-t border-amber-200/80 flex items-center justify-between text-xs shrink-0">
               <span className="font-semibold text-ustp-navy truncate">
                 Attached: {stagedAttachment}
               </span>
@@ -773,7 +773,7 @@ export function MessengerChatBox({
           {/* Bottom Messenger Composer Bar */}
           <form
             onSubmit={handleSubmit}
-            className="bg-ustp-cream/70 border-t border-amber-200/70 px-3 sm:px-4 py-2.5 flex items-center gap-1.5 sm:gap-2.5 shrink-0"
+            className="sticky bottom-0 z-20 bg-ustp-cream border-t border-amber-200/80 px-3 sm:px-4 py-2.5 flex items-center gap-1.5 sm:gap-2.5 shrink-0"
           >
             {/* Hidden file inputs for Photo and Document buttons */}
             <input

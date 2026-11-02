@@ -116,8 +116,14 @@ export function AppShell({
       ? 'ICTO System Administration'
       : `${user.academic_profile?.department || 'CITC'} Dept`;
 
+  const isChannelView = pathname.startsWith('/channels');
+
   return (
-    <div className="min-h-screen flex flex-col bg-ustp-cream text-ustp-text">
+    <div
+      className={`${
+        isChannelView ? 'h-dvh overflow-hidden' : 'min-h-screen'
+      } flex flex-col bg-ustp-cream text-ustp-text`}
+    >
       {/* Persistent Sticky Top Header Bar (ustp-navy #1a1851) */}
       <header className="sticky top-0 h-14 bg-ustp-navy text-white px-3 sm:px-4 lg:px-6 flex items-center justify-between gap-2 sm:gap-4 border-b border-slate-800 shrink-0 z-40">
         {/* Left: ClariFy in bold ustp-gold + active view/hub title in white */}
@@ -164,9 +170,19 @@ export function AppShell({
       </header>
 
       {/* Main Content + Right-Hand Responsive Profile & Navigation Drawer */}
-      <div className="flex-1 flex items-start relative overflow-x-clip">
+      <div
+        className={`flex-1 min-h-0 flex items-start relative ${
+          isChannelView ? 'overflow-hidden' : 'overflow-x-clip'
+        }`}
+      >
         {/* Main Center Workspace */}
-        <main className="flex-1 min-w-0 flex flex-col w-full">{children}</main>
+        <main
+          className={`flex-1 min-w-0 flex flex-col w-full ${
+            isChannelView ? 'h-full min-h-0 overflow-hidden' : ''
+          }`}
+        >
+          {children}
+        </main>
 
         {/* Desktop Collapsed Drawer Re-Open Tab when Drawer is closed */}
         {!isDrawerOpen && (

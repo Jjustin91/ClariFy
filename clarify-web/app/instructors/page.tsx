@@ -38,7 +38,7 @@ export default function InstructorsPage() {
   const [meta, setMeta] = useState<PaginatedMeta>({
     current_page: 1,
     last_page: 1,
-    per_page: 12,
+    per_page: 6,
     total: 0,
   });
   const [isLoading, setIsLoading] = useState(true);
@@ -58,10 +58,13 @@ export default function InstructorsPage() {
         department,
         sort: sortBy,
         page,
-        per_page: 12,
+        per_page: 6,
       });
       setInstructors(res.data);
       setMeta(res.meta);
+      if (res.meta.last_page > 0 && page > res.meta.last_page) {
+        setPage(res.meta.last_page);
+      }
     } catch (err) {
       const apiErr = err as LaravelValidationError;
       setError(
@@ -132,9 +135,10 @@ export default function InstructorsPage() {
             <select
               id="instructor-sort-select"
               value={sortBy}
-              onChange={(e) =>
-                setSortBy(e.target.value as 'name' | 'department')
-              }
+              onChange={(e) => {
+                setSortBy(e.target.value as 'name' | 'department');
+                setPage(1);
+              }}
               className="text-xs font-semibold text-ustp-text bg-white border border-slate-300 rounded-md px-2.5 py-1.5 focus:outline-none focus:border-ustp-navy"
             >
               <option value="name">Name (A–Z)</option>
@@ -252,6 +256,7 @@ export default function InstructorsPage() {
             onAction={() => {
               setSearch('');
               setDepartment('ALL');
+              setPage(1);
             }}
           />
         ) : (
@@ -297,50 +302,94 @@ export default function InstructorsPage() {
           </div>
         )}
 
-        {/* Bottom Pagination matching Wireframes (<< 1 2 ... 10 >>) */}
-        <nav
-          aria-label="Instructor Directory Pagination"
-          className="pt-4 flex items-center justify-center gap-2 font-mono text-xs font-bold text-ustp-text tabular-nums"
-        >
-          <button
-            type="button"
-            disabled={page <= 1}
-            onClick={() => setPage((p) => Math.max(1, p - 1))}
-            className="px-2.5 py-1 rounded border border-slate-300 bg-white hover:bg-slate-100 disabled:opacity-40 cursor-pointer"
-          >
-            &lt;&lt;
-          </button>
-          <button
-            type="button"
-            onClick={() => setPage(1)}
-            className="px-2.5 py-1 rounded border bg-ustp-navy text-ustp-gold border-ustp-navy cursor-pointer"
-          >
-            1
-          </button>
-          <button
-            type="button"
-            onClick={() => setPage(1)}
-            className="px-2.5 py-1 rounded border bg-white text-ustp-text border-slate-300 hover:bg-slate-100 cursor-pointer"
-          >
-            2
-          </button>
-          <span className="px-1 text-slate-400">...</span>
-          <button
-            type="button"
-            onClick={() => setPage(1)}
-            className="px-2.5 py-1 rounded border bg-white text-ustp-text border-slate-300 hover:bg-slate-100 cursor-pointer"
-          >
-            10
-          </button>
-          <button
-            type="button"
-            disabled={page >= meta.last_page}
-            onClick={() => setPage((p) => Math.min(meta.last_page, p + 1))}
-            className="px-2.5 py-1 rounded border border-slate-300 bg-white hover:bg-slate-100 disabled:opacity-40 cursor-pointer"
-          >
-            &gt;&gt;
-          </button>
-        </nav>
+        {/* Accurate Bottom Pagination driven by real meta.last_page and meta.total */}
+        {(() => {
+          const totalPages = Math.max(1, meta.last_page || 1);
+          const currentPage = Math.min(Math.max(1, page), totalPages);
+
+          const getPageItems = (): (number | 'ellipsis-start' | 'ellipsis-end')[] => {
+            if (totalPages <= 7) {
+              return Array.from({ length: totalPages }, (_, i) => i + 1);
+            }
+            const items: (number | 'ellipsis-start' | 'ellipsis-end')[] = [1];
+            const startPage = Math.max(2, currentPage - 1);
+            const endPage = Math.min(totalPages - 1, currentPage + 1);
+
+            if (startPage > 2) {
+              items.push('ellipsis-start');
+            }
+            for (let p = startPage; p <= endPage; p++) {
+              items.push(p);
+            }
+            if (endPage < totalPages - 1) {
+              items.push('ellipsis-end');
+            }
+            items.push(totalPages);
+            return items;
+          };
+
+          const pageItems = getPageItems();
+
+          return (
+            <div className="pt-4 flex flex-col sm:flex-row items-center justify-between gap-3">
+              <p className="text-xs font-semibold text-slate-600 font-mono tabular-nums">
+                Page {currentPage} of {totalPages} ({meta.total}{' '}
+                {meta.total === 1 ? 'instructor' : 'instructors'})
+              </p>
+
+              <nav
+                aria-label="Instructor Directory Pagination"
+                className="flex items-center justify-center gap-1.5 font-mono text-xs font-bold text-ustp-text tabular-nums flex-wrap"
+              >
+                <button
+                  type="button"
+                  disabled={currentPage <= 1}
+                  onClick={() => setPage((p) => Math.max(1, p - 1))}
+                  aria-label="Previous page"
+                  className="px-2.5 py-1 rounded border border-slate-300 bg-white hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                >
+                  &lt;&lt;
+                </button>
+
+                {pageItems.map((item) =>
+                  typeof item === 'string' ? (
+                    <span
+                      key={item}
+                      className="px-1.5 text-slate-400 select-none"
+                      aria-hidden="true"
+                    >
+                      ...
+                    </span>
+                  ) : (
+                    <button
+                      key={item}
+                      type="button"
+                      onClick={() => setPage(item)}
+                      aria-current={currentPage === item ? 'page' : undefined}
+                      className={`px-2.5 py-1 rounded border cursor-pointer transition-colors ${
+                        currentPage === item
+                          ? 'bg-ustp-navy text-ustp-gold border-ustp-navy'
+                          : 'bg-white text-ustp-text border-slate-300 hover:bg-slate-100'
+                      }`}
+                    >
+                      {item}
+                    </button>
+                  )
+                )}
+
+                <button
+                  type="button"
+                  disabled={currentPage >= totalPages}
+                  onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                  aria-label="Next page"
+                  className="px-2.5 py-1 rounded border border-slate-300 bg-white hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                >
+                  &gt;&gt;
+                </button>
+              </nav>
+            </div>
+          );
+        })()}
       </div>
     </AppShell>
   );

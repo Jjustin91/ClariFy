@@ -1,34 +1,40 @@
-# Move Channel Roster to Course Hub Settings Popover & Show Current Faculty in Sidebar
+# Mobile Sticky Course Hub Layout & Accurate Pagination Plan
 
 ## 1. Overview
-Refine the Course Hub layout so that:
-1. The **left Scoped Channels sidebar footer** displays only the **current Faculty** in that Course Hub along with the **total Enrolled Roster count** (instead of listing all members).
-2. Clicking the **Settings gear icon** in the Course Hub top header opens the **Course Hub Settings & Channel Roster** popover panel directly, where Students and Faculty can inspect the full enrolled member list, add members, remove members, or sync section access.
+This plan addresses both parts of your request:
+1. **Mobile Course Hub Sticky Layout**:
+   - **Image 1 (Main Chat / Tab Stream)**: Make the center chat message stream (and active workspace tab content) the **only scrollable area** on mobile and desktop viewports.
+   - **Image 2 (Course Hub Header & Tabs Bar)**: Keep the Course Hub title, Settings gear icon, and workspace tabs (`Messenger Chat`, `Noticeboard Feed`, `Isolated Q&A Threads`, `+ Ask in Q&A Thread`) **sticky at the top**.
+   - **Image 3 (Bottom Message Composer)**: Keep the voice/photo/file attachment buttons, message input pill, and send arrow **sticky at the bottom**.
+2. **Accurate Pagination**:
+   - Replace the hardcoded `2 ... 10` placeholder buttons on **All Announcements** (`/announcements`) and **View Faculty / Instructors** (`/instructors`) with real, data-driven pagination based on `meta.current_page`, `meta.last_page`, and `meta.total`.
 
 ---
 
 ## 2. Planned Changes
 
-### A. Left Scoped Channels Sidebar (`/clarify-web/app/channels/[channelId]/page.tsx`)
-- **Remove Top `Roster` Button**: Remove the `Roster` trigger button from the `SCOPED CHANNELS` sidebar header since the Channel Roster now lives under the Course Hub Settings gear icon.
-- **Footer Faculty + Enrolled Count**:
-  - Replace the full member list in the bottom sidebar footer with:
-    - Scope badge (`CITC • IT3R2`)
-    - **Current Faculty**: Displays the faculty/department head member(s) enrolled in `activeChannel.roster` (or the faculty creator), with a clean fallback if no faculty member has joined yet.
-    - **Enrolled Roster**: Displays the accurate total member count (`Enrolled Roster: X members`).
+### A. Mobile Viewport Lock & Sticky Chat Bars
+- **`/clarify-web/src/components/layout/AppShell.tsx`**:
+  - On `/channels/*` routes, lock the shell to `h-dvh overflow-hidden` and set `<main>` to `flex-1 min-h-0 overflow-hidden` so the mobile browser page itself never scrolls.
+- **`/clarify-web/app/channels/[channelId]/page.tsx`**:
+  - Replace static `100vh` height calculations (`min-h-[calc(100vh-6.25rem)]`, `h-[calc(100vh-6.25rem)]`) with `flex-1 min-h-0 overflow-hidden` so the Course Hub workspace fits the exact remaining mobile viewport height below the top header and mobile quick drawer bar.
+- **`/clarify-web/src/components/threads/MessengerChatBox.tsx`**:
+  - Keep the top Course Hub header & tabs bar `shrink-0 sticky top-0 z-20`.
+  - Set the center chat stream (`ref={streamContainerRef}`) and tab content wrapper to `flex-1 min-h-0 overflow-y-auto overscroll-contain`.
+  - Keep the staged attachment chip and bottom message composer form `shrink-0 sticky bottom-0 z-20`.
 
-### B. Course Hub Settings Popover with Embedded Channel Roster (`/clarify-web/src/components/threads/MessengerChatBox.tsx`)
-- Upgrade the `showSettingsMenu` gear popover in the Course Hub top bar into a responsive **Course Hub Settings & Channel Roster** panel:
-  - Shows active Course Hub metadata (`Course`, `Section`, `Current Faculty`, and `Enrolled Roster` count badge).
-  - Includes a quick **Verify / Sync Section Roster** button (`joinChannelApi`).
-  - Includes an inline **Add Member to Roster** form (Institutional ID + optional Full Name) and a scrollable list of all enrolled members with their name, Institutional ID, role/section badge, and **Remove** button for both Students and Faculty.
-
-### C. Streamline Channel Management Modal (`/clarify-web/src/components/modals/ChannelRosterModal.tsx`)
-- Keep the `+ Add Channel` modal focused on **Browse & Join Channels** and **+ Create Course Hub** since the Channel Roster is now managed directly inside the Course Hub Settings gear popover.
+### B. Accurate Pagination Controls (`/clarify-web/app/announcements/page.tsx` & `/clarify-web/app/instructors/page.tsx`)
+- Remove hardcoded `2`, `...`, and `10` page buttons.
+- Dynamically render actual page numbers from `1` to `meta.last_page` (with smart ellipsis when `meta.last_page > 7`).
+- Ensure `<<` (Previous) and `>>` (Next) buttons accurately navigate between valid pages and disable when at page `1` or `meta.last_page`.
+- Reset `page` to `1` whenever search, tag/department filter, or sort order changes, and automatically clamp `page` if `meta.last_page` decreases after filtering or deleting items.
+- Display an accurate item/page summary (`Page X of Y • Z total`) alongside the page buttons.
 
 ---
 
 ## 3. Files to Modify
-1. `/clarify-web/app/channels/[channelId]/page.tsx`
-2. `/clarify-web/src/components/threads/MessengerChatBox.tsx`
-3. `/clarify-web/src/components/modals/ChannelRosterModal.tsx`
+1. `/clarify-web/src/components/layout/AppShell.tsx`
+2. `/clarify-web/app/channels/[channelId]/page.tsx`
+3. `/clarify-web/src/components/threads/MessengerChatBox.tsx`
+4. `/clarify-web/app/announcements/page.tsx`
+5. `/clarify-web/app/instructors/page.tsx`
