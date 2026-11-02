@@ -390,14 +390,14 @@ export function MessengerChatBox({
           >
             {conversationMessages.length === 0 ? (
               <div className="h-full flex flex-col items-center justify-center text-center py-12 px-4">
-                <div className="w-12 h-12 rounded-full bg-[#0084ff]/10 text-[#0084ff] flex items-center justify-center mb-3">
+                <div className="w-12 h-12 rounded-full bg-ustp-navy/10 text-ustp-navy border border-ustp-gold flex items-center justify-center mb-3">
                   <MessageCircle className="w-6 h-6" />
                 </div>
-                <p className="text-sm font-bold text-slate-800">
+                <p className="text-sm font-bold text-ustp-navy">
                   Start the conversation in {courseHeaderTitle}
                 </p>
                 <p className="text-xs text-slate-500 mt-1 max-w-xs">
-                  Your messages appear in blue on the right; classmate and faculty replies appear on the left.
+                  Your messages appear in USTP Navy on the right; classmate and faculty replies appear in USTP Cream on the left.
                 </p>
               </div>
             ) : (
@@ -441,11 +441,11 @@ export function MessengerChatBox({
                     )}
 
                     {isCurrentUser ? (
-                      /* CURRENT USER MESSAGE: Right-aligned vibrant Messenger Blue Bubble (#0084ff) */
+                      /* CURRENT USER MESSAGE: Right-aligned USTP Navy Bubble (#1a1851) */
                       <div className="flex flex-col items-end">
                         <div className="flex items-end justify-end gap-2 w-full">
                           <div
-                            className="bg-[#0084ff] text-white rounded-[20px] rounded-br-xs px-4 py-2.5 text-xs sm:text-sm leading-relaxed shadow-2xs max-w-[82%] sm:max-w-[68%] break-words"
+                            className="bg-ustp-navy text-white border border-ustp-navy rounded-[20px] rounded-br-xs px-4 py-2.5 text-xs sm:text-sm leading-relaxed shadow-2xs max-w-[82%] sm:max-w-[68%] break-words"
                             title={`Sent by you (${currentUser.name}) at ${displayTime}`}
                           >
                             {msg.content}
@@ -460,7 +460,7 @@ export function MessengerChatBox({
                         )}
                       </div>
                     ) : (
-                      /* RESPONDENT MESSAGE: Left-aligned Light Gray Bubble (#f0f0f0) with circular avatar on bottom-left and sender name + role above */
+                      /* RESPONDENT MESSAGE: Left-aligned USTP Cream Bubble (#FFFAF2) with circular avatar on bottom-left and sender name + role above */
                       <div className="flex items-end justify-between gap-2">
                         <div className="flex items-end gap-2.5 min-w-0 max-w-[85%] sm:max-w-[72%]">
                           {/* Bottom-Left Circular Respondent Avatar */}
@@ -475,17 +475,17 @@ export function MessengerChatBox({
                             {initial}
                           </div>
 
-                          {/* Respondent Name + Role Header above Light Gray Bubble */}
+                          {/* Respondent Name + Role Header above USTP Cream Bubble */}
                           <div className="space-y-1 min-w-0 flex-1">
                             <div className="flex items-center gap-1.5 pl-1 flex-wrap">
-                              <span className="text-[11px] font-bold text-slate-700 truncate">
+                              <span className="text-[11px] font-bold text-ustp-navy truncate">
                                 {msg.author.name}
                               </span>
                               <span
                                 className={`px-1.5 py-0.2 rounded text-[10px] font-bold ${
                                   isFacultySender
-                                    ? 'bg-ustp-navy/10 text-ustp-navy'
-                                    : 'bg-slate-200 text-slate-600'
+                                    ? 'bg-ustp-navy text-ustp-gold'
+                                    : 'bg-ustp-gold/30 text-ustp-navy'
                                 }`}
                               >
                                 {roleLabel}
@@ -495,7 +495,7 @@ export function MessengerChatBox({
                               </span>
                             </div>
 
-                            <div className="bg-[#f0f0f0] text-slate-900 rounded-[20px] rounded-bl-xs px-4 py-2.5 text-xs sm:text-sm leading-relaxed break-words">
+                            <div className="bg-ustp-cream text-ustp-text border border-amber-200/80 rounded-[20px] rounded-bl-xs px-4 py-2.5 text-xs sm:text-sm leading-relaxed shadow-2xs break-words">
                               {msg.content}
                             </div>
                           </div>
@@ -524,7 +524,7 @@ export function MessengerChatBox({
 
           {/* Staged Attachment Chip */}
           {stagedAttachment && (
-            <div className="px-4 py-1.5 bg-slate-100 border-t border-slate-200 flex items-center justify-between text-xs shrink-0">
+            <div className="px-4 py-1.5 bg-ustp-cream border-t border-amber-200/80 flex items-center justify-between text-xs shrink-0">
               <span className="font-semibold text-ustp-navy truncate">
                 Attached: {stagedAttachment}
               </span>
@@ -542,7 +542,7 @@ export function MessengerChatBox({
           {/* Bottom Messenger Composer Bar */}
           <form
             onSubmit={handleSubmit}
-            className="bg-slate-100 border-t border-slate-200 px-3 sm:px-4 py-2.5 flex items-center gap-1.5 sm:gap-2.5 shrink-0"
+            className="bg-ustp-cream/70 border-t border-amber-200/70 px-3 sm:px-4 py-2.5 flex items-center gap-1.5 sm:gap-2.5 shrink-0"
           >
             {/* Hidden file inputs for Photo and Document buttons */}
             <input
@@ -566,10 +566,10 @@ export function MessengerChatBox({
               onClick={handleVoiceNoteClick}
               aria-label="Attach voice message"
               title="Attach voice message"
-              className="relative p-2 rounded-full text-[#0084ff] hover:bg-slate-200/80 transition-colors shrink-0 cursor-pointer"
+              className="relative p-2 rounded-full text-ustp-navy hover:bg-ustp-gold/25 transition-colors shrink-0 cursor-pointer"
             >
               <Mic className="w-5 h-5 stroke-[2.2]" />
-              <span className="w-3.5 h-3.5 rounded-full bg-[#0084ff] text-white text-[10px] font-extrabold flex items-center justify-center absolute -bottom-0.5 -right-0.5">
+              <span className="w-3.5 h-3.5 rounded-full bg-ustp-navy text-ustp-gold text-[10px] font-extrabold flex items-center justify-center absolute -bottom-0.5 -right-0.5">
                 +
               </span>
             </button>
@@ -580,7 +580,7 @@ export function MessengerChatBox({
               onClick={() => imageInputRef.current?.click()}
               aria-label="Attach photo or image"
               title="Attach photo or image"
-              className="p-2 rounded-full text-[#0084ff] hover:bg-slate-200/80 transition-colors shrink-0 cursor-pointer"
+              className="p-2 rounded-full text-ustp-navy hover:bg-ustp-gold/25 transition-colors shrink-0 cursor-pointer"
             >
               <ImageIcon className="w-5 h-5 stroke-[2.2]" />
             </button>
@@ -591,7 +591,7 @@ export function MessengerChatBox({
               onClick={() => fileInputRef.current?.click()}
               aria-label="Attach document file"
               title="Attach document file"
-              className="p-2 rounded-full text-[#0084ff] hover:bg-slate-200/80 transition-colors shrink-0 cursor-pointer"
+              className="p-2 rounded-full text-ustp-navy hover:bg-ustp-gold/25 transition-colors shrink-0 cursor-pointer"
             >
               <FileText className="w-5 h-5 stroke-[2.2]" />
             </button>
@@ -606,15 +606,15 @@ export function MessengerChatBox({
               value={messageText}
               onChange={(e) => setMessageText(e.target.value)}
               placeholder={`Message ${courseHeaderTitle}...`}
-              className="flex-1 min-w-0 bg-white border border-slate-300 rounded-full px-4 py-2 text-xs sm:text-sm text-ustp-text placeholder:text-slate-400 focus:outline-none focus:border-[#0084ff]"
+              className="flex-1 min-w-0 bg-white border border-slate-300 rounded-full px-4 py-2 text-xs sm:text-sm text-ustp-text placeholder:text-slate-400 focus:outline-none focus:border-ustp-navy focus:ring-2 focus:ring-ustp-gold/40"
             />
 
-            {/* Circular Messenger Blue Send Arrow Button */}
+            {/* Circular USTP Navy & Gold Send Arrow Button */}
             <button
               type="submit"
               disabled={(!messageText.trim() && !stagedAttachment) || isSending}
               aria-label="Send message"
-              className="w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-[#0084ff] hover:bg-[#0073e6] disabled:opacity-45 text-white flex items-center justify-center shrink-0 transition-opacity cursor-pointer shadow-2xs"
+              className="w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-ustp-navy hover:opacity-95 disabled:opacity-45 text-ustp-gold border border-ustp-gold flex items-center justify-center shrink-0 transition-opacity cursor-pointer shadow-2xs"
             >
               <ArrowRight className="w-4 h-4 stroke-[2.5]" />
             </button>

@@ -163,7 +163,7 @@ export default function LoginPage() {
             <div className="w-28 h-28 rounded-full bg-ustp-gold border-4 border-ustp-navy flex flex-col items-center justify-center shadow-md">
               <ShieldCheck className="w-12 h-12 text-ustp-navy stroke-[2.2]" />
               <span className="text-[11px] font-extrabold text-ustp-navy tracking-tight mt-0.5">
-                PRISMS SSO
+                ClariFy
               </span>
             </div>
             <h2 className="mt-4 text-lg font-extrabold text-ustp-navy">

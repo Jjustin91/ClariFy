@@ -136,15 +136,11 @@ export function AppShell({
           </h1>
         </div>
 
-        {/* Right: USTP Logo Badge + Hamburger Drawer Toggle Button */}
+        {/* Right: USTP Letters + Hamburger Drawer Toggle Button */}
         <div className="flex items-center gap-2 sm:gap-3 shrink-0">
-          <Link
-            href="/login"
-            title="Universal Login Screen"
-            className="hidden sm:flex items-center justify-center px-2.5 py-1 bg-white text-ustp-navy font-extrabold text-xs rounded border border-ustp-gold tracking-tight whitespace-nowrap shrink-0 hover:bg-ustp-cream"
-          >
+          <span className="text-base sm:text-lg font-extrabold text-ustp-gold tracking-wider select-none">
             USTP
-          </Link>
+          </span>
 
           <button
             type="button"
