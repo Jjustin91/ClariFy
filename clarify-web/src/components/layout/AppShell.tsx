@@ -7,6 +7,7 @@ import {
   ChevronLeft,
   ChevronRight,
   LogOut,
+  Menu,
   Settings,
   X,
 } from 'lucide-react';
@@ -45,6 +46,12 @@ export function AppShell({
     clearSession();
     showToast('Signed out of ClariFy session.', 'info');
     router.replace('/login');
+  };
+
+  const handleNavClickOnMobile = () => {
+    if (typeof window !== 'undefined' && window.innerWidth < 1024) {
+      setIsDrawerOpen(false);
+    }
   };
 
   if (!isAuthReady || !isAuthenticated) {
@@ -112,24 +119,24 @@ export function AppShell({
   return (
     <div className="min-h-screen flex flex-col bg-ustp-cream text-ustp-text">
       {/* Persistent Sticky Top Header Bar (ustp-navy #1a1851) */}
-      <header className="sticky top-0 h-14 bg-ustp-navy text-white px-4 lg:px-6 flex items-center justify-between gap-4 border-b border-slate-800 shrink-0 z-30">
+      <header className="sticky top-0 h-14 bg-ustp-navy text-white px-3 sm:px-4 lg:px-6 flex items-center justify-between gap-2 sm:gap-4 border-b border-slate-800 shrink-0 z-40">
         {/* Left: ClariFy in bold ustp-gold + active view/hub title in white */}
-        <div className="flex items-center gap-3 min-w-0">
+        <div className="flex items-center gap-2 sm:gap-3 min-w-0">
           <Link
             href={isAdmin ? '/admin' : '/'}
-            className="text-xl font-extrabold tracking-tight text-ustp-gold hover:opacity-95 whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-ustp-gold rounded"
+            className="text-lg sm:text-xl font-extrabold tracking-tight text-ustp-gold hover:opacity-95 whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-ustp-gold rounded"
           >
             ClariFy
           </Link>
           <span className="text-slate-400 select-none" aria-hidden="true">
             |
           </span>
-          <h1 className="text-sm sm:text-base font-bold text-white truncate">
+          <h1 className="text-xs sm:text-base font-bold text-white truncate">
             {title}
           </h1>
         </div>
 
-        {/* Right: USTP Logo Badge */}
+        {/* Right: USTP Logo Badge + Hamburger Drawer Toggle Button */}
         <div className="flex items-center gap-2 sm:gap-3 shrink-0">
           <Link
             href="/login"
@@ -138,34 +145,64 @@ export function AppShell({
           >
             USTP
           </Link>
+
+          <button
+            type="button"
+            onClick={() => setIsDrawerOpen((prev) => !prev)}
+            aria-label={
+              isDrawerOpen
+                ? 'Close navigation drawer'
+                : 'Open navigation drawer'
+            }
+            aria-expanded={isDrawerOpen}
+            className="inline-flex items-center justify-center gap-1.5 min-h-[40px] min-w-[40px] px-2.5 py-1.5 rounded-lg bg-ustp-orange hover:bg-ustp-orange-dark text-ustp-navy font-extrabold text-xs transition-colors cursor-pointer lg:hidden"
+          >
+            {isDrawerOpen ? (
+              <X className="w-5 h-5 stroke-[2.4]" />
+            ) : (
+              <Menu className="w-5 h-5 stroke-[2.4]" />
+            )}
+            <span className="hidden xs:inline">Menu</span>
+          </button>
         </div>
       </header>
 
-      {/* Main Content + Right-Hand Sticky Fixed-Size Orange Profile & Navigation Drawer */}
+      {/* Main Content + Right-Hand Responsive Profile & Navigation Drawer */}
       <div className="flex-1 flex items-start relative overflow-x-clip">
         {/* Main Center Workspace */}
-        <main className="flex-1 min-w-0 flex flex-col">{children}</main>
+        <main className="flex-1 min-w-0 flex flex-col w-full">{children}</main>
 
-        {/* Collapsed Drawer Re-Open Tab when Drawer is closed */}
+        {/* Desktop Collapsed Drawer Re-Open Tab when Drawer is closed */}
         {!isDrawerOpen && (
           <button
             type="button"
             onClick={() => setIsDrawerOpen(true)}
             aria-label="Expand profile and navigation drawer"
-            className="fixed right-0 top-16 z-30 bg-ustp-orange hover:bg-ustp-orange-dark text-ustp-navy font-bold p-2.5 rounded-l-lg border-l border-y border-amber-700/40 shadow-md flex items-center gap-1 cursor-pointer"
+            className="hidden lg:flex fixed right-0 top-16 z-30 bg-ustp-orange hover:bg-ustp-orange-dark text-ustp-navy font-bold p-2.5 rounded-l-lg border-l border-y border-amber-700/40 shadow-md items-center gap-1 cursor-pointer"
           >
             <ChevronLeft className="w-5 h-5" />
-            <span className="text-xs font-extrabold hidden sm:inline">Menu</span>
+            <span className="text-xs font-extrabold">Menu</span>
           </button>
         )}
 
-        {/* Right-Hand Sticky Fixed-Size Profile & Navigation Drawer (ustp-orange #ff9718) */}
+        {/* Mobile/Tablet Backdrop Overlay when Drawer is open */}
+        {isDrawerOpen && (
+          <div
+            onClick={() => setIsDrawerOpen(false)}
+            aria-hidden="true"
+            className="fixed inset-0 top-14 bg-black/45 backdrop-blur-[1px] z-30 lg:hidden"
+          />
+        )}
+
+        {/* Right-Hand Profile & Navigation Drawer (ustp-orange #ff9718):
+            - Mobile/Tablet (<1024px): Fixed slide-out overlay drawer from the right
+            - Desktop (lg+): Sticky docked sidebar */}
         <aside
           aria-label="User Profile and Navigation Drawer"
-          className={`sticky top-14 h-[calc(100vh-3.5rem)] self-start bg-ustp-orange text-ustp-text border-l border-amber-600/40 shrink-0 flex flex-col justify-between transition-transform duration-200 ease-out ${
+          className={`fixed lg:sticky right-0 top-14 z-40 lg:z-20 h-[calc(100vh-3.5rem)] self-start bg-ustp-orange text-ustp-text border-l border-amber-600/40 shrink-0 flex flex-col justify-between transition-all duration-200 ease-out shadow-2xl lg:shadow-none ${
             isDrawerOpen
-              ? 'w-60 sm:w-64 translate-x-0 overflow-y-auto'
-              : 'w-0 translate-x-full overflow-hidden border-l-0'
+              ? 'w-64 sm:w-72 lg:w-64 translate-x-0 overflow-y-auto'
+              : 'w-0 translate-x-full overflow-hidden border-l-0 pointer-events-none lg:pointer-events-auto'
           }`}
         >
           <div>
@@ -175,7 +212,7 @@ export function AppShell({
                 type="button"
                 onClick={() => setIsDrawerOpen(false)}
                 aria-label="Collapse profile drawer"
-                className="p-1 rounded hover:bg-ustp-orange-dark/40 text-ustp-navy focus-visible:outline-2 focus-visible:outline-ustp-navy cursor-pointer"
+                className="p-1.5 rounded hover:bg-ustp-orange-dark/40 text-ustp-navy focus-visible:outline-2 focus-visible:outline-ustp-navy cursor-pointer"
               >
                 <ChevronRight className="w-5 h-5 stroke-[2.5]" />
               </button>
@@ -206,7 +243,8 @@ export function AppShell({
                 <Link
                   key={item.href}
                   href={item.href}
-                  className={`block w-full px-5 py-3 text-right text-sm font-bold transition-colors ${
+                  onClick={handleNavClickOnMobile}
+                  className={`block w-full px-5 py-3.5 text-right text-sm font-bold transition-colors ${
                     item.active
                       ? 'bg-ustp-orange-dark text-ustp-text font-extrabold'
                       : 'hover:bg-ustp-orange-dark/50 text-ustp-text'
@@ -222,8 +260,11 @@ export function AppShell({
           <div className="p-4 space-y-2 border-t border-amber-700/30">
             <button
               type="button"
-              onClick={() => setIsSettingsModalOpen(true)}
-              className="w-full flex items-center justify-end gap-2 px-2 py-1.5 text-sm font-bold text-ustp-text hover:underline cursor-pointer"
+              onClick={() => {
+                handleNavClickOnMobile();
+                setIsSettingsModalOpen(true);
+              }}
+              className="w-full flex items-center justify-end gap-2 px-2 py-2 text-sm font-bold text-ustp-text hover:underline cursor-pointer"
             >
               <Settings className="w-4 h-4" />
               <span>Settings</span>
@@ -231,7 +272,7 @@ export function AppShell({
             <button
               type="button"
               onClick={handleLogout}
-              className="w-full flex items-center justify-end gap-2 px-2 py-1.5 text-sm font-bold text-ustp-text hover:underline cursor-pointer"
+              className="w-full flex items-center justify-end gap-2 px-2 py-2 text-sm font-bold text-ustp-text hover:underline cursor-pointer"
             >
               <LogOut className="w-4 h-4" />
               <span>Logout</span>
@@ -249,7 +290,7 @@ export function AppShell({
       {/* Toast Notification Stack */}
       {toasts.length > 0 && (
         <div
-          className="fixed bottom-4 right-4 z-50 flex flex-col gap-2 max-w-sm w-full pointer-events-none"
+          className="fixed bottom-4 right-4 left-4 sm:left-auto z-50 flex flex-col gap-2 max-w-sm w-auto sm:w-full pointer-events-none"
           aria-live="polite"
         >
           {toasts.map((t) => (

@@ -108,6 +108,13 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
   const [isDrawerOpen, setIsDrawerOpen] = useState<boolean>(true);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState<boolean>(false);
   const [isChannelModalOpen, setIsChannelModalOpen] = useState<boolean>(false);
+
+  // Auto-collapse navigation drawer on mobile/tablet screens (< 1024px) on mount
+  useEffect(() => {
+    if (typeof window !== 'undefined' && window.innerWidth < 1024) {
+      setIsDrawerOpen(false);
+    }
+  }, []);
   const [announcementModalState, setAnnouncementModalState] = useState<{
     isOpen: boolean;
     editingAnnouncement: Announcement | null;

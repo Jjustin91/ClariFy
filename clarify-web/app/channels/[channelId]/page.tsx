@@ -4,16 +4,19 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import {
+  BookOpen,
   ChevronDown,
   ChevronLeft,
   ChevronUp,
   Edit3,
+  Hash,
   Lock,
   Plus,
   Search,
   Star,
   Trash2,
   Users,
+  X,
 } from 'lucide-react';
 import { AppShell } from '@/src/components/layout/AppShell';
 import {
@@ -80,6 +83,8 @@ export default function CourseHubPage() {
 
   const [channelSearch, setChannelSearch] = useState('');
   const [activeTab, setActiveTab] = useState<CourseHubTab>('messenger');
+  const [isMobileChannelsOpen, setIsMobileChannelsOpen] = useState(false);
+  const [isMobileFaqOpen, setIsMobileFaqOpen] = useState(false);
 
   // Data states
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
@@ -369,26 +374,92 @@ export default function CourseHubPage() {
 
   return (
     <AppShell title={hubHeaderTitle}>
-      <div className="flex-1 flex flex-col lg:flex-row lg:items-start min-h-[calc(100vh-3.5rem)]">
-        {/* LEFT COLUMN: ustp-navy (#1a1851) Scoped Channels Sidebar matching Oct 22 MVP & Wireframes */}
+      {/* Mobile / Tablet Quick Drawer Bar (< 1024px) for Scoped Channels & Class FAQs */}
+      <div className="lg:hidden bg-ustp-navy/95 text-white px-3 py-2 border-b border-slate-800 flex items-center justify-between gap-2 shrink-0">
+        <button
+          type="button"
+          onClick={() => {
+            setIsMobileFaqOpen(false);
+            setIsMobileChannelsOpen((prev) => !prev);
+          }}
+          aria-expanded={isMobileChannelsOpen}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-white/10 hover:bg-white/15 border border-white/15 text-xs font-extrabold text-ustp-gold truncate cursor-pointer"
+        >
+          <Hash className="w-3.5 h-3.5 shrink-0" />
+          <span className="truncate">
+            {activeChannel?.name || 'Scoped Channels'}
+          </span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => {
+            setIsMobileChannelsOpen(false);
+            setIsMobileFaqOpen((prev) => !prev);
+          }}
+          aria-expanded={isMobileFaqOpen}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-white/10 hover:bg-white/15 border border-white/15 text-xs font-bold text-white shrink-0 cursor-pointer"
+        >
+          <BookOpen className="w-3.5 h-3.5 text-ustp-gold shrink-0" />
+          <span>
+            {answeringThread && canResolve
+              ? 'Answer Ticket'
+              : `Class FAQs (${publishedFaqs.length})`}
+          </span>
+        </button>
+      </div>
+
+      {/* Mobile Backdrop when either Scoped Channels or Class FAQs slide-out drawer is open */}
+      {(isMobileChannelsOpen || isMobileFaqOpen) && (
+        <div
+          onClick={() => {
+            setIsMobileChannelsOpen(false);
+            setIsMobileFaqOpen(false);
+          }}
+          aria-hidden="true"
+          className="fixed inset-0 top-14 bg-black/45 backdrop-blur-[1px] z-30 lg:hidden"
+        />
+      )}
+
+      <div className="flex-1 flex flex-col lg:flex-row lg:items-start min-h-[calc(100vh-6.25rem)] lg:min-h-[calc(100vh-3.5rem)] relative">
+        {/* LEFT COLUMN: ustp-navy (#1a1851) Scoped Channels Sidebar
+            - Mobile (<1024px): Slide-out left drawer
+            - Desktop (lg+): Sticky docked sidebar */}
         <aside
           aria-label="Scoped Channels Sidebar"
-          className="w-full lg:w-60 lg:sticky lg:top-14 lg:h-[calc(100vh-3.5rem)] lg:overflow-y-auto lg:self-start bg-ustp-navy text-white border-r border-slate-800 shrink-0 flex flex-col justify-between p-3.5"
+          className={`fixed lg:sticky left-0 top-14 z-40 lg:z-10 h-[calc(100vh-3.5rem)] w-72 lg:w-60 overflow-y-auto lg:self-start bg-ustp-navy text-white border-r border-slate-800 shrink-0 flex flex-col justify-between p-3.5 transition-transform duration-200 ease-out shadow-2xl lg:shadow-none ${
+            isMobileChannelsOpen
+              ? 'translate-x-0'
+              : '-translate-x-full lg:translate-x-0 pointer-events-none lg:pointer-events-auto'
+          }`}
         >
           <div className="space-y-3">
             <div className="flex items-center justify-between px-1">
               <h2 className="text-xs font-extrabold uppercase tracking-wider text-ustp-gold">
                 SCOPED CHANNELS
               </h2>
-              <button
-                type="button"
-                onClick={() => setIsChannelModalOpen(true)}
-                aria-label="Open Channel Roster and Management"
-                className="text-[11px] font-bold text-slate-300 hover:text-ustp-gold flex items-center gap-1 cursor-pointer"
-              >
-                <Users className="w-3.5 h-3.5" />
-                <span>Roster</span>
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsMobileChannelsOpen(false);
+                    setIsChannelModalOpen(true);
+                  }}
+                  aria-label="Open Channel Roster and Management"
+                  className="text-[11px] font-bold text-slate-300 hover:text-ustp-gold flex items-center gap-1 cursor-pointer"
+                >
+                  <Users className="w-3.5 h-3.5" />
+                  <span>Roster</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsMobileChannelsOpen(false)}
+                  aria-label="Close channels drawer"
+                  className="lg:hidden p-1 rounded text-slate-300 hover:text-white cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
             </div>
 
             {/* Channel Search Input */}
@@ -406,7 +477,10 @@ export default function CourseHubPage() {
 
             <button
               type="button"
-              onClick={() => setIsChannelModalOpen(true)}
+              onClick={() => {
+                setIsMobileChannelsOpen(false);
+                setIsChannelModalOpen(true);
+              }}
               className="w-full flex items-center justify-between px-3 py-1.5 text-xs font-bold bg-white/10 hover:bg-white/15 text-ustp-gold rounded border border-ustp-gold/40 cursor-pointer"
             >
               <span>Add Channel</span>
@@ -421,6 +495,7 @@ export default function CourseHubPage() {
                   <Link
                     key={ch.id}
                     href={`/channels/${ch.id}`}
+                    onClick={() => setIsMobileChannelsOpen(false)}
                     className={`flex items-center justify-between px-3 py-2.5 rounded-md text-xs font-bold transition-colors ${
                       isActive
                         ? 'bg-white/15 text-white border-l-4 border-ustp-gold'
@@ -452,7 +527,7 @@ export default function CourseHubPage() {
         </aside>
 
         {/* CENTER COLUMN: Full-Height Messenger Chat Box & Course Hub Workspace */}
-        <div className="flex-1 min-w-0 flex flex-col lg:h-[calc(100vh-3.5rem)] overflow-hidden bg-white">
+        <div className="flex-1 min-w-0 flex flex-col h-[calc(100vh-6.25rem)] lg:h-[calc(100vh-3.5rem)] overflow-hidden bg-white">
           <MessengerChatBox
             channel={activeChannel}
             threadsCount={visibleThreads.length}
@@ -771,6 +846,7 @@ export default function CourseHubPage() {
                                 setMarkResolved(true);
                                 setPinTicketToFaq(true);
                                 setReplyErrors({});
+                                setIsMobileFaqOpen(true);
                               }}
                               className="px-4 py-1.5 text-xs font-extrabold bg-ustp-navy text-white rounded hover:opacity-95 cursor-pointer"
                             >
@@ -787,10 +863,16 @@ export default function CourseHubPage() {
           />
         </div>
 
-        {/* INNER-RIGHT PANEL: Class FAQs — 1-Click Converted Accordion OR Faculty "Answer Ticket" Panel (Wireframes Pages 7 & 8 + Oct 22 MVP) */}
+        {/* INNER-RIGHT PANEL: Class FAQs — 1-Click Converted Accordion OR Faculty "Answer Ticket" Panel
+            - Mobile (<1024px): Slide-out right drawer
+            - Desktop (lg+): Sticky docked sidebar */}
         <aside
           aria-label="Class FAQs and Answer Ticket Panel"
-          className="w-full lg:w-72 xl:w-80 lg:sticky lg:top-14 lg:h-[calc(100vh-3.5rem)] lg:overflow-y-auto lg:self-start bg-white border-t lg:border-t-0 lg:border-l border-slate-200 shrink-0 p-4 space-y-4"
+          className={`fixed lg:sticky right-0 top-14 z-40 lg:z-10 h-[calc(100vh-3.5rem)] w-80 sm:w-88 lg:w-72 xl:w-80 overflow-y-auto lg:self-start bg-white border-l border-slate-200 shrink-0 p-4 space-y-4 transition-transform duration-200 ease-out shadow-2xl lg:shadow-none ${
+            isMobileFaqOpen
+              ? 'translate-x-0'
+              : 'translate-x-full lg:translate-x-0 pointer-events-none lg:pointer-events-auto'
+          }`}
         >
           {answeringThread && canResolve ? (
             /* FACULTY "ANSWER TICKET" PANEL matching Wireframe Page 8 */
@@ -804,9 +886,19 @@ export default function CourseHubPage() {
                   <ChevronLeft className="w-4 h-4" />
                   <span>{answeringThread.subject_hashtag}</span>
                 </button>
-                <span className="text-[11px] font-bold text-slate-500">
-                  Answer Ticket
-                </span>
+                <div className="flex items-center gap-2">
+                  <span className="text-[11px] font-bold text-slate-500">
+                    Answer Ticket
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setIsMobileFaqOpen(false)}
+                    aria-label="Close panel"
+                    className="lg:hidden p-1 rounded text-slate-500 hover:text-slate-800 cursor-pointer"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
               </div>
 
               <div className="p-3 bg-slate-50 border border-slate-200 rounded text-xs space-y-1">
@@ -890,9 +982,19 @@ export default function CourseHubPage() {
                 <h2 className="text-sm font-extrabold text-ustp-text">
                   Class FAQs
                 </h2>
-                <span className="text-[11px] font-semibold text-slate-500">
-                  1-Click Converted
-                </span>
+                <div className="flex items-center gap-2">
+                  <span className="text-[11px] font-semibold text-slate-500">
+                    1-Click Converted
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setIsMobileFaqOpen(false)}
+                    aria-label="Close Class FAQs drawer"
+                    className="lg:hidden p-1 rounded text-slate-500 hover:text-slate-800 cursor-pointer"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
               </div>
 
               {publishedFaqs.length === 0 ? (

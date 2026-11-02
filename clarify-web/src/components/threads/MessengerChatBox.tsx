@@ -38,6 +38,44 @@ interface MessengerChatBoxProps {
   childrenWhenNotMessenger?: React.ReactNode;
 }
 
+function formatMessengerTimestampDivider(raw: string): string {
+  if (!raw) return 'NOV 1, 2026 AT 9:00 AM';
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) {
+    return `NOV 1, 2026 AT ${raw.toUpperCase()}`;
+  }
+  const datePart = parsed
+    .toLocaleDateString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+    })
+    .toUpperCase();
+  const timePart = parsed
+    .toLocaleTimeString('en-US', {
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+    })
+    .toUpperCase();
+  return `${datePart} AT ${timePart}`;
+}
+
+function shouldShowTimestampDivider(
+  currentMsg: ChatMessage,
+  prevMsg: ChatMessage | undefined
+): boolean {
+  if (!prevMsg) return true;
+  const currDate = new Date(currentMsg.created_at);
+  const prevDate = new Date(prevMsg.created_at);
+  if (Number.isNaN(currDate.getTime()) || Number.isNaN(prevDate.getTime())) {
+    return currentMsg.created_at !== prevMsg.created_at;
+  }
+  const diffMinutes =
+    Math.abs(currDate.getTime() - prevDate.getTime()) / (1000 * 60);
+  return diffMinutes >= 10;
+}
+
 export function MessengerChatBox({
   channel,
   threadsCount,
@@ -216,10 +254,10 @@ export function MessengerChatBox({
       className="flex-1 min-h-0 flex flex-col bg-white overflow-hidden"
     >
       {/* Top Gray Header Bar: Row 1 (Course Title + Gear Icon) & Row 2 (Messenger Chat | Noticeboard Feed | Isolated Q&A Threads + Action Button) */}
-      <div className="bg-slate-200/90 border-b border-slate-300 px-4 sm:px-5 py-2.5 space-y-2 relative shrink-0">
-        {/* Header Row 1: Course Title + Settings Gear Icon matching Wireframe */}
+      <div className="bg-slate-200/90 border-b border-slate-300 px-3 sm:px-5 py-2.5 space-y-2 relative shrink-0">
+        {/* Header Row 1: Course Title + Settings Gear Icon */}
         <div className="flex items-center justify-between gap-2">
-          <h2 className="text-base sm:text-lg font-extrabold text-ustp-text truncate">
+          <h2 className="text-sm sm:text-lg font-extrabold text-ustp-text truncate">
             {courseHeaderTitle}
           </h2>
 
@@ -228,7 +266,7 @@ export function MessengerChatBox({
             onClick={() => setShowSettingsMenu((prev) => !prev)}
             aria-label="Conversation options and settings"
             aria-expanded={showSettingsMenu}
-            className="p-1.5 rounded-full text-ustp-navy hover:bg-slate-300/70 transition-colors shrink-0 cursor-pointer"
+            className="p-2 rounded-full text-ustp-navy hover:bg-slate-300/70 transition-colors shrink-0 cursor-pointer"
           >
             <Settings className="w-5 h-5 stroke-[2.2]" />
           </button>
@@ -237,7 +275,7 @@ export function MessengerChatBox({
         {/* Header Row 2: 3 Separate Workspace Tabs (Messenger Chat | Noticeboard Feed | Isolated Q&A Threads) + Primary Action Button */}
         <div className="flex flex-wrap items-center justify-between gap-2 pt-1.5 border-t border-slate-300/70">
           <div
-            className="flex items-center gap-1.5 flex-wrap"
+            className="flex items-center gap-1.5 overflow-x-auto max-w-full pb-0.5 sm:pb-0"
             role="tablist"
             aria-label="Course Hub Workspace Views"
           >
@@ -340,68 +378,148 @@ export function MessengerChatBox({
 
       {/* When viewing Noticeboard Feed, Isolated Q&A Threads, or Send an Inquiry, render that separate tab content */}
       {activeTab !== 'messenger' ? (
-        <div className="flex-1 min-h-0 overflow-y-auto p-5 lg:p-6 bg-slate-50/70">
+        <div className="flex-1 min-h-0 overflow-y-auto p-4 sm:p-5 lg:p-6 bg-slate-50/70">
           {childrenWhenNotMessenger}
         </div>
       ) : (
         <>
-          {/* Center White Full-Height Scrollable Message Stream matching Wireframe Bubbles */}
+          {/* Center White Full-Height Scrollable Messenger Stream matching Attached Reference UI */}
           <div
             ref={streamContainerRef}
-            className="flex-1 min-h-0 p-5 sm:p-6 space-y-5 overflow-y-auto bg-white"
+            className="flex-1 min-h-0 px-3 sm:px-6 py-4 sm:py-5 space-y-3.5 overflow-y-auto bg-white"
           >
-            {conversationMessages.map((msg) => {
-              const isFacultySender =
-                msg.author.role === 'faculty' ||
-                msg.author.role === 'dept_head' ||
-                msg.author.role === 'it_admin';
-              const roleTitle = isFacultySender ? 'Faculty Name' : 'Student Name';
-              const displayTime = formatShortTime(msg.created_at);
-              const initial = msg.author.name
-                ? msg.author.name.charAt(0).toUpperCase()
-                : isFacultySender
-                ? 'F'
-                : 'S';
-
-              return (
-                <div
-                  key={msg.id}
-                  className="flex items-end justify-between gap-4"
-                >
-                  <div className="flex items-end gap-3 min-w-0 max-w-2xl">
-                    {/* Left Circular Sender Avatar */}
-                    <div
-                      className={`w-10 h-10 sm:w-11 sm:h-11 rounded-full shrink-0 flex items-center justify-center font-extrabold text-sm border-2 shadow-2xs select-none ${
-                        isFacultySender
-                          ? 'bg-ustp-navy text-ustp-gold border-ustp-gold'
-                          : 'bg-amber-100 text-ustp-navy border-ustp-orange'
-                      }`}
-                      title={`${msg.author.name} (${roleTitle})`}
-                    >
-                      {initial}
-                    </div>
-
-                    {/* Sender Role/Name Label + Dark Navy Rounded Chat Bubble */}
-                    <div className="space-y-1 min-w-0">
-                      <p className="text-xs font-semibold text-ustp-text pl-1">
-                        {roleTitle}{' '}
-                        <span className="text-slate-500 font-normal">
-                          · {msg.author.name}
-                        </span>
-                      </p>
-                      <div className="bg-[#0c0a3e] text-white rounded-2xl px-4 py-3 text-xs sm:text-sm leading-relaxed shadow-xs break-words">
-                        {msg.content}
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Right-Aligned Timestamp matching Wireframe ("5:30pm") */}
-                  <span className="text-[11px] text-slate-400 font-mono tabular-nums shrink-0 pb-1">
-                    {displayTime}
-                  </span>
+            {conversationMessages.length === 0 ? (
+              <div className="h-full flex flex-col items-center justify-center text-center py-12 px-4">
+                <div className="w-12 h-12 rounded-full bg-[#0084ff]/10 text-[#0084ff] flex items-center justify-center mb-3">
+                  <MessageCircle className="w-6 h-6" />
                 </div>
-              );
-            })}
+                <p className="text-sm font-bold text-slate-800">
+                  Start the conversation in {courseHeaderTitle}
+                </p>
+                <p className="text-xs text-slate-500 mt-1 max-w-xs">
+                  Your messages appear in blue on the right; classmate and faculty replies appear on the left.
+                </p>
+              </div>
+            ) : (
+              conversationMessages.map((msg, index) => {
+                const prevMsg =
+                  index > 0 ? conversationMessages[index - 1] : undefined;
+                const isLastMessage =
+                  index === conversationMessages.length - 1;
+                const showDivider = shouldShowTimestampDivider(msg, prevMsg);
+
+                const isCurrentUser =
+                  Number(msg.author.id) > 0 &&
+                  Number(currentUser.id) > 0 &&
+                  Number(msg.author.id) === Number(currentUser.id);
+
+                const isFacultySender =
+                  msg.author.role === 'faculty' ||
+                  msg.author.role === 'dept_head' ||
+                  msg.author.role === 'it_admin';
+
+                const roleLabel = isFacultySender ? 'Faculty' : 'Student';
+                const displayTime = formatShortTime(msg.created_at);
+                const initial = msg.author.name
+                  ? msg.author.name
+                      .replace(/^(ENGR\.|PROF\.|DR\.)\s*/i, '')
+                      .charAt(0)
+                      .toUpperCase()
+                  : isFacultySender
+                  ? 'F'
+                  : 'S';
+
+                return (
+                  <React.Fragment key={msg.id}>
+                    {/* Centered Uppercase Timestamp Divider (e.g., "NOV 1, 2026 AT 5:30 PM") */}
+                    {showDivider && (
+                      <div className="py-2 text-center select-none">
+                        <span className="text-[11px] font-semibold tracking-wide text-slate-400 uppercase">
+                          {formatMessengerTimestampDivider(msg.created_at)}
+                        </span>
+                      </div>
+                    )}
+
+                    {isCurrentUser ? (
+                      /* CURRENT USER MESSAGE: Right-aligned vibrant Messenger Blue Bubble (#0084ff) */
+                      <div className="flex flex-col items-end">
+                        <div className="flex items-end justify-end gap-2 w-full">
+                          <div
+                            className="bg-[#0084ff] text-white rounded-[20px] rounded-br-xs px-4 py-2.5 text-xs sm:text-sm leading-relaxed shadow-2xs max-w-[82%] sm:max-w-[68%] break-words"
+                            title={`Sent by you (${currentUser.name}) at ${displayTime}`}
+                          >
+                            {msg.content}
+                          </div>
+                        </div>
+                        {isLastMessage && (
+                          <div className="mt-1 pr-1 flex items-center gap-1.5 select-none">
+                            <span className="text-[10px] font-medium text-slate-400">
+                              Sent {displayTime}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      /* RESPONDENT MESSAGE: Left-aligned Light Gray Bubble (#f0f0f0) with circular avatar on bottom-left and sender name + role above */
+                      <div className="flex items-end justify-between gap-2">
+                        <div className="flex items-end gap-2.5 min-w-0 max-w-[85%] sm:max-w-[72%]">
+                          {/* Bottom-Left Circular Respondent Avatar */}
+                          <div
+                            className={`w-8 h-8 sm:w-9 sm:h-9 rounded-full shrink-0 flex items-center justify-center font-extrabold text-xs border shadow-2xs select-none ${
+                              isFacultySender
+                                ? 'bg-ustp-navy text-ustp-gold border-ustp-gold'
+                                : 'bg-amber-100 text-ustp-navy border-ustp-orange'
+                            }`}
+                            title={`${msg.author.name} (${roleLabel})`}
+                          >
+                            {initial}
+                          </div>
+
+                          {/* Respondent Name + Role Header above Light Gray Bubble */}
+                          <div className="space-y-1 min-w-0 flex-1">
+                            <div className="flex items-center gap-1.5 pl-1 flex-wrap">
+                              <span className="text-[11px] font-bold text-slate-700 truncate">
+                                {msg.author.name}
+                              </span>
+                              <span
+                                className={`px-1.5 py-0.2 rounded text-[10px] font-bold ${
+                                  isFacultySender
+                                    ? 'bg-ustp-navy/10 text-ustp-navy'
+                                    : 'bg-slate-200 text-slate-600'
+                                }`}
+                              >
+                                {roleLabel}
+                              </span>
+                              <span className="text-[10px] text-slate-400 font-mono tabular-nums">
+                                {displayTime}
+                              </span>
+                            </div>
+
+                            <div className="bg-[#f0f0f0] text-slate-900 rounded-[20px] rounded-bl-xs px-4 py-2.5 text-xs sm:text-sm leading-relaxed break-words">
+                              {msg.content}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Small right-side read indicator avatar on last respondent message matching Messenger UI */}
+                        {isLastMessage && (
+                          <div
+                            className={`w-4 h-4 rounded-full shrink-0 flex items-center justify-center text-[8px] font-extrabold select-none mb-1 ${
+                              isFacultySender
+                                ? 'bg-ustp-navy text-ustp-gold'
+                                : 'bg-amber-200 text-ustp-navy'
+                            }`}
+                            title={`Seen • ${displayTime}`}
+                          >
+                            {initial}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </React.Fragment>
+                );
+              })
+            )}
           </div>
 
           {/* Staged Attachment Chip */}
@@ -414,17 +532,17 @@ export function MessengerChatBox({
                 type="button"
                 onClick={() => setStagedAttachment(null)}
                 aria-label="Remove staged attachment"
-                className="text-slate-500 hover:text-red-600 p-0.5 cursor-pointer"
+                className="text-slate-500 hover:text-red-600 p-1 cursor-pointer"
               >
                 <X className="w-3.5 h-3.5" />
               </button>
             </div>
           )}
 
-          {/* Bottom Gray Messenger Composer Bar matching Wireframe (Mic+, Image, File, Rounded Pill Input, Send Arrow) */}
+          {/* Bottom Messenger Composer Bar */}
           <form
             onSubmit={handleSubmit}
-            className="bg-slate-200/90 border-t border-slate-300 px-4 py-3 flex items-center gap-2.5 shrink-0"
+            className="bg-slate-100 border-t border-slate-200 px-3 sm:px-4 py-2.5 flex items-center gap-1.5 sm:gap-2.5 shrink-0"
           >
             {/* Hidden file inputs for Photo and Document buttons */}
             <input
@@ -448,10 +566,10 @@ export function MessengerChatBox({
               onClick={handleVoiceNoteClick}
               aria-label="Attach voice message"
               title="Attach voice message"
-              className="relative p-1.5 rounded-lg text-ustp-navy hover:bg-slate-300/80 transition-colors shrink-0 cursor-pointer"
+              className="relative p-2 rounded-full text-[#0084ff] hover:bg-slate-200/80 transition-colors shrink-0 cursor-pointer"
             >
               <Mic className="w-5 h-5 stroke-[2.2]" />
-              <span className="w-3.5 h-3.5 rounded-full bg-ustp-navy text-white text-[10px] font-extrabold flex items-center justify-center absolute -bottom-0.5 -right-0.5">
+              <span className="w-3.5 h-3.5 rounded-full bg-[#0084ff] text-white text-[10px] font-extrabold flex items-center justify-center absolute -bottom-0.5 -right-0.5">
                 +
               </span>
             </button>
@@ -462,7 +580,7 @@ export function MessengerChatBox({
               onClick={() => imageInputRef.current?.click()}
               aria-label="Attach photo or image"
               title="Attach photo or image"
-              className="p-1.5 rounded-lg text-ustp-navy hover:bg-slate-300/80 transition-colors shrink-0 cursor-pointer"
+              className="p-2 rounded-full text-[#0084ff] hover:bg-slate-200/80 transition-colors shrink-0 cursor-pointer"
             >
               <ImageIcon className="w-5 h-5 stroke-[2.2]" />
             </button>
@@ -473,12 +591,12 @@ export function MessengerChatBox({
               onClick={() => fileInputRef.current?.click()}
               aria-label="Attach document file"
               title="Attach document file"
-              className="p-1.5 rounded-lg text-ustp-navy hover:bg-slate-300/80 transition-colors shrink-0 cursor-pointer"
+              className="p-2 rounded-full text-[#0084ff] hover:bg-slate-200/80 transition-colors shrink-0 cursor-pointer"
             >
               <FileText className="w-5 h-5 stroke-[2.2]" />
             </button>
 
-            {/* Rounded White Pill Message Input */}
+            {/* Rounded Pill Message Input */}
             <label htmlFor="messenger-chat-input" className="sr-only">
               Type a message in {courseHeaderTitle}
             </label>
@@ -487,16 +605,16 @@ export function MessengerChatBox({
               type="text"
               value={messageText}
               onChange={(e) => setMessageText(e.target.value)}
-              placeholder={`Message ${courseHeaderTitle} as ${currentUser.name}...`}
-              className="flex-1 min-w-0 bg-white border border-slate-300 rounded-full px-4 py-2 text-xs sm:text-sm text-ustp-text placeholder:text-slate-400 focus:outline-none focus:border-ustp-navy"
+              placeholder={`Message ${courseHeaderTitle}...`}
+              className="flex-1 min-w-0 bg-white border border-slate-300 rounded-full px-4 py-2 text-xs sm:text-sm text-ustp-text placeholder:text-slate-400 focus:outline-none focus:border-[#0084ff]"
             />
 
-            {/* Circular Dark Navy Send Arrow Button */}
+            {/* Circular Messenger Blue Send Arrow Button */}
             <button
               type="submit"
               disabled={(!messageText.trim() && !stagedAttachment) || isSending}
               aria-label="Send message"
-              className="w-9 h-9 rounded-full bg-[#0c0a3e] hover:bg-ustp-navy disabled:opacity-50 text-white flex items-center justify-center shrink-0 transition-opacity cursor-pointer"
+              className="w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-[#0084ff] hover:bg-[#0073e6] disabled:opacity-45 text-white flex items-center justify-center shrink-0 transition-opacity cursor-pointer shadow-2xs"
             >
               <ArrowRight className="w-4 h-4 stroke-[2.5]" />
             </button>

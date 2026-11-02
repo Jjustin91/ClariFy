@@ -1,48 +1,93 @@
-# ClariFy — How to Run Locally with PostgreSQL & Laravel Reverb
+# ClariFy — How to Run Locally on Windows (PowerShell & Command Prompt)
 
-This guide walks you through running **ClariFy** locally with a real **PostgreSQL** database and **Laravel Reverb** WebSockets so that every Announcement, Urgent Announcement Popup, Live Acknowledgment Counter, Course Hub Channel, Messenger Chat message, Q&A Inquiry Thread, Faculty Reply, Class FAQ conversion, and IT Administrator action is saved directly to PostgreSQL and broadcast in real time across multiple concurrent Student, Faculty, and IT Administrator sessions.
-
----
-
-## 1. Prerequisites
-
-Make sure you have the following installed on your machine:
-
-- **PostgreSQL 14+** (`psql` or pgAdmin 4)
-- **Node.js 20+** and `npm`
-- **PHP 8.2+** and **Composer** (when running the Laravel 12/13 API backend + Laravel Reverb WebSocket server)
+This guide explains what to install and run after cloning or pulling **ClariFy** from GitHub on **Windows** using **Windows PowerShell** or **Command Prompt (`cmd.exe`)**, including **PostgreSQL**, **Laravel Reverb** WebSockets, and **Next.js**.
 
 ---
 
-## 2. Create the PostgreSQL Database
+## 1. Prerequisites (Windows)
 
-Open **pgAdmin 4** or your terminal (`psql`) and create the `clarify_db` database:
+Make sure the following are installed and added to your Windows `PATH`:
 
-```sql
-CREATE DATABASE clarify_db;
+- **Git for Windows** (`git --version`)
+- **PostgreSQL 14+** (`psql --version` or **pgAdmin 4**)
+- **Node.js 20+ & npm** (`node -v` and `npm -v`)
+- **PHP 8.2+** with the `pdo_pgsql` and `pgsql` extensions enabled in `php.ini` (`php -v`)
+- **Composer 2.x** (`composer -V`)
+
+> **Tip for PHP PostgreSQL Extensions on Windows:** Open your `php.ini` file and ensure `extension=pdo_pgsql` and `extension=pgsql` are uncommented (remove the leading `;`).
+
+---
+
+## 2. What to Install After Pulling or Cloning from GitHub
+
+Whenever you `git clone` the repository for the first time or run `git pull` to fetch new updates (such as **Laravel Reverb**, **Laravel Echo**, and **Pusher JS**), run these installation steps from the project root:
+
+### Step 2.1 — Pull Latest Changes from GitHub
+
+**Windows PowerShell or Command Prompt (`cmd.exe`):**
+```powershell
+git pull origin main
 ```
 
-Or via terminal:
+### Step 2.2 — Install Backend PHP & Laravel Reverb Dependencies (`/clarify-api`)
 
-```bash
+`clarify-api/composer.json` includes `laravel/framework` and `laravel/reverb`. Install them via Composer:
+
+**Windows PowerShell or Command Prompt (`cmd.exe`):**
+```powershell
+cd clarify-api
+composer install
+```
+
+*(If you are adding Laravel Reverb to a fresh Laravel installation manually, Composer uses `composer require laravel/reverb` and `php artisan install:broadcasting --reverb`, which are already pre-configured in this repository.)*
+
+### Step 2.3 — Install Frontend Next.js & Reverb Client Packages (`/clarify-web`)
+
+`clarify-web/package.json` includes `laravel-echo`, `pusher-js`, and `pg`. Install them via `npm`:
+
+**Windows PowerShell or Command Prompt (`cmd.exe`):**
+```powershell
+cd ..\clarify-web
+npm install
+```
+
+*(If you also use the root proxy runner, run `npm install` in the workspace root directory as well.)*
+
+---
+
+## 3. Create the PostgreSQL Database (`clarify_db`)
+
+Open **pgAdmin 4** or run the following command in **Windows PowerShell** or **Command Prompt (`cmd.exe`)**:
+
+```powershell
 psql -U postgres -c "CREATE DATABASE clarify_db;"
 ```
 
+*(Enter your local `postgres` user password when prompted.)*
+
 ---
 
-## 3. Option A: Run Full Stack with Laravel API + Laravel Reverb WebSockets + Next.js Frontend
+## 4. Option A: Full Stack with Laravel API + Laravel Reverb WebSockets + Next.js (Recommended)
 
-### Step 3.1 — Configure & Seed the Laravel Backend (`/clarify-api`)
+### Step 4.1 — Configure & Seed the Laravel Backend (`/clarify-api`)
 
-1. Open a terminal and navigate to `clarify-api`:
-   ```bash
+1. Navigate to `clarify-api` and create your `.env` file from `.env.example`:
+
+   **In Windows PowerShell:**
+   ```powershell
    cd clarify-api
-   composer install
-   cp .env.example .env
+   Copy-Item .env.example .env
    php artisan key:generate
    ```
 
-2. Edit `clarify-api/.env` so the PostgreSQL and Laravel Reverb variables match your local setup:
+   **In Command Prompt (`cmd.exe`):**
+   ```cmd
+   cd clarify-api
+   copy .env.example .env
+   php artisan key:generate
+   ```
+
+2. Open `clarify-api\.env` in VS Code or Notepad and verify your PostgreSQL and **Laravel Reverb** credentials:
    ```env
    DB_CONNECTION=pgsql
    DB_HOST=127.0.0.1
@@ -61,30 +106,30 @@ psql -U postgres -c "CREATE DATABASE clarify_db;"
    REVERB_SCHEME=http
    ```
 
-3. Run migrations and seed the baseline IT Administrator account (`90001`) and initial course channel:
-   ```bash
+3. Run database migrations and seed the IT Administrator account (`90001` / `ustp2026`) and default course channels:
+
+   **Windows PowerShell or Command Prompt (`cmd.exe`):**
+   ```powershell
    php artisan migrate:fresh --seed
    ```
 
-4. Start the Laravel HTTP API server on port `8000` (Terminal 1):
-   ```bash
-   php artisan serve --host=127.0.0.1 --port=8000
+### Step 4.2 — Configure the Next.js Frontend (`/clarify-web`)
+
+1. Navigate to `clarify-web` and create `.env.local` from `.env.example`:
+
+   **In Windows PowerShell:**
+   ```powershell
+   cd ..\clarify-web
+   Copy-Item .env.example .env.local
    ```
 
-5. Start the **Laravel Reverb WebSocket Server** on port `8080` (Terminal 2):
-   ```bash
-   php artisan reverb:start --host=0.0.0.0 --port=8080
+   **In Command Prompt (`cmd.exe`):**
+   ```cmd
+   cd ..\clarify-web
+   copy .env.example .env.local
    ```
 
-### Step 3.2 — Configure & Start the Next.js Frontend (`/clarify-web`)
-
-1. Open a third terminal and navigate to `clarify-web`:
-   ```bash
-   cd clarify-web
-   npm install
-   ```
-
-2. Create `clarify-web/.env.local` with your PostgreSQL connection, Laravel backend URL, and Laravel Reverb client keys:
+2. Open `clarify-web\.env.local` and verify your PostgreSQL connection, Laravel backend URL, and **Laravel Reverb** WebSocket keys:
    ```env
    # Direct PostgreSQL connection for Next.js API routes
    DB_HOST=127.0.0.1
@@ -104,26 +149,43 @@ psql -U postgres -c "CREATE DATABASE clarify_db;"
    NEXT_PUBLIC_REVERB_SCHEME=http
    ```
 
-3. Start the Next.js development server on port `3000`:
-   ```bash
-   npm run dev
-   ```
+### Step 4.3 — Start All 3 Servers on Windows
 
-4. Open **http://localhost:3000** in your browser. Unauthenticated sessions automatically start at **/login**.
+Open **3 separate Windows PowerShell or Command Prompt (`cmd.exe`) windows**:
+
+- **Terminal 1 — Laravel HTTP API Server (Port `8000`):**
+  ```powershell
+  cd clarify-api
+  php artisan serve --host=127.0.0.1 --port=8000
+  ```
+
+- **Terminal 2 — Laravel Reverb WebSocket Server (Port `8080`):**
+  ```powershell
+  cd clarify-api
+  php artisan reverb:start --host=0.0.0.0 --port=8080
+  ```
+
+- **Terminal 3 — Next.js Frontend Server (Port `3000`):**
+  ```powershell
+  cd clarify-web
+  npm run dev
+  ```
+
+Open **http://localhost:3000** in your browser. Unauthenticated sessions automatically start at **/login**.
 
 ---
 
-## 4. Option B: Run Next.js Directly Connected to PostgreSQL (Single Command)
+## 5. Option B: Run Next.js Directly Connected to PostgreSQL (Single Terminal)
 
-Next.js includes a direct PostgreSQL adapter (`src/server/postgres-adapter.ts`) and an automatic real-time SSE + `BroadcastChannel` stream fallback (`/api/v1/realtime/stream`). Even if `php artisan reverb:start` is not running, all 4 real-time features work out of the box across multiple browser tabs and windows.
+`clarify-web` also includes a built-in PostgreSQL adapter (`src/server/postgres-adapter.ts`) and an automatic real-time SSE + `BroadcastChannel` fallback (`/api/v1/realtime/stream`). If you only want to run a single terminal without PHP/Laravel:
 
-1. Navigate to `clarify-web`:
-   ```bash
+1. Open **Windows PowerShell** or **Command Prompt (`cmd.exe`)**:
+   ```powershell
    cd clarify-web
    npm install
    ```
 
-2. Create `clarify-web/.env.local` with your PostgreSQL credentials:
+2. Ensure `clarify-web\.env.local` has your PostgreSQL credentials:
    ```env
    DB_HOST=127.0.0.1
    DB_PORT=5432
@@ -131,10 +193,9 @@ Next.js includes a direct PostgreSQL adapter (`src/server/postgres-adapter.ts`) 
    DB_USERNAME=postgres
    DB_PASSWORD=your_postgres_password
    ```
-   *(Or use a single connection string: `DATABASE_URL=postgresql://postgres:your_postgres_password@127.0.0.1:5432/clarify_db`)*
 
-3. Start the app:
-   ```bash
+3. Start the server:
+   ```powershell
    npm run dev
    ```
 
@@ -142,40 +203,38 @@ Next.js includes a direct PostgreSQL adapter (`src/server/postgres-adapter.ts`) 
 
 ---
 
-## 5. Seeded IT Admin & Student/Faculty Sign Up Workflow
+## 6. Seeded IT Admin & Student/Faculty Sign Up Workflow
 
-Only the **IT Administrator** account is seeded in the database. **Student** and **Faculty** users create their own accounts via the **Sign Up** page (`/register`):
+Only the **IT Administrator** account is pre-seeded in PostgreSQL. **Student** and **Faculty** users register their own accounts on **/register**:
 
 | Role Domain | Institutional ID | Password | How to Access |
 | :--- | :--- | :--- | :--- |
-| **IT Administrator (Seeded)** | `90001` | `ustp2026` | Pre-seeded in PostgreSQL (`DatabaseSeeder.php`). Restricted strictly to the **IT Admin Console** (`/admin`) to approve/reject pending Student & Faculty sign-ups, manage RBAC roles, trigger PRISMS sync, and inspect announcement audit logs. |
+| **IT Administrator (Seeded)** | `90001` | `ustp2026` | Pre-seeded in PostgreSQL. Restricted strictly to the **IT Admin Console** (`/admin`) to approve/reject pending Student & Faculty sign-ups, manage RBAC roles, trigger PRISMS sync, and inspect announcement audit logs. |
 | **Student** | Created on `/register` | Created on `/register` | Register on `/register` &rarr; Account is saved as `pending` &rarr; IT Admin (`90001`) clicks **Approve** in `/admin` &rarr; Student can now sign in on `/login`. |
 | **Faculty** | Created on `/register` | Created on `/register` | Register on `/register` &rarr; Account is saved as `pending` &rarr; IT Admin (`90001`) clicks **Approve** in `/admin` &rarr; Faculty can now sign in on `/login`. |
 
 ---
 
-## 6. Testing Multi-User Real-Time Features (Laravel Reverb + Per-Tab Session Isolation)
+## 7. Testing Multi-User Real-Time Features & Messenger Chat
 
-Each browser tab uses isolated `sessionStorage` credentials and unique session tokens (`clarify-jwt-{role}-{institutional_id}-{session_id}`), allowing you to sign in as **IT Admin**, **Faculty**, and multiple **Students** simultaneously in separate tabs of the same browser window without overwriting each other's session:
+Each browser tab uses isolated `sessionStorage` credentials (`clarify-jwt-{role}-{institutional_id}-{session_id}`), allowing you to sign in as **IT Admin**, **Faculty**, and multiple **Students** simultaneously in separate tabs of the same browser window:
 
 1. **Tab 1 (IT Administrator)**:
    - Open `http://localhost:3000` (redirects to `/login`) and sign in as IT Admin (`90001` / `ustp2026`).
 2. **Tab 2 (Faculty) & Tab 3 (Student)**:
-   - Open `http://localhost:3000/register` in Tab 2 and create a **Faculty** account (e.g., CITC).
-   - Open `http://localhost:3000/register` in Tab 3 and create a **Student** account (e.g., IT3R2).
-   - In **Tab 1** (`/admin`), watch the **Account Verification Queue** update automatically in real time and click **Approve** on both accounts.
-   - Sign in as **Faculty** in Tab 2 and as **Student** in Tab 3.
-3. **Verify Real-Time Broadcasting**:
-   - **Urgent Announcement Popups**: In Tab 2 (Faculty), click **Create Announcement**, toggle **Urgent High-Priority Override**, and publish. Tab 3 (Student) immediately displays the **Urgent Announcement Popup Modal**.
-   - **Live Acknowledgment Counters**: In Tab 3 (Student), click **Acknowledge Receipt** inside the urgent popup or on an announcement card. Tab 2 (Faculty) immediately updates the `acknowledged_count / total_scoped_students` progress bar and percentage in real time.
-   - **Live Channel Chat & Messaging**: Open the same Course Hub (`/channels/1`) in Tab 2 (Faculty) and Tab 3 (Student) and send messages in **Messenger Chat** — bubbles appear instantly across tabs without page reloads.
-   - **Discussion Threads & Q&A**: In Tab 3 (Student), submit a question under **+ Ask in Q&A Thread**. In Tab 2 (Faculty), watch the ticket appear live in **Isolated Q&A Threads**, click **Answer**, and pin it to **Class FAQs** — Tab 3 updates immediately.
+   - Open `http://localhost:3000/register` in Tab 2 (Faculty) and Tab 3 (Student) to create accounts.
+   - Approve both accounts in **Tab 1** (`/admin`), then sign in on Tab 2 and Tab 3.
+3. **Verify Real-Time Broadcasting & Messenger Layout**:
+   - **Live Course Hub Messenger Chat**: Open `/channels/1` in Tab 2 (Faculty) and Tab 3 (Student). Messages sent by the current user appear on the **right side in vibrant blue bubbles**, while replies from other students and faculty appear on the **left side in light gray bubbles** with their circular avatar and name/role header above the bubble.
+   - **Urgent Announcement Popups**: Publish an Urgent Announcement in Tab 2 (Faculty) — Tab 3 (Student) immediately receives the **Urgent Announcement Popup Modal**.
+   - **Live Acknowledgment Counters**: Click **Acknowledge Receipt** in Tab 3 (Student) — Tab 2 (Faculty) sees the `acknowledged_count / total_scoped_students` progress bar update live.
+   - **Discussion Threads & Q&A**: Submit an inquiry under **+ Ask in Q&A Thread** in Tab 3 (Student), answer it in Tab 2 (Faculty), and convert it to **Class FAQs** in real time.
 
 ---
 
-## 7. Verifying Records Directly in PostgreSQL
+## 8. Useful PostgreSQL Verification Queries
 
-Run the following queries in `psql` or pgAdmin to inspect your live database state:
+Run these queries in **Windows PowerShell / CMD (`psql -U postgres -d clarify_db`)** or **pgAdmin 4**:
 
 ```sql
 SELECT id, institutional_id, name, email, role, verification_status FROM users ORDER BY id DESC;

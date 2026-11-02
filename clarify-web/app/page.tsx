@@ -85,11 +85,11 @@ export default function DashboardPage() {
 
   return (
     <AppShell title="Dashboard">
-      <div className="p-6 lg:p-8 max-w-6xl w-full mx-auto space-y-8">
+      <div className="p-4 sm:p-6 lg:p-8 max-w-6xl w-full mx-auto space-y-6 sm:space-y-8">
         {/* Top Banner: Rounded ustp-gold (#fcb315) pill banner displaying "Welcome back!" matching Wireframes Pages 2 & 5 */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          <div className="inline-flex items-center px-8 py-4 rounded-2xl bg-ustp-gold text-white shadow-xs">
-            <h2 className="text-2xl sm:text-3xl font-extrabold tracking-tight drop-shadow-xs">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4">
+          <div className="inline-flex items-center px-6 sm:px-8 py-3 sm:py-4 rounded-2xl bg-ustp-gold text-white shadow-xs">
+            <h2 className="text-xl sm:text-3xl font-extrabold tracking-tight drop-shadow-xs">
               Welcome back!
             </h2>
           </div>

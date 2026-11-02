@@ -121,9 +121,9 @@ export default function AnnouncementsPage() {
 
   return (
     <AppShell title="Announcements">
-      <div className="p-6 lg:p-8 max-w-6xl w-full mx-auto space-y-6">
+      <div className="p-4 sm:p-6 lg:p-8 max-w-6xl w-full mx-auto space-y-5 sm:space-y-6">
         {/* Top Controls Row matching Wireframes Pages 2, 5 & 6 */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4">
           {/* Left: Rounded "Search....." input (FR-05) */}
           <div className="relative w-full sm:max-w-xs">
             <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-2.5" />

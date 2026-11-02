@@ -190,39 +190,39 @@ export default function AdminConsolePage() {
 
   return (
     <AppShell title="IT Admin Console">
-      <div className="p-6 lg:p-8 max-w-6xl w-full mx-auto space-y-6">
+      <div className="p-4 sm:p-6 lg:p-8 max-w-6xl w-full mx-auto space-y-5 sm:space-y-6">
         {/* Top Summary KPI Cards */}
         {metrics && (
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-            <div className="bg-white border border-slate-200 rounded-lg p-4">
+          <div className="grid grid-cols-1 xs:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+            <div className="bg-white border border-slate-200 rounded-lg p-3.5 sm:p-4">
               <p className="text-xs font-bold text-slate-500">
                 Pending Verifications
               </p>
-              <p className="text-2xl font-extrabold text-ustp-navy font-mono tabular-nums mt-1">
+              <p className="text-xl sm:text-2xl font-extrabold text-ustp-navy font-mono tabular-nums mt-1">
                 {pendingUsers.length}
               </p>
             </div>
-            <div className="bg-white border border-slate-200 rounded-lg p-4">
+            <div className="bg-white border border-slate-200 rounded-lg p-3.5 sm:p-4">
               <p className="text-xs font-bold text-slate-500">
                 PRISMS Synced Accounts
               </p>
-              <p className="text-2xl font-extrabold text-ustp-navy font-mono tabular-nums mt-1">
+              <p className="text-xl sm:text-2xl font-extrabold text-ustp-navy font-mono tabular-nums mt-1">
                 {metrics.active_users_count.toLocaleString()}
               </p>
             </div>
-            <div className="bg-white border border-slate-200 rounded-lg p-4">
+            <div className="bg-white border border-slate-200 rounded-lg p-3.5 sm:p-4">
               <p className="text-xs font-bold text-slate-500">
                 Urgent Push Latency (&le;2.0s)
               </p>
-              <p className="text-2xl font-extrabold text-emerald-700 font-mono tabular-nums mt-1">
+              <p className="text-xl sm:text-2xl font-extrabold text-emerald-700 font-mono tabular-nums mt-1">
                 {metrics.push_queue_latency_seconds}s
               </p>
             </div>
-            <div className="bg-white border border-slate-200 rounded-lg p-4">
+            <div className="bg-white border border-slate-200 rounded-lg p-3.5 sm:p-4">
               <p className="text-xs font-bold text-slate-500">
                 Immutable Edit Audits
               </p>
-              <p className="text-2xl font-extrabold text-ustp-navy font-mono tabular-nums mt-1">
+              <p className="text-xl sm:text-2xl font-extrabold text-ustp-navy font-mono tabular-nums mt-1">
                 {metrics.announcement_audits.length}
               </p>
             </div>
@@ -231,7 +231,7 @@ export default function AdminConsolePage() {
 
         {/* 4 Tabbed Views matching Section A.7 */}
         <div
-          className="flex items-center gap-2 flex-wrap border-b border-slate-200 pb-3"
+          className="flex items-center gap-2 overflow-x-auto pb-3 border-b border-slate-200 whitespace-nowrap"
           role="tablist"
           aria-label="IT Administrator Console Tabs"
         >
