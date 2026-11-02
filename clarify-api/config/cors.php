@@ -1,41 +1,38 @@
 <?php
 
 return [
+
     /*
     |--------------------------------------------------------------------------
     | Cross-Origin Resource Sharing (CORS) Configuration
     |--------------------------------------------------------------------------
-    | Configured for ClariFy Next.js 15 Web Portal (http://localhost:3000)
+    | Configured for ClariFy Next.js Web Portal (Vercel & Localhost)
     | and React Native Expo Mobile Client.
     */
 
     'paths' => ['api/*', 'sanctum/csrf-cookie'],
 
-    'allowed_methods' => ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    'allowed_methods' => ['*'],
 
     'allowed_origins' => array_values(array_unique(array_filter([
         'http://localhost:3000',
         'http://127.0.0.1:3000',
         'http://localhost:8081',
-        env('FRONTEND_URL'),
+        rtrim(env('FRONTEND_URL', ''), '/'),
     ]))),
 
     'allowed_origins_patterns' => [
         '#^https?://localhost(:\d+)?$#',
         '#^https?://127\.0\.0\.1(:\d+)?$#',
-        '#\.run\.app$#',
+        '#^https://.*\.vercel\.app$#',
     ],
 
-    'allowed_headers' => [
-        'Content-Type',
-        'Authorization',
-        'Accept',
-        'X-Requested-With',
-    ],
+    'allowed_headers' => ['*'],
 
     'exposed_headers' => [],
 
     'max_age' => 86400,
 
     'supports_credentials' => true,
+
 ];
