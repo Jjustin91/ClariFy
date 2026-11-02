@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import {
   getPostgresStatusInfo,
   handlePostgresApiRequest,
+  resolveBackendBaseUrl,
+  tryProxyToLaravel,
 } from '@/src/server/postgres-adapter';
 import {
   emitRealtimeEvent,
@@ -140,64 +142,6 @@ function classifyMutationEvent(
   return null;
 }
 
-async function tryProxyToLaravel(
-  method: string,
-  apiPath: string,
-  searchParams: URLSearchParams,
-  headers: Record<string, string | undefined>,
-  body: Record<string, unknown>
-): Promise<{ status: number; body: Record<string, unknown> } | null> {
-  const laravelBase = process.env.LARAVEL_BACKEND_URL?.trim();
-  if (!laravelBase) return null;
-
-  const qs = searchParams.toString();
-  const targetUrl = `${laravelBase.replace(/\/$/, '')}/api/v1${apiPath}${
-    qs ? `?${qs}` : ''
-  }`;
-
-  try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 3500);
-    const res = await fetch(targetUrl, {
-      method,
-      headers: {
-        Accept: 'application/json',
-        'Content-Type': 'application/json',
-        ...(headers.authorization
-          ? { Authorization: headers.authorization }
-          : {}),
-        ...(headers['x-clarify-institutional-id']
-          ? {
-              'X-Clarify-Institutional-Id':
-                headers['x-clarify-institutional-id'],
-            }
-          : {}),
-        ...(headers['x-clarify-user-id']
-          ? { 'X-Clarify-User-Id': headers['x-clarify-user-id'] }
-          : {}),
-      },
-      body:
-        method === 'GET' || method === 'HEAD'
-          ? undefined
-          : JSON.stringify(body),
-      signal: controller.signal,
-    });
-    clearTimeout(timeout);
-
-    if (res.status >= 500 || res.status === 404) {
-      return null;
-    }
-
-    const json = (await res.json().catch(() => ({}))) as Record<
-      string,
-      unknown
-    >;
-    return { status: res.status, body: json };
-  } catch {
-    return null;
-  }
-}
-
 async function handleRoute(
   req: NextRequest,
   context: { params: Promise<{ slug: string[] }> }
@@ -222,7 +166,7 @@ async function handleRoute(
         }
       : {
           driver: 'laravel-postgresql',
-          connected: false,
+          connected: Boolean(resolveBackendBaseUrl()),
           revision: getCurrentRevision(),
         };
     return NextResponse.json({ data: statusPayload }, { status: 200 });
@@ -244,7 +188,7 @@ async function handleRoute(
     'x-clarify-user-id': userIdHeader,
   };
 
-  // 1. Direct PostgreSQL execution (persists immediately into PostgreSQL database)
+  // 1. Direct PostgreSQL execution (persists immediately into Supabase / PostgreSQL database)
   let result = await handlePostgresApiRequest({
     method: effectiveMethod,
     path: apiPath,
@@ -253,27 +197,31 @@ async function handleRoute(
     body,
   });
 
-  // 2. If direct PostgreSQL is not reachable, proxy to Laravel 13 Backend if configured
+  // 2. If direct PostgreSQL is not reachable, proxy to Render Laravel Backend (NEXT_PUBLIC_API_URL / LARAVEL_BACKEND_URL)
+  let proxyError: string | undefined;
   if (!result) {
-    result = await tryProxyToLaravel(
+    const proxied = await tryProxyToLaravel(
       effectiveMethod,
       apiPath,
       req.nextUrl.searchParams,
       headers,
       body
     );
+    result = proxied.result;
+    proxyError = proxied.proxyError;
   }
 
-  // 3. If neither PostgreSQL nor Laravel is reachable, return explicit 503 error (no mock fallback)
+  // 3. If neither PostgreSQL nor Render Laravel is reachable, return explicit 503 error with clear diagnostics
   if (!result) {
     const pgStatus = await getPostgresStatusInfo();
+    const pgDetail =
+      pgStatus.error ||
+      'Check DATABASE_URL / POSTGRES_URL or DB_HOST, DB_PORT, DB_DATABASE, DB_USERNAME, DB_PASSWORD in Vercel Environment Variables';
+    const proxyDetail = proxyError ? ` | ${proxyError}` : '';
     return NextResponse.json(
       {
         status: 503,
-        message: `PostgreSQL database connection unavailable (${
-          pgStatus.error ||
-          'Check DB_HOST, DB_PORT, DB_DATABASE, DB_USERNAME, DB_PASSWORD in .env'
-        }). Please ensure PostgreSQL is running. See HOW_TO_RUN.md for setup instructions.`,
+        message: `Database / API connection unavailable (${pgDetail}${proxyDetail}).`,
       },
       { status: 503 }
     );

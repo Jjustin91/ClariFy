@@ -44,6 +44,7 @@ interface PgConnectionConfig {
   database: string;
   user: string;
   password: string;
+  ssl?: boolean;
 }
 
 interface PgAdapterState {
@@ -102,6 +103,143 @@ function parseEnvFile(filePath: string): Record<string, string> {
   return result;
 }
 
+export function resolveBackendBaseUrl(): string | null {
+  const candidates = [
+    process.env.LARAVEL_BACKEND_URL,
+    process.env.NEXT_PUBLIC_API_URL,
+    process.env.NEXT_PUBLIC_LARAVEL_URL,
+    process.env.NEXT_PUBLIC_BACKEND_URL,
+    process.env.BACKEND_URL,
+    process.env.RENDER_BACKEND_URL,
+  ];
+
+  for (const raw of candidates) {
+    const trimmed = raw?.trim();
+    if (!trimmed) continue;
+    if (trimmed.startsWith('/')) continue;
+    const normalized = trimmed
+      .replace(/\/+$/, '')
+      .replace(/\/api\/v1$/i, '')
+      .replace(/\/api$/i, '');
+    if (normalized.startsWith('http://') || normalized.startsWith('https://')) {
+      return normalized;
+    }
+  }
+  return null;
+}
+
+export async function tryProxyToLaravel(
+  method: string,
+  apiPath: string,
+  searchParams: URLSearchParams,
+  headers: Record<string, string | undefined>,
+  body: Record<string, unknown>
+): Promise<{
+  result: { status: number; body: Record<string, unknown> } | null;
+  proxyError?: string;
+}> {
+  const laravelBase = resolveBackendBaseUrl();
+  if (!laravelBase) {
+    return { result: null };
+  }
+
+  const qs = searchParams.toString();
+  const targetUrl = `${laravelBase}/api/v1${apiPath}${qs ? `?${qs}` : ''}`;
+
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 25000);
+    const res = await fetch(targetUrl, {
+      method,
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        ...(headers.authorization
+          ? { Authorization: headers.authorization }
+          : {}),
+        ...(headers['x-clarify-institutional-id']
+          ? {
+              'X-Clarify-Institutional-Id':
+                headers['x-clarify-institutional-id'],
+            }
+          : {}),
+        ...(headers['x-clarify-user-id']
+          ? { 'X-Clarify-User-Id': headers['x-clarify-user-id'] }
+          : {}),
+      },
+      body:
+        method === 'GET' || method === 'HEAD'
+          ? undefined
+          : JSON.stringify(body),
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+
+    const json = (await res.json().catch(() => ({}))) as Record<
+      string,
+      unknown
+    >;
+
+    if (res.status >= 500 || res.status === 404) {
+      return {
+        result: null,
+        proxyError: `Render backend (${laravelBase}) returned HTTP ${res.status}${
+          json.message ? `: ${String(json.message)}` : ''
+        }`,
+      };
+    }
+
+    return { result: { status: res.status, body: json } };
+  } catch (err: unknown) {
+    const msg =
+      err instanceof Error ? err.message : 'Unable to reach Render backend';
+    return {
+      result: null,
+      proxyError: `Render backend (${laravelBase}) request failed: ${msg}`,
+    };
+  }
+}
+
+function sanitizePgConnectionString(rawUrl: string): {
+  cleanUrl: string;
+  extractedHost?: string;
+  extractedDb?: string;
+  isRemote: boolean;
+} {
+  const trimmed = rawUrl.trim();
+  try {
+    const parsed = new URL(trimmed);
+    // Strip sslmode / sslrootcert / supa params that cause pg-connection-string to override ssl: { rejectUnauthorized: false }
+    parsed.searchParams.delete('sslmode');
+    parsed.searchParams.delete('sslrootcert');
+    parsed.searchParams.delete('sslcert');
+    parsed.searchParams.delete('sslkey');
+    parsed.searchParams.delete('supa');
+    const hostname = parsed.hostname || '';
+    const isLocal =
+      hostname === '127.0.0.1' ||
+      hostname === 'localhost' ||
+      hostname === '::1';
+    const dbName = parsed.pathname ? parsed.pathname.replace(/^\//, '') : undefined;
+    return {
+      cleanUrl: parsed.toString(),
+      extractedHost: hostname || undefined,
+      extractedDb: dbName || undefined,
+      isRemote: !isLocal,
+    };
+  } catch {
+    const isLocal =
+      trimmed.includes('@127.0.0.1') || trimmed.includes('@localhost');
+    const cleaned = trimmed
+      .replace(/([?&])sslmode=[^&]*(&|$)/gi, '$1')
+      .replace(/[?&]$/, '');
+    return {
+      cleanUrl: cleaned,
+      isRemote: !isLocal,
+    };
+  }
+}
+
 export function resolvePgConfig(): PgConnectionConfig {
   const cwd = process.cwd();
   const candidateFiles = [
@@ -132,13 +270,47 @@ export function resolvePgConfig(): PgConnectionConfig {
     return fallback;
   };
 
-  const connectionString =
-    getVar('DATABASE_URL') || getVar('POSTGRES_URL') || undefined;
-  const host = getVar('DB_HOST', '127.0.0.1');
+  const rawConnectionString =
+    getVar('DATABASE_URL') ||
+    getVar('POSTGRES_URL') ||
+    getVar('POSTGRES_URL_NON_POOLING') ||
+    getVar('POSTGRES_PRISMA_URL') ||
+    getVar('SUPABASE_DB_URL') ||
+    getVar('DB_URL') ||
+    undefined;
+
+  let connectionString: string | undefined = undefined;
+  let host = getVar('DB_HOST', '127.0.0.1');
   const port = Number(getVar('DB_PORT', '5432')) || 5432;
-  const database = getVar('DB_DATABASE', 'clarify_db');
+  let database = getVar('DB_DATABASE', 'clarify_db');
   const user = getVar('DB_USERNAME', 'postgres');
   const password = getVar('DB_PASSWORD', '');
+
+  let isRemoteHost =
+    host !== '127.0.0.1' && host !== 'localhost' && host !== '::1';
+
+  if (rawConnectionString) {
+    const sanitized = sanitizePgConnectionString(rawConnectionString);
+    connectionString = sanitized.cleanUrl;
+    if (sanitized.extractedHost) {
+      host = sanitized.extractedHost;
+    }
+    if (sanitized.extractedDb) {
+      database = sanitized.extractedDb;
+    }
+    isRemoteHost = sanitized.isRemote;
+  }
+
+  const sslEnv = (
+    getVar('DB_SSLMODE') ||
+    getVar('PGSSLMODE') ||
+    getVar('DB_SSL')
+  ).toLowerCase();
+  const useSsl =
+    isRemoteHost ||
+    sslEnv === 'require' ||
+    sslEnv === 'true' ||
+    sslEnv === 'no-verify';
 
   return {
     connectionString,
@@ -147,77 +319,95 @@ export function resolvePgConfig(): PgConnectionConfig {
     database,
     user,
     password,
+    ssl: useSsl,
   };
 }
 
 async function tryCreatePool(cfg: PgConnectionConfig): Promise<Pool> {
-  const candidatePasswords = Array.from(
-    new Set([cfg.password, 'postgres', 'root', 'password', ''])
-  );
+  const candidatePasswords = cfg.connectionString
+    ? [cfg.password]
+    : Array.from(
+        new Set([cfg.password, 'postgres', 'root', 'password', ''])
+      );
 
+  const sslModesToTry = cfg.ssl ? [true, false] : [false, true];
   let lastErr: unknown = null;
 
-  for (const pwd of candidatePasswords) {
-    const testPool = new Pool(
-      cfg.connectionString
-        ? {
-            connectionString: cfg.connectionString,
-            connectionTimeoutMillis: 2000,
+  for (const useSsl of sslModesToTry) {
+    const sslOption = useSsl ? { rejectUnauthorized: false } : undefined;
+
+    for (const pwd of candidatePasswords) {
+      const testPool = new Pool(
+        cfg.connectionString
+          ? {
+              connectionString: cfg.connectionString,
+              ssl: sslOption,
+              max: 5,
+              idleTimeoutMillis: 10000,
+              connectionTimeoutMillis: 10000,
+            }
+          : {
+              host: cfg.host,
+              port: cfg.port,
+              database: cfg.database,
+              user: cfg.user,
+              password: pwd,
+              ssl: sslOption,
+              max: 5,
+              idleTimeoutMillis: 10000,
+              connectionTimeoutMillis: 10000,
+            }
+      );
+
+      try {
+        const client = await testPool.connect();
+        client.release();
+        cfg.password = pwd;
+        return testPool;
+      } catch (err: unknown) {
+        await testPool.end().catch(() => {});
+        lastErr = err;
+        const pgCode = (err as { code?: string })?.code;
+
+        // 3D000 = database does not exist -> connect to 'postgres' maintenance DB and create it
+        if (pgCode === '3D000' && !cfg.connectionString) {
+          try {
+            const adminPool = new Pool({
+              host: cfg.host,
+              port: cfg.port,
+              database: 'postgres',
+              user: cfg.user,
+              password: pwd,
+              ssl: sslOption,
+              connectionTimeoutMillis: 8000,
+            });
+            const safeDbName = cfg.database.replace(/[^a-zA-Z0-9_]/g, '');
+            await adminPool.query(`CREATE DATABASE "${safeDbName}"`);
+            await adminPool.end();
+
+            const retryPool = new Pool({
+              host: cfg.host,
+              port: cfg.port,
+              database: cfg.database,
+              user: cfg.user,
+              password: pwd,
+              ssl: sslOption,
+              max: 5,
+              idleTimeoutMillis: 10000,
+              connectionTimeoutMillis: 10000,
+            });
+            const client = await retryPool.connect();
+            client.release();
+            cfg.password = pwd;
+            return retryPool;
+          } catch (createErr) {
+            lastErr = createErr;
           }
-        : {
-            host: cfg.host,
-            port: cfg.port,
-            database: cfg.database,
-            user: cfg.user,
-            password: pwd,
-            connectionTimeoutMillis: 2000,
-          }
-    );
-
-    try {
-      const client = await testPool.connect();
-      client.release();
-      cfg.password = pwd;
-      return testPool;
-    } catch (err: unknown) {
-      await testPool.end().catch(() => {});
-      lastErr = err;
-      const pgCode = (err as { code?: string })?.code;
-
-      // 3D000 = database does not exist -> connect to 'postgres' maintenance DB and create it
-      if (pgCode === '3D000' && !cfg.connectionString) {
-        try {
-          const adminPool = new Pool({
-            host: cfg.host,
-            port: cfg.port,
-            database: 'postgres',
-            user: cfg.user,
-            password: pwd,
-            connectionTimeoutMillis: 2000,
-          });
-          const safeDbName = cfg.database.replace(/[^a-zA-Z0-9_]/g, '');
-          await adminPool.query(`CREATE DATABASE "${safeDbName}"`);
-          await adminPool.end();
-
-          const retryPool = new Pool({
-            host: cfg.host,
-            port: cfg.port,
-            database: cfg.database,
-            user: cfg.user,
-            password: pwd,
-            connectionTimeoutMillis: 2000,
-          });
-          const client = await retryPool.connect();
-          client.release();
-          cfg.password = pwd;
-          return retryPool;
-        } catch (createErr) {
-          lastErr = createErr;
         }
-      }
 
-      if (cfg.connectionString) {
-        break;
+        if (cfg.connectionString) {
+          break;
+        }
       }
     }
   }
@@ -536,7 +726,7 @@ export async function getPostgresPool(): Promise<Pool | null> {
   }
 
   const now = Date.now();
-  if (!state.pool && state.lastCheckedAt && now - state.lastCheckedAt < 3000) {
+  if (!state.pool && state.lastCheckedAt && now - state.lastCheckedAt < 1000) {
     return null;
   }
 
@@ -550,7 +740,11 @@ export async function getPostgresPool(): Promise<Pool | null> {
     try {
       const cfg = resolvePgConfig();
       const pool = await tryCreatePool(cfg);
-      await ensurePostgresSchema(pool);
+      try {
+        await ensurePostgresSchema(pool);
+      } catch {
+        // If tables were already migrated by Laravel on Render/Supabase or running behind PgBouncer, continue using the connected pool
+      }
       state.pool = pool;
       state.config = cfg;
       state.initialized = true;

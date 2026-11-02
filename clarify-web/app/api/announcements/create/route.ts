@@ -2,12 +2,13 @@ import { NextRequest, NextResponse } from 'next/server';
 import {
   getPostgresStatusInfo,
   handlePostgresApiRequest,
+  tryProxyToLaravel,
 } from '@/src/server/postgres-adapter';
 import { emitRealtimeEvent } from '@/src/server/realtime-bus';
 
 /**
  * TC-NFR01 Automated Grading Alias Route: POST /api/announcements/create
- * Mirrors routes/api.php line 18 in clarify-api and persists directly to PostgreSQL.
+ * Mirrors routes/api.php line 18 in clarify-api and persists directly to PostgreSQL or Render proxy.
  */
 export async function POST(req: NextRequest) {
   let body: Record<string, unknown> = {};
@@ -17,17 +18,30 @@ export async function POST(req: NextRequest) {
     body = {};
   }
 
-  const result = await handlePostgresApiRequest({
+  const headers = {
+    authorization: req.headers.get('authorization') || undefined,
+    'x-clarify-institutional-id':
+      req.headers.get('x-clarify-institutional-id') || undefined,
+    'x-clarify-user-id': req.headers.get('x-clarify-user-id') || undefined,
+  };
+
+  let result = await handlePostgresApiRequest({
     method: 'POST',
     path: '/announcements/create',
-    headers: {
-      authorization: req.headers.get('authorization') || undefined,
-      'x-clarify-institutional-id':
-        req.headers.get('x-clarify-institutional-id') || undefined,
-      'x-clarify-user-id': req.headers.get('x-clarify-user-id') || undefined,
-    },
+    headers,
     body,
   });
+
+  if (!result) {
+    const proxied = await tryProxyToLaravel(
+      'POST',
+      '/announcements',
+      req.nextUrl.searchParams,
+      headers,
+      body
+    );
+    result = proxied.result;
+  }
 
   if (!result) {
     const pgStatus = await getPostgresStatusInfo();
