@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
+import Image from 'next/image';
 import Link from 'next/link';
 import {
   AlertCircle,
@@ -8,7 +9,6 @@ import {
   CheckCircle2,
   GraduationCap,
   ShieldCheck,
-  UserPlus,
 } from 'lucide-react';
 import { registerApi } from '@/src/lib/api-client';
 import { getFieldValidationError } from '@/src/lib/domain-logic';
@@ -101,11 +101,18 @@ export default function RegisterPage() {
       {/* Left Side: Institutional Branding Card */}
       <div className="w-full lg:w-[55%] bg-ustp-navy text-white p-8 lg:p-16 flex flex-col items-center justify-center">
         <div className="bg-slate-100 text-ustp-text border-2 border-ustp-gold rounded-lg p-8 sm:p-10 max-w-xl w-full text-center shadow-lg">
-          <div className="inline-flex items-center justify-center w-16 h-16 rounded-lg bg-ustp-navy text-ustp-gold font-extrabold text-xl border-2 border-ustp-gold mb-4">
-            USTP
+          <div className="inline-flex items-center justify-center px-5 py-3 rounded-xl bg-ustp-navy border-2 border-ustp-gold mb-4 shadow-sm">
+            <Image
+              src="/assets/aistudio/image_07899ab9.png"
+              alt="ClariFy"
+              width={180}
+              height={56}
+              unoptimized
+              className="h-12 sm:h-14 w-auto object-contain"
+            />
           </div>
-          <h1 className="text-3xl font-extrabold text-ustp-navy tracking-tight">
-            ClariFy Account Registration
+          <h1 className="text-2xl sm:text-3xl font-extrabold text-ustp-navy tracking-tight">
+            Account Registration
           </h1>
           <p className="text-sm font-bold text-ustp-blue mt-1.5">
             Student &amp; Faculty Campus Portal Sign Up
@@ -163,8 +170,15 @@ export default function RegisterPage() {
       <div className="w-full lg:w-[45%] bg-ustp-orange text-ustp-text p-8 sm:p-10 flex flex-col items-center justify-center border-l border-amber-700/30">
         <div className="w-full max-w-md space-y-5">
           <div className="flex flex-col items-center text-center">
-            <div className="w-20 h-20 rounded-full bg-ustp-gold border-4 border-ustp-navy flex flex-col items-center justify-center shadow-md">
-              <UserPlus className="w-9 h-9 text-ustp-navy stroke-[2.2]" />
+            <div className="px-5 py-2.5 rounded-2xl bg-ustp-navy border-4 border-ustp-gold flex flex-col items-center justify-center shadow-md">
+              <Image
+                src="/assets/aistudio/image_07899ab9.png"
+                alt="ClariFy"
+                width={130}
+                height={40}
+                unoptimized
+                className="h-10 w-auto object-contain"
+              />
             </div>
             <h2 className="mt-3 text-xl font-extrabold text-ustp-navy">
               Create Institutional Account

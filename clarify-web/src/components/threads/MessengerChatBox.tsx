@@ -23,7 +23,13 @@ import {
   manageChannelMemberApi,
   sendChannelChatMessageApi,
 } from '../../lib/api-client';
-import { getFieldValidationError } from '../../lib/domain-logic';
+import {
+  formatCourseHubName,
+  formatSubChannelDisplayName,
+  getCleanChannelDescription,
+  getFieldValidationError,
+  isSubChannel,
+} from '../../lib/domain-logic';
 import {
   type ReverbBroadcastPayload,
   subscribeChannelReverb,
@@ -40,12 +46,14 @@ export type CourseHubTab = 'messenger' | 'feed' | 'threads' | 'send_inquiry';
 
 interface MessengerChatBoxProps {
   channel: Channel | undefined;
+  chatChannel?: Channel | undefined;
   threadsCount: number;
   currentUser: User;
   activeTab: CourseHubTab;
   onTabChange: (tab: CourseHubTab) => void;
   isStudent: boolean;
   onOpenCreateAnnouncement: () => void;
+  onOpenAddSubChannel?: () => void;
   onMessageSentToast?: (message: string) => void;
   childrenWhenNotMessenger?: React.ReactNode;
 }
@@ -90,12 +98,14 @@ function shouldShowTimestampDivider(
 
 export function MessengerChatBox({
   channel,
+  chatChannel,
   threadsCount,
   currentUser,
   activeTab,
   onTabChange,
   isStudent,
   onOpenCreateAnnouncement,
+  onOpenAddSubChannel,
   onMessageSentToast,
   childrenWhenNotMessenger,
 }: MessengerChatBoxProps) {
@@ -108,7 +118,17 @@ export function MessengerChatBox({
     subscribeRealtimeEvents,
     showToast,
   } = useClarify();
-  const channelKey = channel?.id || 1;
+  const hubKey = channel?.id || 1;
+  const activeChatTarget = chatChannel || channel;
+  const channelKey = activeChatTarget?.id || hubKey;
+  const activeChatChannelLabel =
+    activeChatTarget && isSubChannel(activeChatTarget)
+      ? formatSubChannelDisplayName(activeChatTarget)
+      : '# general';
+  const activeChatChannelTopic =
+    activeChatTarget && isSubChannel(activeChatTarget)
+      ? getCleanChannelDescription(activeChatTarget.description)
+      : null;
   const [messagesByChannel, setMessagesByChannel] = useState<
     Record<number, ChatMessage[]>
   >({});
@@ -625,10 +645,11 @@ export function MessengerChatBox({
                   <MessageCircle className="w-6 h-6" />
                 </div>
                 <p className="text-sm font-bold text-ustp-navy">
-                  Start the conversation in {courseHeaderTitle}
+                  Welcome to {activeChatChannelLabel} in {courseHeaderTitle}
                 </p>
                 <p className="text-xs text-slate-500 mt-1 max-w-xs">
-                  Your messages appear in USTP Navy on the right; classmate and faculty replies appear in USTP Cream on the left.
+                  {activeChatChannelTopic ||
+                    'Your messages appear in USTP Navy on the right; classmate and faculty replies appear in USTP Cream on the left.'}
                 </p>
               </div>
             ) : (
@@ -829,14 +850,14 @@ export function MessengerChatBox({
 
             {/* Rounded Pill Message Input */}
             <label htmlFor="messenger-chat-input" className="sr-only">
-              Type a message in {courseHeaderTitle}
+              Type a message in {activeChatChannelLabel} ({courseHeaderTitle})
             </label>
             <input
               id="messenger-chat-input"
               type="text"
               value={messageText}
               onChange={(e) => setMessageText(e.target.value)}
-              placeholder={`Message ${courseHeaderTitle}...`}
+              placeholder={`Message ${activeChatChannelLabel} in ${courseHeaderTitle}...`}
               className="flex-1 min-w-0 bg-white border border-slate-300 rounded-full px-4 py-2 text-xs sm:text-sm text-ustp-text placeholder:text-slate-400 focus:outline-none focus:border-ustp-navy focus:ring-2 focus:ring-ustp-gold/40"
             />
 

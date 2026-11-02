@@ -7,10 +7,13 @@ import {
   BookOpen,
   ChevronDown,
   ChevronLeft,
+  ChevronRight,
   ChevronUp,
   Edit3,
   Hash,
   Lock,
+  Megaphone,
+  MessageSquare,
   Plus,
   Search,
   Star,
@@ -49,8 +52,12 @@ import {
   canPublishOrManageAnnouncements,
   canResolveOrPinThreads,
   canStudentModifyOwnInquiry,
+  formatCourseHubName,
+  formatSubChannelDisplayName,
   getFieldValidationError,
+  getSubChannelsForHub,
   isThreadVisibleToUser,
+  resolveCourseHubSelection,
 } from '@/src/lib/domain-logic';
 import type {
   Announcement,
@@ -71,19 +78,40 @@ export default function CourseHubPage() {
     channels,
     announcementVersion,
     openAnnouncementModal,
-    setIsChannelModalOpen,
+    openCourseHubModal,
+    openAddSubChannelModal,
     subscribeRealtimeEvents,
     showToast,
   } = useClarify();
 
-  const activeChannel =
-    channels.find((c) => c.id === requestedChannelId) || channels[0];
-  const channelId = activeChannel?.id || requestedChannelId;
+  const {
+    courseHubs,
+    activeChannel,
+    activeSubChannel,
+    parentHubId,
+    channelId,
+  } = resolveCourseHubSelection(channels, requestedChannelId);
 
   const [channelSearch, setChannelSearch] = useState('');
   const [activeTab, setActiveTab] = useState<CourseHubTab>('messenger');
+  const [collapsedHubIds, setCollapsedHubIds] = useState<number[]>([]);
   const [isMobileChannelsOpen, setIsMobileChannelsOpen] = useState(false);
   const [isMobileFaqOpen, setIsMobileFaqOpen] = useState(false);
+
+  // Switch back to messenger view automatically when user navigates to a sub-channel URL
+  useEffect(() => {
+    if (parentHubId !== null) {
+      setActiveTab('messenger');
+    }
+  }, [requestedChannelId, parentHubId]);
+
+  const toggleHubExpanded = (hubId: number) => {
+    setCollapsedHubIds((prev) =>
+      prev.includes(hubId)
+        ? prev.filter((id) => id !== hubId)
+        : [...prev, hubId]
+    );
+  };
 
   // Data states
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
@@ -114,39 +142,42 @@ export default function CourseHubPage() {
   // Class FAQs Accordion open state
   const [openFaqIds, setOpenFaqIds] = useState<number[]>([]);
 
-  const loadHubData = useCallback(async () => {
-    if (!isAuthReady || !isAuthenticated || user.role === 'it_admin') {
-      return;
-    }
-    if (!hasLoadedOnceRef.current) {
-      setIsLoading(true);
-    }
-    setError(null);
-    try {
-      const [annRes, threadRes] = await Promise.all([
-        getAnnouncementsApi({ channel_id: channelId, per_page: 20 }),
-        getChannelThreadsApi(channelId),
-      ]);
-      setAnnouncements(annRes.data);
-      setThreads(threadRes.data);
-      const faqIds = threadRes.data
-        .filter((t) => t.is_pinned_faq)
-        .map((t) => t.id);
-      if (faqIds.length > 0) {
-        setOpenFaqIds((prev) =>
-          prev.length === 0 ? faqIds : Array.from(new Set([...prev, ...faqIds]))
-        );
+  const loadHubData = useCallback(
+    async (targetChannelId: number) => {
+      if (!isAuthReady || !isAuthenticated || user.role === 'it_admin') {
+        return;
       }
-      hasLoadedOnceRef.current = true;
-    } catch (err) {
-      const apiErr = err as LaravelValidationError;
-      setError(
-        apiErr.message || 'Failed to load Course Hub workspace data.'
-      );
-    } finally {
-      setIsLoading(false);
-    }
-  }, [channelId, isAuthReady, isAuthenticated, user.role]);
+      if (!hasLoadedOnceRef.current) {
+        setIsLoading(true);
+      }
+      setError(null);
+      try {
+        const [annRes, threadRes] = await Promise.all([
+          getAnnouncementsApi({ channel_id: targetChannelId, per_page: 20 }),
+          getChannelThreadsApi(targetChannelId),
+        ]);
+        setAnnouncements(annRes.data);
+        setThreads(threadRes.data);
+        const faqIds = threadRes.data
+          .filter((t) => t.is_pinned_faq)
+          .map((t) => t.id);
+        if (faqIds.length > 0) {
+          setOpenFaqIds((prev) =>
+            prev.length === 0 ? faqIds : Array.from(new Set([...prev, ...faqIds]))
+          );
+        }
+        hasLoadedOnceRef.current = true;
+      } catch (err) {
+        const apiErr = err as LaravelValidationError;
+        setError(
+          apiErr.message || 'Failed to load Course Hub workspace data.'
+        );
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [isAuthReady, isAuthenticated, user.role]
+  );
 
   useEffect(() => {
     if (!isAuthReady || !isAuthenticated) {
@@ -156,9 +187,10 @@ export default function CourseHubPage() {
       router.replace('/admin');
       return;
     }
-    loadHubData();
+    void loadHubData(channelId);
   }, [
     loadHubData,
+    channelId,
     announcementVersion,
     isAuthReady,
     isAuthenticated,
@@ -204,7 +236,7 @@ export default function CourseHubPage() {
             );
           }
         } else {
-          void loadHubData();
+          void loadHubData(channelId);
         }
         return;
       }
@@ -213,7 +245,7 @@ export default function CourseHubPage() {
         event.type === 'thread.deleted' ||
         event.type.startsWith('announcement.')
       ) {
-        void loadHubData();
+        void loadHubData(channelId);
       }
     };
 
@@ -240,11 +272,20 @@ export default function CourseHubPage() {
   const canResolve = canResolveOrPinThreads(user.role);
   const isStudent = user.role === 'student';
 
-  const filteredChannels = channels.filter((c) =>
-    `${c.name} ${c.course_code || ''}`
+  const searchQuery = channelSearch.trim().toLowerCase();
+  const filteredCourseHubs = courseHubs.filter((hub) => {
+    if (!searchQuery) return true;
+    const hubMatches = `${hub.name} ${hub.course_code || ''} ${
+      hub.scope_section || ''
+    }`
       .toLowerCase()
-      .includes(channelSearch.trim().toLowerCase())
-  );
+      .includes(searchQuery);
+    if (hubMatches) return true;
+    const subChannels = getSubChannelsForHub(channels, hub.id);
+    return subChannels.some((sub) =>
+      sub.name.toLowerCase().includes(searchQuery)
+    );
+  });
 
   const visibleThreads = threads.filter((t) => isThreadVisibleToUser(t, user));
   const publishedFaqs = threads.filter((t) => t.is_pinned_faq);
@@ -270,7 +311,7 @@ export default function CourseHubPage() {
       setInquirySubject('');
       setInquiryContent('');
       setInquiryPrivate(false);
-      await loadHubData();
+      await loadHubData(channelId);
       setActiveTab('threads');
     } catch (err) {
       const apiErr = err as LaravelValidationError;
@@ -292,7 +333,7 @@ export default function CourseHubPage() {
       });
       showToast(res.message || 'Inquiry updated.', 'success');
       setEditingThreadId(null);
-      await loadHubData();
+      await loadHubData(channelId);
     } catch (err) {
       const apiErr = err as LaravelValidationError;
       showToast(apiErr.message || 'Could not update inquiry.', 'error');
@@ -303,7 +344,7 @@ export default function CourseHubPage() {
     try {
       const res = await deleteThreadApi(threadId);
       showToast(res.message || 'Inquiry deleted.', 'info');
-      await loadHubData();
+      await loadHubData(channelId);
     } catch (err) {
       const apiErr = err as LaravelValidationError;
       showToast(apiErr.message || 'Could not delete inquiry.', 'error');
@@ -328,7 +369,7 @@ export default function CourseHubPage() {
       }
       setAnsweringThread(null);
       setReplyContent('');
-      await loadHubData();
+      await loadHubData(channelId);
     } catch (err) {
       const apiErr = err as LaravelValidationError;
       if (apiErr.status === 422 && apiErr.errors) {
@@ -349,7 +390,7 @@ export default function CourseHubPage() {
       if (!openFaqIds.includes(threadId)) {
         setOpenFaqIds((prev) => [threadId, ...prev]);
       }
-      await loadHubData();
+      await loadHubData(channelId);
     } catch (err) {
       const apiErr = err as LaravelValidationError;
       showToast(apiErr.message || 'Failed to pin FAQ.', 'error');
@@ -360,11 +401,20 @@ export default function CourseHubPage() {
   const contentError = getFieldValidationError(inquiryErrors, 'content');
   const replyContentError = getFieldValidationError(replyErrors, 'content');
 
+  const activeSubLabel = activeSubChannel
+    ? formatSubChannelDisplayName(activeSubChannel)
+    : '# general';
+
   const hubHeaderTitle = activeChannel
-    ? `${activeChannel.scope_section || 'IT3R2'} — ${activeChannel.name.replace(
-        /^#\s*/,
-        ''
-      )} Hub`
+    ? `${activeChannel.scope_section || 'IT3R2'} — ${formatCourseHubName(
+        activeChannel
+      )} Hub (${
+        activeTab === 'feed'
+          ? 'Noticeboard Feed'
+          : activeTab === 'threads' || activeTab === 'send_inquiry'
+          ? 'Isolated Q&A Threads'
+          : activeSubLabel
+      })`
     : 'IT3R2 — Software Engineering Hub';
 
   if (!isAuthReady || !isAuthenticated || user.role === 'it_admin') {
@@ -373,7 +423,7 @@ export default function CourseHubPage() {
 
   return (
     <AppShell title={hubHeaderTitle}>
-      {/* Mobile / Tablet Quick Drawer Bar (< 1024px) for Scoped Channels & Class FAQs */}
+      {/* Mobile / Tablet Quick Drawer Bar (< 1024px) for Course Hubs & Class FAQs */}
       <div className="lg:hidden bg-ustp-navy/95 text-white px-3 py-2 border-b border-slate-800 flex items-center justify-between gap-2 shrink-0">
         <button
           type="button"
@@ -386,7 +436,12 @@ export default function CourseHubPage() {
         >
           <Hash className="w-3.5 h-3.5 shrink-0" />
           <span className="truncate">
-            {activeChannel?.name || 'Scoped Channels'}
+            {formatCourseHubName(activeChannel)} •{' '}
+            {activeTab === 'feed'
+              ? 'Noticeboard'
+              : activeTab === 'threads'
+              ? 'Q&A'
+              : activeSubLabel}
           </span>
         </button>
 
@@ -408,7 +463,7 @@ export default function CourseHubPage() {
         </button>
       </div>
 
-      {/* Mobile Backdrop when either Scoped Channels or Class FAQs slide-out drawer is open */}
+      {/* Mobile Backdrop when either Course Hubs or Class FAQs slide-out drawer is open */}
       {(isMobileChannelsOpen || isMobileFaqOpen) && (
         <div
           onClick={() => {
@@ -421,12 +476,12 @@ export default function CourseHubPage() {
       )}
 
       <div className="flex-1 min-h-0 flex flex-col lg:flex-row lg:items-stretch overflow-hidden relative">
-        {/* LEFT COLUMN: ustp-navy (#1a1851) Scoped Channels Sidebar
+        {/* LEFT COLUMN: ustp-navy (#1a1851) Discord-Style Course Hubs & Sub-Channels Sidebar
             - Mobile (<1024px): Slide-out left drawer
             - Desktop (lg+): Sticky docked sidebar */}
         <aside
-          aria-label="Scoped Channels Sidebar"
-          className={`fixed lg:sticky left-0 top-14 z-40 lg:z-10 h-[calc(100dvh-3.5rem)] lg:h-full w-72 lg:w-60 overflow-y-auto lg:self-start bg-ustp-navy text-white border-r border-slate-800 shrink-0 flex flex-col justify-between p-3.5 transition-transform duration-200 ease-out shadow-2xl lg:shadow-none ${
+          aria-label="Course Hubs and Channels Sidebar"
+          className={`fixed lg:sticky left-0 top-14 z-40 lg:z-10 h-[calc(100dvh-3.5rem)] lg:h-full w-72 lg:w-64 overflow-y-auto lg:self-start bg-ustp-navy text-white border-r border-slate-800 shrink-0 flex flex-col justify-between p-3.5 transition-transform duration-200 ease-out shadow-2xl lg:shadow-none ${
             isMobileChannelsOpen
               ? 'translate-x-0'
               : '-translate-x-full lg:translate-x-0 pointer-events-none lg:pointer-events-auto'
@@ -435,71 +490,251 @@ export default function CourseHubPage() {
           <div className="space-y-3">
             <div className="flex items-center justify-between px-1">
               <h2 className="text-xs font-extrabold uppercase tracking-wider text-ustp-gold">
-                SCOPED CHANNELS
+                COURSE HUBS
               </h2>
               <button
                 type="button"
                 onClick={() => setIsMobileChannelsOpen(false)}
-                aria-label="Close channels drawer"
+                aria-label="Close course hubs drawer"
                 className="lg:hidden p-1 rounded text-slate-300 hover:text-white cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
-            {/* Channel Search Input */}
+            {/* Course Hub & Channel Search Input */}
             <div className="relative">
               <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2" />
               <input
                 type="search"
                 value={channelSearch}
                 onChange={(e) => setChannelSearch(e.target.value)}
-                placeholder="Search channels..."
-                aria-label="Filter scoped channels"
+                placeholder="Search hubs or #channels..."
+                aria-label="Filter course hubs and channels"
                 className="w-full pl-8 pr-2.5 py-1.5 text-xs bg-white/10 text-white placeholder:text-slate-400 rounded border border-white/15 focus:outline-none focus:border-ustp-gold"
               />
             </div>
 
+            {/* Top Action Button: + Add Course Hub */}
             <button
               type="button"
               onClick={() => {
                 setIsMobileChannelsOpen(false);
-                setIsChannelModalOpen(true);
+                openCourseHubModal('create_hub');
               }}
-              className="w-full flex items-center justify-between px-3 py-1.5 text-xs font-bold bg-white/10 hover:bg-white/15 text-ustp-gold rounded border border-ustp-gold/40 cursor-pointer"
+              className="w-full flex items-center justify-between px-3 py-2 text-xs font-extrabold bg-ustp-gold hover:opacity-95 text-ustp-navy rounded-md shadow-xs cursor-pointer"
             >
-              <span>Add Channel</span>
-              <Plus className="w-3.5 h-3.5" />
+              <span>+ Add Course Hub</span>
+              <Plus className="w-3.5 h-3.5 stroke-[2.5]" />
             </button>
 
-            {/* Scoped Channel List matching Oct 22 MVP (# IT314 SoftEng, # IT311 InfoAssurance, etc.) */}
-            <nav aria-label="Course Hub Channels" className="space-y-1 pt-1">
-              {filteredChannels.map((ch) => {
-                const isActive = ch.id === activeChannel?.id;
+            {/* Discord-Style Expandable Course Hub Tree */}
+            <nav aria-label="Course Hubs Hierarchy" className="space-y-2.5 pt-1">
+              {filteredCourseHubs.map((hub) => {
+                const isCurrentHub = hub.id === activeChannel?.id;
+                const isExpanded =
+                  !collapsedHubIds.includes(hub.id) || Boolean(searchQuery);
+                const hubSubChannels = getSubChannelsForHub(channels, hub.id);
+
                 return (
-                  <Link
-                    key={ch.id}
-                    href={`/channels/${ch.id}`}
-                    onClick={() => setIsMobileChannelsOpen(false)}
-                    className={`flex items-center justify-between px-3 py-2.5 rounded-md text-xs font-bold transition-colors ${
-                      isActive
-                        ? 'bg-white/15 text-white border-l-4 border-ustp-gold'
-                        : 'text-slate-300 hover:bg-white/10 hover:text-white'
+                  <div
+                    key={hub.id}
+                    className={`rounded-lg border transition-colors ${
+                      isCurrentHub
+                        ? 'bg-white/10 border-ustp-gold/50'
+                        : 'bg-white/[0.04] border-white/10 hover:border-white/20'
                     }`}
                   >
-                    <span className="truncate">{ch.name}</span>
-                    {ch.unread_count !== undefined && ch.unread_count > 0 && (
-                      <span className="ml-2 px-1.5 py-0.5 text-[10px] font-mono font-extrabold bg-ustp-orange text-ustp-navy rounded-full tabular-nums">
-                        {ch.unread_count}
-                      </span>
+                    {/* Course Hub Category Header Row */}
+                    <div className="flex items-center justify-between gap-1 px-2.5 py-2">
+                      <button
+                        type="button"
+                        onClick={() => toggleHubExpanded(hub.id)}
+                        aria-expanded={isExpanded}
+                        className="flex items-center gap-1.5 min-w-0 flex-1 text-left cursor-pointer group"
+                      >
+                        {isExpanded ? (
+                          <ChevronDown className="w-3.5 h-3.5 text-ustp-gold shrink-0" />
+                        ) : (
+                          <ChevronRight className="w-3.5 h-3.5 text-slate-400 group-hover:text-white shrink-0" />
+                        )}
+                        <span
+                          className={`text-xs font-extrabold truncate ${
+                            isCurrentHub ? 'text-ustp-gold' : 'text-white'
+                          }`}
+                        >
+                          {formatCourseHubName(hub)}
+                        </span>
+                      </button>
+
+                      <div className="flex items-center gap-1 shrink-0">
+                        {hub.unread_count !== undefined &&
+                          hub.unread_count > 0 && (
+                            <span
+                              title={`${hub.unread_count} open Q&A inquiries`}
+                              className="px-1.5 py-0.5 text-[10px] font-mono font-extrabold bg-ustp-orange text-ustp-navy rounded-full tabular-nums"
+                            >
+                              {hub.unread_count}
+                            </span>
+                          )}
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setIsMobileChannelsOpen(false);
+                            openAddSubChannelModal(hub.id);
+                          }}
+                          title={`Add channel inside ${formatCourseHubName(hub)}`}
+                          aria-label={`Add channel inside ${formatCourseHubName(
+                            hub
+                          )}`}
+                          className="p-1 rounded hover:bg-white/15 text-slate-300 hover:text-ustp-gold cursor-pointer"
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Expanded Course Hub Contents: Given Views + Inner Chat Channels */}
+                    {isExpanded && (
+                      <div className="px-2 pb-2.5 pt-0.5 space-y-2 border-t border-white/10">
+                        {/* 1. Given / Built-in Spaces: Noticeboard Feed & Isolated Q&A Threads */}
+                        <div className="space-y-0.5 pt-1">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsMobileChannelsOpen(false);
+                              setActiveTab('feed');
+                              if (!isCurrentHub || activeSubChannel) {
+                                router.push(`/channels/${hub.id}`);
+                              }
+                            }}
+                            className={`w-full flex items-center gap-2 px-2.5 py-1.5 rounded text-[11px] font-bold transition-colors cursor-pointer ${
+                              isCurrentHub && activeTab === 'feed'
+                                ? 'bg-ustp-gold text-ustp-navy font-extrabold'
+                                : 'text-slate-300 hover:bg-white/10 hover:text-white'
+                            }`}
+                          >
+                            <Megaphone className="w-3.5 h-3.5 shrink-0" />
+                            <span className="truncate">Noticeboard Feed</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsMobileChannelsOpen(false);
+                              setActiveTab('threads');
+                              if (!isCurrentHub || activeSubChannel) {
+                                router.push(`/channels/${hub.id}`);
+                              }
+                            }}
+                            className={`w-full flex items-center justify-between gap-2 px-2.5 py-1.5 rounded text-[11px] font-bold transition-colors cursor-pointer ${
+                              isCurrentHub &&
+                              (activeTab === 'threads' ||
+                                activeTab === 'send_inquiry')
+                                ? 'bg-ustp-gold text-ustp-navy font-extrabold'
+                                : 'text-slate-300 hover:bg-white/10 hover:text-white'
+                            }`}
+                          >
+                            <span className="flex items-center gap-2 min-w-0">
+                              <MessageSquare className="w-3.5 h-3.5 shrink-0" />
+                              <span className="truncate">
+                                Isolated Q&amp;A Threads
+                              </span>
+                            </span>
+                            {hub.unread_count !== undefined &&
+                              hub.unread_count > 0 && (
+                                <span
+                                  className={`px-1.5 py-0.2 rounded-full text-[10px] font-mono font-extrabold tabular-nums ${
+                                    isCurrentHub &&
+                                    (activeTab === 'threads' ||
+                                      activeTab === 'send_inquiry')
+                                      ? 'bg-ustp-navy text-ustp-gold'
+                                      : 'bg-white/15 text-ustp-gold'
+                                  }`}
+                                >
+                                  {hub.unread_count}
+                                </span>
+                              )}
+                          </button>
+                        </div>
+
+                        {/* 2. Inner Channels inside Course Hub (# general + custom sub-channels + Add Channel) */}
+                        <div className="space-y-0.5 pt-1 border-t border-white/10">
+                          <div className="flex items-center justify-between px-2 py-1">
+                            <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400">
+                              Channels
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setIsMobileChannelsOpen(false);
+                                openAddSubChannelModal(hub.id);
+                              }}
+                              className="inline-flex items-center gap-0.5 text-[10px] font-extrabold text-ustp-gold hover:underline cursor-pointer"
+                            >
+                              <Plus className="w-3 h-3" />
+                              <span>Add Channel</span>
+                            </button>
+                          </div>
+
+                          {/* Built-in default # general chat channel */}
+                          <Link
+                            href={`/channels/${hub.id}`}
+                            onClick={() => {
+                              setIsMobileChannelsOpen(false);
+                              setActiveTab('messenger');
+                            }}
+                            className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded text-xs font-mono font-bold transition-colors ${
+                              isCurrentHub &&
+                              !activeSubChannel &&
+                              activeTab === 'messenger'
+                                ? 'bg-white/20 text-white border-l-2 border-ustp-gold'
+                                : 'text-slate-300 hover:bg-white/10 hover:text-white'
+                            }`}
+                          >
+                            <Hash className="w-3.5 h-3.5 text-ustp-gold shrink-0" />
+                            <span className="truncate">general</span>
+                          </Link>
+
+                          {/* User-created sub-channels inside this Course Hub */}
+                          {hubSubChannels.map((sub) => {
+                            const isSubActive =
+                              activeSubChannel?.id === sub.id &&
+                              activeTab === 'messenger';
+                            const cleanSubName = sub.name
+                              .replace(/^#\s*/, '')
+                              .trim();
+
+                            return (
+                              <Link
+                                key={sub.id}
+                                href={`/channels/${sub.id}`}
+                                onClick={() => {
+                                  setIsMobileChannelsOpen(false);
+                                  setActiveTab('messenger');
+                                }}
+                                className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded text-xs font-mono font-bold transition-colors ${
+                                  isSubActive
+                                    ? 'bg-white/20 text-white border-l-2 border-ustp-gold'
+                                    : 'text-slate-300 hover:bg-white/10 hover:text-white'
+                                }`}
+                              >
+                                <Hash className="w-3.5 h-3.5 text-ustp-gold shrink-0" />
+                                <span className="truncate">{cleanSubName}</span>
+                              </Link>
+                            );
+                          })}
+                        </div>
+                      </div>
                     )}
-                  </Link>
+                  </div>
                 );
               })}
             </nav>
           </div>
 
-          {/* Bottom Channel Scope Metadata: Current Faculty & Total Enrolled Count */}
+          {/* Bottom Course Hub Scope Metadata: Current Faculty & Total Enrolled Count */}
           <div className="pt-4 mt-4 border-t border-white/10 text-[11px] text-slate-300 space-y-1.5">
             <p className="font-bold text-ustp-gold">
               {activeChannel?.scope_college || 'CITC'} •{' '}
@@ -552,6 +787,7 @@ export default function CourseHubPage() {
         <div className="flex-1 min-w-0 min-h-0 flex flex-col h-full overflow-hidden bg-white">
           <MessengerChatBox
             channel={activeChannel}
+            chatChannel={activeSubChannel || activeChannel}
             threadsCount={visibleThreads.length}
             currentUser={user}
             activeTab={activeTab}
@@ -560,12 +796,16 @@ export default function CourseHubPage() {
             onOpenCreateAnnouncement={() =>
               openAnnouncementModal({ defaultChannelId: channelId })
             }
+            onOpenAddSubChannel={() => openAddSubChannelModal(channelId)}
             onMessageSentToast={(msg) => showToast(msg, 'success')}
             childrenWhenNotMessenger={
               isLoading ? (
                 <SkeletonCards count={2} />
               ) : error ? (
-                <ErrorBanner message={error} onRetry={loadHubData} />
+                <ErrorBanner
+                  message={error}
+                  onRetry={() => void loadHubData(channelId)}
+                />
               ) : activeTab === 'send_inquiry' ? (
                 /* STUDENT "SEND AN INQUIRY / CREATE TICKET" VIEW (Wireframe Page 4) */
                 <section
@@ -696,7 +936,7 @@ export default function CourseHubPage() {
                         key={ann.id}
                         announcement={ann}
                         variant="feed"
-                        onUpdated={loadHubData}
+                        onUpdated={() => void loadHubData(channelId)}
                       />
                     ))}
                   </div>

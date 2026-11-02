@@ -1,12 +1,12 @@
 'use client';
 
 import React, { useState } from 'react';
+import Image from 'next/image';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
   AlertCircle,
   ShieldAlert,
-  ShieldCheck,
   UserCheck,
   UserPlus,
 } from 'lucide-react';
@@ -93,13 +93,17 @@ export default function LoginPage() {
       {/* Left Side (70% width on desktop): Deep ustp-navy (#1a1851) background with centered institutional branding card */}
       <div className="w-full lg:w-[70%] bg-ustp-navy text-white p-8 lg:p-16 flex flex-col items-center justify-center">
         <div className="bg-slate-100 text-ustp-text border-2 border-ustp-gold rounded-lg p-8 sm:p-12 max-w-xl w-full text-center shadow-lg">
-          <div className="inline-flex items-center justify-center w-20 h-20 rounded-lg bg-ustp-navy text-ustp-gold font-extrabold text-2xl border-2 border-ustp-gold mb-5">
-            USTP
+          <div className="inline-flex items-center justify-center px-6 py-3.5 rounded-xl bg-ustp-navy border-2 border-ustp-gold mb-4 shadow-sm">
+            <Image
+              src="/assets/aistudio/image_07899ab9.png"
+              alt="ClariFy"
+              width={200}
+              height={64}
+              unoptimized
+              className="h-14 sm:h-16 w-auto object-contain"
+            />
           </div>
-          <h1 className="text-3xl sm:text-4xl font-extrabold text-ustp-navy tracking-tight">
-            ClariFy
-          </h1>
-          <p className="text-sm sm:text-base font-bold text-ustp-blue mt-2">
+          <p className="text-sm sm:text-base font-bold text-ustp-blue mt-1">
             Unified Campus Noticeboard &amp; Scoped Communication Platform
           </p>
           <p className="text-xs sm:text-sm text-slate-600 mt-3 leading-relaxed">
@@ -160,11 +164,15 @@ export default function LoginPage() {
       <div className="w-full lg:w-[30%] bg-ustp-orange text-ustp-text p-8 sm:p-10 flex flex-col items-center justify-center border-l border-amber-700/30">
         <div className="w-full max-w-xs space-y-6">
           <div className="flex flex-col items-center">
-            <div className="w-28 h-28 rounded-full bg-ustp-gold border-4 border-ustp-navy flex flex-col items-center justify-center shadow-md">
-              <ShieldCheck className="w-12 h-12 text-ustp-navy stroke-[2.2]" />
-              <span className="text-[11px] font-extrabold text-ustp-navy tracking-tight mt-0.5">
-                ClariFy
-              </span>
+            <div className="px-5 py-3 rounded-2xl bg-ustp-navy border-4 border-ustp-gold flex flex-col items-center justify-center shadow-md">
+              <Image
+                src="/assets/aistudio/image_07899ab9.png"
+                alt="ClariFy"
+                width={140}
+                height={44}
+                unoptimized
+                className="h-11 w-auto object-contain"
+              />
             </div>
             <h2 className="mt-4 text-lg font-extrabold text-ustp-navy">
               Institutional Sign In

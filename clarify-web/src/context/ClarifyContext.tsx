@@ -53,6 +53,10 @@ interface ClarifyContextValue {
   setIsSettingsModalOpen: React.Dispatch<React.SetStateAction<boolean>>;
   isChannelModalOpen: boolean;
   setIsChannelModalOpen: React.Dispatch<React.SetStateAction<boolean>>;
+  channelModalTargetHubId: number | null;
+  openCourseHubModal: (defaultTab?: 'browse' | 'create_hub') => void;
+  openAddSubChannelModal: (hubId: number) => void;
+  channelModalDefaultTab: 'browse' | 'create_hub' | 'create_channel';
   announcementModalState: {
     isOpen: boolean;
     editingAnnouncement: Announcement | null;
@@ -108,6 +112,27 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
   const [isDrawerOpen, setIsDrawerOpen] = useState<boolean>(true);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState<boolean>(false);
   const [isChannelModalOpen, setIsChannelModalOpen] = useState<boolean>(false);
+  const [channelModalTargetHubId, setChannelModalTargetHubId] = useState<
+    number | null
+  >(null);
+  const [channelModalDefaultTab, setChannelModalDefaultTab] = useState<
+    'browse' | 'create_hub' | 'create_channel'
+  >('create_hub');
+
+  const openCourseHubModal = useCallback(
+    (defaultTab: 'browse' | 'create_hub' = 'create_hub') => {
+      setChannelModalTargetHubId(null);
+      setChannelModalDefaultTab(defaultTab);
+      setIsChannelModalOpen(true);
+    },
+    []
+  );
+
+  const openAddSubChannelModal = useCallback((hubId: number) => {
+    setChannelModalTargetHubId(hubId);
+    setChannelModalDefaultTab('create_channel');
+    setIsChannelModalOpen(true);
+  }, []);
 
   // Auto-collapse navigation drawer on mobile/tablet screens (< 1024px) on mount
   useEffect(() => {
@@ -559,6 +584,10 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
         setIsSettingsModalOpen,
         isChannelModalOpen,
         setIsChannelModalOpen,
+        channelModalTargetHubId,
+        openCourseHubModal,
+        openAddSubChannelModal,
+        channelModalDefaultTab,
         announcementModalState,
         openAnnouncementModal,
         closeAnnouncementModal,

@@ -1,6 +1,6 @@
 {
-  "summary":  "Implementation plan to fix the 503 Service Unavailable error on Vercel by supporting both Render backend proxying (via NEXT_PUBLIC_API_URL / LARAVEL_BACKEND_URL with normalized URLs and cold-start timeouts) and direct Supabase PostgreSQL connections (with SSL rejectUnauthorized: false, sslmode parameter sanitization, and PgBouncer/serverless pool tuning).",
-  "updatedAt":  "2026-11-02T11:20:26.432528073Z",
-  "requestFeedback":  true,
-  "userFacing":  true
+  "summary": "Implementation plan to replace the ClariFy text wordmark with the official ClariFy logo across the header and auth pages, and rework the View Messages workspace into a Discord-style expandable Course Hub tree with built-in Noticeboard Feed, Isolated Q&A Threads, #general chat, and custom sub-channels per Course Hub.",
+  "updatedAt": "2026-11-02T17:34:21.424988858Z",
+  "requestFeedback": true,
+  "userFacing": true
 }

@@ -1,89 +1,69 @@
-# ClariFy — Production Cloud Connectivity Plan (Vercel + Render + Supabase)
+# ClariFy Logo Branding & Discord-Style Course Hub Hierarchy Plan
 
-Resolve the `503 (Service Unavailable)` error on `clarify-web` when deployed on Vercel by supporting both the **Render Laravel API proxy (`NEXT_PUBLIC_API_URL` / `LARAVEL_BACKEND_URL`)** and **direct Supabase PostgreSQL connections (`DATABASE_URL` / `POSTGRES_URL`)** with proper SSL certificate handling, URL normalization, and cold-start timeouts.
-
----
-
-## User Review & Critical Decisions
-
-> [!IMPORTANT]
-> The choices below incorporate your confirmed Vercel, Render, and Supabase setup.
-
-- **Confirmed Decision 1 (Environment Variable Discovery)**: Support `NEXT_PUBLIC_API_URL` (as well as `LARAVEL_BACKEND_URL`, `NEXT_PUBLIC_BACKEND_URL`, and `BACKEND_URL`) for the Render backend URL, and support `DATABASE_URL`, `POSTGRES_URL`, `POSTGRES_PRISMA_URL`, `POSTGRES_URL_NON_POOLING`, and `SUPABASE_DB_URL` for Supabase PostgreSQL.
-- **Confirmed Decision 2 (Dual-Path Cloud Resilience)**: Support both direct Supabase PostgreSQL execution with TLS/SSL (`rejectUnauthorized: false`) and Render backend proxying with normalized `/api/v1` paths and extended cold-start timeouts.
-
----
-
-## 1. Overview & Core Concept
-
-- **What It Does**: Eliminates the `503 Service Unavailable` failure during account registration, login, and workspace operations when `clarify-web` runs on Vercel alongside Render (`clarify-api`) and Supabase PostgreSQL.
-- **Target Audience / Persona**: Students, Faculty, Department Heads, and IT Administrators accessing the live Vercel deployment.
-- **Key Value**: Guarantees that authentication and database mutations succeed whether handled directly by Vercel's PostgreSQL adapter against Supabase or proxied to the Render Laravel service—even during Render container cold starts or when Supabase connection strings include `sslmode=require`.
+## 1. Overview & Goals
+1. **Official ClariFy Logo Integration**:
+   - Replace the plain text `ClariFy` wordmark with the official ClariFy logo (`/assets/aistudio/image_07899ab9.png`) in the persistent top navigation bar (`AppShell.tsx`), the Login page (`app/login/page.tsx`), and the Account Registration page (`app/register/page.tsx`).
+   - Copy the logo asset into `clarify-web/public/assets/aistudio/image_07899ab9.png` so Next.js serves it reliably both locally and on Vercel.
+2. **Discord-Style Course Hub & Inner Channel Hierarchy (`View Messages`)**:
+   - Rework the left sidebar in `/channels/[channelId]` from a flat channel list into an **expandable Course Hub tree** inspired by Discord.
+   - Change the top-level sidebar action button from `Add Channel` to **`+ Add Course Hub`**, allowing both **Faculty and Students** to create new Course Hubs (e.g., `IT314 SoftEng`, `IT315 Elective`).
+   - Inside each expanded Course Hub, automatically provide the **given/built-in items**:
+     - **Noticeboard Feed** (scoped announcements for the Course Hub)
+     - **Isolated Q&A Threads** (structured academic inquiries and tickets for the Course Hub)
+     - **`# general`** (default live chat channel for the Course Hub)
+   - Include an inline **`+ Add Channel`** button inside each Course Hub so both **Faculty and Students** can create custom text channels (e.g., `# project-groups`, `# lecture-notes`, `# exam-review`) nested under that Course Hub, each with its own isolated real-time chat stream.
 
 ---
 
-## 2. User Experience & Visual Design
+## 2. Visual & UX Architecture
 
-- **Key User Flows**:
-  1. **Seamless Login & Account Registration**: Submitting credentials or registering a new account on the live Vercel URL (`https://...vercel.app/login`) connects immediately to Supabase PostgreSQL or the Render backend without throwing a 503 error.
-  2. **Cold-Start Tolerance**: If Render or Supabase takes several seconds to wake from idle, the request waits gracefully (up to 25s for Render proxy, 10s for Supabase TLS handshake) instead of aborting after 2–3.5 seconds.
-  3. **Clear Diagnostics on Misconfiguration**: If both cloud endpoints are unreachable, the error banner reports both the Supabase connection status and the Render proxy status so any missing credential can be identified at a glance.
-- **Visual Identity & Theme**:
-  - Preserves the existing USTP institutional identity (`#1a1851` Navy, `#fcb315` Gold, `#e89c31` Orange, `#FFFAF2` Cream, `#031c2e` Dark Text).
+### A. Official ClariFy Logo Placement
+- **Top Navigation Bar (`AppShell.tsx`)**:
+  - Replace the text-only `ClariFy` link on the top-left of the `#1a1851` (`ustp-navy`) header with the official ClariFy logo image (`h-8 sm:h-9 w-auto object-contain`), blending seamlessly against the dark navy header bar alongside the vertical divider `|` and active page title.
+- **Login & Registration Pages (`app/login/page.tsx`, `app/register/page.tsx`)**:
+  - Display the official ClariFy logo badge in the institutional branding card on the left navy panel and in the sign-in/registration header emblem on the right panel.
+
+### B. Discord-Style Course Hub Sidebar Tree (`app/channels/[channelId]/page.tsx`)
+- **Top Sidebar Controls**:
+  - Sidebar section header updated to **`COURSE HUBS`**.
+  - Search input filters both Course Hubs and their inner channels (`Search course hubs or #channels...`).
+  - Top primary button updated to **`+ Add Course Hub`**, opening the Course Hub creation/browse modal.
+- **Expandable Course Hub Accordion Tree**:
+  - Each top-level **Course Hub** (e.g., `IT314 SoftEng`, `IT311 InfoAssurance`) renders as a collapsible category row with a chevron indicator, course code/name, and unread badge.
+  - When expanded, the Course Hub reveals two organized groups underneath:
+    1. **Built-In Hub Spaces (Always Given)**:
+       - `Noticeboard Feed` — switches the center workspace to the Course Hub's official announcement feed.
+       - `Isolated Q&A Threads` — switches the center workspace to the Course Hub's Q&A ticket board (with badge count for open tickets).
+    2. **Hub Chat Channels (`CHANNELS` header + inline `+ Add Channel` button)**:
+       - `# general` — built-in default Messenger Chat for the Course Hub.
+       - Custom sub-channels (`# project-groups`, `# lab-help`, etc.) created inside this Course Hub, each loading its own dedicated real-time Messenger Chat stream in the center column.
+- **Center Workspace & Top Header Synchronization**:
+  - Selecting `Noticeboard Feed`, `Isolated Q&A Threads`, `# general`, or any custom `# sub-channel` inside the sidebar immediately updates the center workspace and top header bar to show the active Course Hub + active channel/view name.
+  - The top bar tabs inside `MessengerChatBox.tsx` stay synchronized with the sidebar selection so users can switch between the active `# channel` chat, `Noticeboard Feed`, and `Isolated Q&A Threads` from either the sidebar tree or the top workspace bar.
 
 ---
 
-## 3. Key Product Decisions & Trade-Offs
-
-- **Decision 1: Supabase TLS/SSL Certificate & Query Parameter Sanitization**
-  - *Chosen Approach*: Automatically enable `ssl: { rejectUnauthorized: false }` for all non-local PostgreSQL connections (`DATABASE_URL`, `POSTGRES_URL`, or remote `DB_HOST`) and strip conflicting `?sslmode=require` / `sslmode=verify-full` parameters from the connection URL before passing it to Node's `pg` Pool.
-  - *Why*: By default, Node's `pg-connection-string` parser overrides `ssl: { rejectUnauthorized: false }` whenever `?sslmode=require` is present in a Supabase URL, causing `Error: self-signed certificate in certificate chain` on Vercel serverless functions.
-- **Decision 2: Render Proxy URL Normalization & Extended Timeout**
-  - *Chosen Approach*: Read `NEXT_PUBLIC_API_URL` (in addition to `LARAVEL_BACKEND_URL`), strip any trailing `/api/v1` or `/api` suffix before constructing `/api/v1/...` target URLs so paths are never doubled (`/api/v1/api/v1/...`), and extend the proxy timeout from 3.5 seconds to 25 seconds.
-  - *Why*: Users frequently set `NEXT_PUBLIC_API_URL` to either `https://<service>.onrender.com` or `https://<service>.onrender.com/api/v1`, and Render free/starter instances require more than 3.5 seconds on initial wake-up.
-- **Decision 3: Non-Blocking Schema Verification for PgBouncer / Supabase Poolers**
-  - *Chosen Approach*: Wrap table initialization and sequence alignment statements in fault-tolerant blocks and configure serverless-friendly pool limits (`max: 5`, `idleTimeoutMillis: 10000`, `connectionTimeoutMillis: 10000`).
-  - *Why*: Prevents Supabase transaction poolers (port `6543`) or pre-existing Laravel migration schemas from rejecting connection pool initialization.
+## 3. Data & Persistence Strategy (Zero-Downtime Supabase + Render + Vercel Compatible)
+- **Parent Course Hub & Sub-Channel Linking**:
+  - Top-level Course Hubs are stored in PostgreSQL `channels` with `channel_type = 'course_hub'`.
+  - Sub-channels created inside a Course Hub are stored in PostgreSQL `channels` linked to their parent Course Hub ID via a metadata tag prefix `[HUB:{parentHubId}]` in `description` (and optional `parent_id` property in `Channel` type/resource).
+  - Because each sub-channel is a real row in `channels` with its own `id`, existing endpoints (`GET/POST /api/v1/channels/{id}/chat`) automatically isolate chat messages per sub-channel in the `messages` table without requiring destructive database migrations on the live Supabase instance.
+  - Announcements (`Noticeboard Feed`), Q&A Inquiries (`Isolated Q&A Threads`), Class FAQs, and Course Hub Roster remain scoped to the parent Course Hub ID so all channels inside a Course Hub share the same class roster, announcements, and FAQs.
 
 ---
 
-## 4. Technical Architecture & Data Strategy *(Technical Reference)*
-
-### Architecture & Request Routing Diagram
-
-```
-┌───────────────────────────────────────────────────────────────────────────┐
-│                   Browser Client (Vercel Web Portal)                      │
-│         Calls same-origin /api/v1/* (or fallback Render endpoint)         │
-└─────────────────────────────────────┬─────────────────────────────────────┘
-                                      │
-                                      ▼
-┌───────────────────────────────────────────────────────────────────────────┐
-│                  Next.js API Gateway (/api/v1/[...slug])                  │
-│   ┌───────────────────────────────────────────────────────────────────┐   │
-│   │ Path 1: Direct Supabase PostgreSQL Adapter                        │   │
-│   │ • Reads DATABASE_URL / POSTGRES_URL / POSTGRES_PRISMA_URL / DB_*  │   │
-│   │ • Strips conflicting ?sslmode= params & sets rejectUnauthorized   │   │
-│   │ • 10s connection timeout + serverless pool sizing (max: 5)        │   │
-│   └─────────────────────────────────┬─────────────────────────────────┘   │
-│                                     │ (If DB env not set or unreachable)  │
-│                                     ▼                                     │
-│   ┌───────────────────────────────────────────────────────────────────┐   │
-│   │ Path 2: Render Laravel 13 Proxy                                   │   │
-│   │ • Reads NEXT_PUBLIC_API_URL / LARAVEL_BACKEND_URL / BACKEND_URL   │   │
-│   │ • Normalizes base URL (removes duplicate /api/v1 or /api suffix)  │   │
-│   │ • 25s timeout to accommodate Render container cold starts         │   │
-│   └───────────────────────────────────────────────────────────────────┘   │
-└───────────────────────────────────────────────────────────────────────────┘
-```
-
-### Interactive Component & State Mapping
-
-1. **Supabase Connection Resolution**:
-   - Inspects `DATABASE_URL`, `POSTGRES_URL`, `POSTGRES_URL_NON_POOLING`, `POSTGRES_PRISMA_URL`, `SUPABASE_DB_URL`, and `DB_HOST` / `DB_PORT` / `DB_DATABASE` / `DB_USERNAME` / `DB_PASSWORD`.
-   - Sanitizes `sslmode` query parameters in connection strings and attaches `ssl: { rejectUnauthorized: false }` whenever connecting to Supabase or any remote host.
-   - Reduces retry lockouts so transient serverless cold-start hiccups do not block subsequent requests.
-2. **Render Proxy Resolution**:
-   - Inspects `LARAVEL_BACKEND_URL`, `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_LARAVEL_URL`, `NEXT_PUBLIC_BACKEND_URL`, and `BACKEND_URL`.
-   - Normalizes the base URL so `https://service.onrender.com`, `https://service.onrender.com/api`, and `https://service.onrender.com/api/v1` all resolve cleanly to `https://service.onrender.com/api/v1/<endpoint>`.
-   - Forwards `Authorization`, `X-Clarify-Institutional-Id`, and `X-Clarify-User-Id` headers with a 25-second timeout and returns structured Laravel validation/auth responses (`200`, `201`, `401`, `403`, `422`) directly to the client.
+## 4. Files to Create / Modify
+1. **`/clarify-web/public/assets/aistudio/image_07899ab9.png`**
+   - Copy the attached ClariFy logo into `clarify-web/public/assets/aistudio/image_07899ab9.png` so Next.js serves it as a static asset.
+2. **`/clarify-web/src/components/layout/AppShell.tsx`**
+   - Replace the plain text `ClariFy` link in the top header and loading screen with the official ClariFy logo image.
+3. **`/clarify-web/app/login/page.tsx` & `/clarify-web/app/register/page.tsx`**
+   - Replace the plain text `ClariFy` title/badge with the official ClariFy logo image.
+4. **`/clarify-web/src/types/api.ts`**
+   - Add optional `parent_hub_id?: number | null` helper typing on `Channel` and modal state support for creating either a top-level **Course Hub** or a **Sub-Channel** inside a specific Course Hub.
+5. **`/clarify-web/src/components/modals/ChannelRosterModal.tsx` & `/clarify-web/src/context/ClarifyContext.tsx`**
+   - Update modal titles and actions from `Add Channel` to **`+ Add Course Hub`** (when adding/browsing top-level Course Hubs) and support a dedicated **`+ Add Channel`** mode when triggered inside a specific Course Hub (pre-filling the parent Course Hub's course code, department, and section).
+6. **`/clarify-web/app/channels/[channelId]/page.tsx` & `/clarify-web/src/components/threads/MessengerChatBox.tsx`**
+   - Implement the Discord-style expandable Course Hub tree in the left sidebar with `+ Add Course Hub` at the top, built-in `Noticeboard Feed` and `Isolated Q&A Threads` items, default `# general` chat channel, custom `# sub-channels`, and an inline `+ Add Channel` button per Course Hub.
+7. **`/clarify-api/app/Http/Controllers/Api/V1/ChannelController.php` & `/clarify-web/src/server/postgres-adapter.ts`**
+   - Ensure both Students and Faculty can create Course Hubs and sub-channels, and preserve parent Course Hub association smoothly.

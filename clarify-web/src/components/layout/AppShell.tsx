@@ -1,6 +1,7 @@
 'use client';
 
 import React from 'react';
+import Image from 'next/image';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import {
@@ -13,6 +14,7 @@ import {
 } from 'lucide-react';
 import { useClarify } from '../../context/ClarifyContext';
 import { logoutApi } from '../../lib/api-client';
+import { getTopLevelCourseHubs } from '../../lib/domain-logic';
 import { AnnouncementFormModal } from '../modals/AnnouncementFormModal';
 import { ProfileSettingsModal } from '../modals/ProfileSettingsModal';
 import { ChannelRosterModal } from '../modals/ChannelRosterModal';
@@ -57,10 +59,15 @@ export function AppShell({
   if (!isAuthReady || !isAuthenticated) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-ustp-navy text-white p-6">
-        <div className="text-center space-y-2">
-          <div className="inline-flex items-center justify-center w-14 h-14 rounded-lg bg-ustp-navy text-ustp-gold font-extrabold text-lg border-2 border-ustp-gold">
-            USTP
-          </div>
+        <div className="text-center space-y-3">
+          <Image
+            src="/assets/aistudio/image_07899ab9.png"
+            alt="ClariFy Logo"
+            width={180}
+            height={56}
+            unoptimized
+            className="h-14 w-auto mx-auto object-contain"
+          />
           <p className="text-xs font-bold tracking-wider uppercase text-ustp-gold">
             Redirecting to ClariFy Sign In...
           </p>
@@ -69,7 +76,8 @@ export function AppShell({
     );
   }
 
-  const primaryChannelId = channels[0]?.id || 1;
+  const courseHubs = getTopLevelCourseHubs(channels);
+  const primaryChannelId = courseHubs[0]?.id || channels[0]?.id || 1;
   const isAdmin = user.role === 'it_admin';
 
   const navItems = isAdmin
@@ -126,13 +134,21 @@ export function AppShell({
     >
       {/* Persistent Sticky Top Header Bar (ustp-navy #1a1851) */}
       <header className="sticky top-0 h-14 bg-ustp-navy text-white px-3 sm:px-4 lg:px-6 flex items-center justify-between gap-2 sm:gap-4 border-b border-slate-800 shrink-0 z-40">
-        {/* Left: ClariFy in bold ustp-gold + active view/hub title in white */}
+        {/* Left: Official ClariFy Logo + active view/hub title in white */}
         <div className="flex items-center gap-2 sm:gap-3 min-w-0">
           <Link
             href={isAdmin ? '/admin' : '/'}
-            className="text-lg sm:text-xl font-extrabold tracking-tight text-ustp-gold hover:opacity-95 whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-ustp-gold rounded"
+            aria-label="ClariFy Home"
+            className="inline-flex items-center hover:opacity-95 whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-ustp-gold rounded"
           >
-            ClariFy
+            <Image
+              src="/assets/aistudio/image_07899ab9.png"
+              alt="ClariFy"
+              width={120}
+              height={36}
+              unoptimized
+              className="h-8 sm:h-9 w-auto object-contain"
+            />
           </Link>
           <span className="text-slate-400 select-none" aria-hidden="true">
             |

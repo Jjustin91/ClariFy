@@ -1,10 +1,127 @@
 import type {
   Announcement,
+  Channel,
   QaThread,
   ReadReach,
   User,
   UserRole,
 } from '../types/api';
+
+const HUB_PREFIX_REGEX = /^\[HUB:(\d+)\]\s*/i;
+
+/**
+ * Returns the parent Course Hub ID if the given channel record is a sub-channel
+ * inside a Course Hub, or null if it is a top-level Course Hub.
+ */
+export function getChannelParentHubId(channel: Channel | undefined): number | null {
+  if (!channel) return null;
+  if (typeof channel.parent_hub_id === 'number' && channel.parent_hub_id > 0) {
+    return channel.parent_hub_id;
+  }
+  if (channel.description) {
+    const match = channel.description.match(HUB_PREFIX_REGEX);
+    if (match && match[1]) {
+      return Number(match[1]);
+    }
+  }
+  return null;
+}
+
+/**
+ * Returns true if the channel is a custom sub-channel inside a Course Hub.
+ */
+export function isSubChannel(channel: Channel | undefined): boolean {
+  return getChannelParentHubId(channel) !== null;
+}
+
+/**
+ * Returns only top-level Course Hubs (excluding inner sub-channels).
+ */
+export function getTopLevelCourseHubs(channels: Channel[]): Channel[] {
+  const topLevel = channels.filter((ch) => !isSubChannel(ch));
+  return topLevel.length > 0 ? topLevel : channels;
+}
+
+/**
+ * Returns all custom sub-channels belonging to a specific parent Course Hub ID.
+ */
+export function getSubChannelsForHub(
+  channels: Channel[],
+  hubId: number
+): Channel[] {
+  return channels.filter((ch) => getChannelParentHubId(ch) === hubId);
+}
+
+/**
+ * Strips internal [HUB:id] metadata prefix from a channel's description for UI display.
+ */
+export function getCleanChannelDescription(
+  description: string | null | undefined
+): string {
+  if (!description) return '';
+  return description.replace(HUB_PREFIX_REGEX, '').trim();
+}
+
+/**
+ * Formats a Course Hub display name cleanly without a leading '#' so hubs read as categories/servers.
+ */
+export function formatCourseHubName(hub: Channel | undefined): string {
+  if (!hub) return 'Course Hub';
+  return hub.name.replace(/^#\s*/, '').trim();
+}
+
+/**
+ * Formats a sub-channel name in Discord style (lowercase hyphenated with leading '# ').
+ */
+export function formatSubChannelDisplayName(channel: Channel | undefined): string {
+  if (!channel) return '# general';
+  const raw = channel.name.replace(/^#\s*/, '').trim();
+  return `# ${raw}`;
+}
+
+/**
+ * Resolves the active parent Course Hub, optional active custom sub-channel,
+ * and effective Course Hub ID for a given route channelId parameter.
+ */
+export function resolveCourseHubSelection(
+  channels: Channel[],
+  requestedChannelId: number
+): {
+  courseHubs: Channel[];
+  activeChannel: Channel | undefined;
+  activeSubChannel: Channel | undefined;
+  parentHubId: number | null;
+  channelId: number;
+} {
+  const courseHubs = getTopLevelCourseHubs(channels);
+  const requestedChannel =
+    channels.find((c) => c.id === requestedChannelId) ||
+    courseHubs[0] ||
+    channels[0];
+
+  const parentHubId = getChannelParentHubId(requestedChannel);
+  const activeChannel =
+    parentHubId !== null
+      ? courseHubs.find((h) => h.id === parentHubId) ||
+        courseHubs[0] ||
+        requestedChannel
+      : requestedChannel;
+  const activeSubChannel =
+    parentHubId !== null && isSubChannel(requestedChannel)
+      ? requestedChannel
+      : undefined;
+
+  const channelId = activeChannel?.id || requestedChannelId;
+
+  return {
+    courseHubs,
+    activeChannel,
+    activeSubChannel,
+    parentHubId,
+    channelId,
+  };
+}
+
 
 /**
  * Computes the updated ReadReach state when a student acknowledges an announcement.

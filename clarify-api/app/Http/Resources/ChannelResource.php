@@ -14,8 +14,14 @@ class ChannelResource extends JsonResource
         $members = $rawMembers->filter(fn ($m) => $m->role !== 'it_admin' && $m->verification_status === 'approved')->values();
         $openThreadsCount = $this->threads()->where('is_resolved', false)->count();
 
+        $parentHubId = null;
+        if (is_string($this->description) && preg_match('/^\[HUB:(\d+)\]/i', $this->description, $matches)) {
+            $parentHubId = (int) $matches[1];
+        }
+
         return [
             'id' => $this->id,
+            'parent_hub_id' => $parentHubId,
             'course_code' => $this->course_code,
             'name' => $this->name,
             'description' => $this->description,

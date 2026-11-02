@@ -93,15 +93,7 @@ class AuthController
             ->where('institutional_id', $validated['institutional_id'])
             ->first();
 
-        $storedPassword = $user ? (string) ($user->password ?? '') : '';
-        $isBcrypt = str_starts_with($storedPassword, '$2y$')
-            || str_starts_with($storedPassword, '$2a$')
-            || str_starts_with($storedPassword, '$2b$');
-        $passwordValid = $user && ($isBcrypt
-            ? Hash::check($validated['password'], $storedPassword)
-            : hash_equals($storedPassword, (string) $validated['password']));
-
-        if (! $passwordValid) {
+        if (! $user || ! Hash::check($validated['password'], $user->password)) {
             return response()->json([
                 'status' => 422,
                 'message' => 'The provided institutional credentials do not match our records.',

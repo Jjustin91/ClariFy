@@ -15,7 +15,10 @@ import {
   createAnnouncementApi,
   updateAnnouncementApi,
 } from '../../lib/api-client';
-import { getFieldValidationError } from '../../lib/domain-logic';
+import {
+  getFieldValidationError,
+  getTopLevelCourseHubs,
+} from '../../lib/domain-logic';
 import type { LaravelValidationError } from '../../types/api';
 import { TagBadge } from '../ui/StateViews';
 
@@ -40,12 +43,13 @@ export function AnnouncementFormModal() {
     showToast,
   } = useClarify();
 
+  const courseHubs = getTopLevelCourseHubs(channels);
   const { isOpen, editingAnnouncement, defaultChannelId } = announcementModalState;
 
   const [title, setTitle] = useState('');
   const [content, setContent] = useState('');
   const [channelId, setChannelId] = useState<number>(
-    defaultChannelId || channels[0]?.id || 1
+    defaultChannelId || courseHubs[0]?.id || 1
   );
   const [selectedTags, setSelectedTags] = useState<string[]>([
     'OFFICIAL MEMO',
@@ -262,9 +266,10 @@ export function AnnouncementFormModal() {
                 onChange={(e) => setChannelId(Number(e.target.value))}
                 className="text-xs font-semibold text-ustp-text bg-slate-50 border border-slate-300 rounded px-2.5 py-1.5 focus:outline-none focus:border-ustp-navy"
               >
-                {channels.map((ch) => (
+                {courseHubs.map((ch) => (
                   <option key={ch.id} value={ch.id}>
-                    {ch.name} ({ch.scope_section || ch.scope_department || 'Campus'})
+                    {ch.name.replace(/^#\s*/, '')} (
+                    {ch.scope_section || ch.scope_department || 'Campus'})
                   </option>
                 ))}
               </select>

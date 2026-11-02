@@ -13,7 +13,10 @@ import {
 } from '@/src/components/ui/StateViews';
 import { useClarify } from '@/src/context/ClarifyContext';
 import { getAnnouncementsApi } from '@/src/lib/api-client';
-import { canPublishOrManageAnnouncements } from '@/src/lib/domain-logic';
+import {
+  canPublishOrManageAnnouncements,
+  getTopLevelCourseHubs,
+} from '@/src/lib/domain-logic';
 import type { Announcement, LaravelValidationError } from '@/src/types/api';
 
 export default function DashboardPage() {
@@ -26,6 +29,8 @@ export default function DashboardPage() {
     announcementVersion,
     openAnnouncementModal,
   } = useClarify();
+
+  const courseHubs = getTopLevelCourseHubs(channels);
 
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
@@ -156,7 +161,7 @@ export default function DashboardPage() {
               Latest Messages
             </h3>
             <Link
-              href={`/channels/${channels[0]?.id || 1}`}
+              href={`/channels/${courseHubs[0]?.id || 1}`}
               className="text-xs font-bold text-slate-600 hover:text-ustp-navy underline"
             >
               Open Course Hubs &rarr;
@@ -164,7 +169,7 @@ export default function DashboardPage() {
           </div>
 
           <div className="space-y-3">
-            {channels.map((ch) => {
+            {courseHubs.map((ch) => {
               const titleDisplay = ch.course_code
                 ? `${ch.scope_section || 'IT3R2'}-${ch.course_code} ${ch.name.replace(
                     /^#\s*\S+\s*/,
