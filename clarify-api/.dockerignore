@@ -4,3 +4,4 @@ node_modules/
 .git
 storage/*.key
 .phpunit.cache
+bootstrap/cache/*.php

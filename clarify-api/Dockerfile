@@ -12,13 +12,14 @@ WORKDIR /var/www
 # Copy application files
 COPY . .
 
-# Ensure all Laravel storage and cache directories exist before setting permissions
+# Ensure storage directories exist and purge any committed bootstrap cache files
 RUN mkdir -p storage/app/public \
              storage/framework/cache/data \
              storage/framework/sessions \
              storage/framework/views \
              storage/logs \
-             bootstrap/cache
+             bootstrap/cache \
+    && rm -f bootstrap/cache/*.php
 
 # Install PHP production dependencies
 RUN composer install --no-dev --optimize-autoloader --no-interaction
@@ -29,5 +30,5 @@ RUN chown -R www-data:www-data storage bootstrap/cache \
 
 EXPOSE 8080
 
-# Run migrations, optimize caches, and bind to the dynamic Render $PORT
-CMD sh -c "php artisan config:cache && php artisan route:cache && php artisan migrate --force && php artisan serve --host=0.0.0.0 --port=\${PORT:-8080}"
+# Clear old configuration cache, run migrations, and bind to Render's dynamic port
+CMD sh -c "php artisan config:clear && php artisan route:clear && php artisan migrate --force && php artisan serve --host=0.0.0.0 --port=\${PORT:-8080}"
