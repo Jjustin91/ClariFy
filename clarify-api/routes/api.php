@@ -32,7 +32,7 @@ Route::prefix('v1')->group(function () {
     Route::post('/auth/register', [AuthController::class, 'register']);
 
     // Authenticated & Registrar-Verified Routes
-    Route::middleware(['verified.account'])->group(function () {
+    Route::middleware(['auth:sanctum', 'verified.account'])->group(function () {
 
         // Auth & Profile
         Route::post('/auth/logout', [AuthController::class, 'logout']);
