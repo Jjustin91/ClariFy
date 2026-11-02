@@ -11,15 +11,21 @@ use App\Http\Controllers\Api\V1\InstructorController;
 use App\Http\Controllers\Api\V1\AccountController;
 use App\Http\Controllers\Api\V1\DeviceTokenController;
 
-Route::middleware(['verified.account'])
-    ->post('/announcements/create', [AnnouncementController::class, 'store']);
-
 /*
 |--------------------------------------------------------------------------
 | ClariFy REST API v1 Routes (/api/v1/...)
 |--------------------------------------------------------------------------
 */
 Route::prefix('v1')->group(function () {
+
+    // Public Status & Health Check (Must be accessible before login)
+    Route::get('/persistence/status', function () {
+        return response()->json([
+            'status' => 'connected',
+            'database' => 'PostgreSQL (Supabase)',
+            'timestamp' => now()->toISOString(),
+        ]);
+    });
 
     // Public Auth Routes
     Route::post('/auth/login', [AuthController::class, 'login']);
@@ -66,15 +72,6 @@ Route::prefix('v1')->group(function () {
         Route::patch('/admin/users/{userId}/role', [AccountController::class, 'updateRole']);
         Route::post('/admin/sync-prisms', [AccountController::class, 'syncPrisms']);
         Route::get('/admin/metrics', [AccountController::class, 'metrics']);
-
-        Route::prefix('v1')->group(function () {
-            Route::get('/persistence/status', function () {
-                return response()->json([
-                    'status' => 'connected',
-                    'database' => 'PostgreSQL (Supabase)',
-                    'timestamp' => now()->toISOString(),
-                ]);
-            });
-        });
+        Route::post('/devices/tokens', [DeviceTokenController::class, 'store']);
     });
 });
