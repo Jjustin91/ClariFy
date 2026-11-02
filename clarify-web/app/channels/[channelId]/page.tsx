@@ -15,7 +15,6 @@ import {
   Search,
   Star,
   Trash2,
-  Users,
   X,
 } from 'lucide-react';
 import { AppShell } from '@/src/components/layout/AppShell';
@@ -438,28 +437,14 @@ export default function CourseHubPage() {
               <h2 className="text-xs font-extrabold uppercase tracking-wider text-ustp-gold">
                 SCOPED CHANNELS
               </h2>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIsMobileChannelsOpen(false);
-                    setIsChannelModalOpen(true);
-                  }}
-                  aria-label="Open Channel Roster and Management"
-                  className="text-[11px] font-bold text-slate-300 hover:text-ustp-gold flex items-center gap-1 cursor-pointer"
-                >
-                  <Users className="w-3.5 h-3.5" />
-                  <span>Roster</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setIsMobileChannelsOpen(false)}
-                  aria-label="Close channels drawer"
-                  className="lg:hidden p-1 rounded text-slate-300 hover:text-white cursor-pointer"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
+              <button
+                type="button"
+                onClick={() => setIsMobileChannelsOpen(false)}
+                aria-label="Close channels drawer"
+                className="lg:hidden p-1 rounded text-slate-300 hover:text-white cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
             </div>
 
             {/* Channel Search Input */}
@@ -514,59 +499,50 @@ export default function CourseHubPage() {
             </nav>
           </div>
 
-          {/* Bottom Channel Scope Metadata & Accurate Enrolled Roster */}
-          <div className="pt-4 mt-4 border-t border-white/10 text-[11px] text-slate-300 space-y-2">
-            <div className="flex items-center justify-between gap-2">
-              <p className="font-bold text-ustp-gold">
-                {activeChannel?.scope_college || 'CITC'} •{' '}
-                {activeChannel?.scope_section || 'IT3R2'}
-              </p>
-              <button
-                type="button"
-                onClick={() => {
-                  setIsMobileChannelsOpen(false);
-                  setIsChannelModalOpen(true);
-                }}
-                className="text-[10px] font-bold text-ustp-gold hover:underline cursor-pointer"
-              >
-                Manage
-              </button>
-            </div>
+          {/* Bottom Channel Scope Metadata: Current Faculty & Total Enrolled Count */}
+          <div className="pt-4 mt-4 border-t border-white/10 text-[11px] text-slate-300 space-y-1.5">
+            <p className="font-bold text-ustp-gold">
+              {activeChannel?.scope_college || 'CITC'} •{' '}
+              {activeChannel?.scope_section || 'IT3R2'}
+            </p>
             {(() => {
               const members = activeChannel?.roster || [];
               const enrolledCount =
                 activeChannel?.roster !== undefined
                   ? activeChannel.roster.length
                   : activeChannel?.members_count ?? 0;
+              const facultyMembers = members.filter(
+                (m) => m.role === 'faculty' || m.role === 'dept_head'
+              );
+              const instructorFallback =
+                activeChannel?.instructor_name &&
+                !members.some(
+                  (m) =>
+                    m.name === activeChannel.instructor_name &&
+                    m.role === 'student'
+                )
+                  ? activeChannel.instructor_name
+                  : null;
+              const currentFacultyLabel =
+                facultyMembers.length > 0
+                  ? facultyMembers.map((f) => f.name).join(', ')
+                  : instructorFallback || 'No Faculty Assigned Yet';
+
               return (
-                <div className="space-y-1.5">
-                  <p className="font-mono tabular-nums text-slate-300 font-semibold">
+                <>
+                  <p className="text-slate-200 truncate" title={currentFacultyLabel}>
+                    <span className="font-semibold text-slate-400">
+                      Faculty:{' '}
+                    </span>
+                    <span className="font-bold text-white">
+                      {currentFacultyLabel}
+                    </span>
+                  </p>
+                  <p className="font-mono tabular-nums text-slate-400">
                     Enrolled Roster: {enrolledCount}{' '}
                     {enrolledCount === 1 ? 'member' : 'members'}
                   </p>
-                  {members.length > 0 && (
-                    <ul
-                      aria-label="Enrolled Course Hub Members"
-                      className="space-y-1 max-h-28 overflow-y-auto pr-1"
-                    >
-                      {members.map((m) => (
-                        <li
-                          key={m.institutional_id}
-                          className="flex items-center justify-between gap-1.5 text-[10px] text-slate-300 bg-white/5 px-2 py-1 rounded"
-                        >
-                          <span className="truncate font-medium text-white">
-                            {m.name}
-                          </span>
-                          <span className="shrink-0 font-mono uppercase text-[9px] text-ustp-gold">
-                            {m.role === 'faculty' || m.role === 'dept_head'
-                              ? 'FACULTY'
-                              : m.section}
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
+                </>
               );
             })()}
           </div>

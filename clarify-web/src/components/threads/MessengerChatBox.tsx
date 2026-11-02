@@ -10,19 +10,31 @@ import {
   Mic,
   Plus,
   Settings,
+  Trash2,
+  UserPlus,
+  Users,
   X,
 } from 'lucide-react';
 import { formatShortTime } from '../announcements/AnnouncementCard';
 import { useClarify } from '../../context/ClarifyContext';
 import {
   getChannelChatMessagesApi,
+  joinChannelApi,
+  manageChannelMemberApi,
   sendChannelChatMessageApi,
 } from '../../lib/api-client';
+import { getFieldValidationError } from '../../lib/domain-logic';
 import {
   type ReverbBroadcastPayload,
   subscribeChannelReverb,
 } from '../../lib/reverb-client';
-import type { Channel, ChatMessage, RealtimeEvent, User } from '../../types/api';
+import type {
+  Channel,
+  ChatMessage,
+  LaravelValidationError,
+  RealtimeEvent,
+  User,
+} from '../../types/api';
 
 export type CourseHubTab = 'messenger' | 'feed' | 'threads' | 'send_inquiry';
 
@@ -92,6 +104,7 @@ export function MessengerChatBox({
     isAuthReady,
     announcementVersion,
     triggerAnnouncementRefresh,
+    refreshChannels,
     subscribeRealtimeEvents,
     showToast,
   } = useClarify();
@@ -103,6 +116,14 @@ export function MessengerChatBox({
   const [stagedAttachment, setStagedAttachment] = useState<string | null>(null);
   const [showSettingsMenu, setShowSettingsMenu] = useState(false);
   const [isSending, setIsSending] = useState(false);
+
+  // Course Hub Settings Popover — Channel Roster Management State
+  const [newMemberId, setNewMemberId] = useState('');
+  const [newMemberName, setNewMemberName] = useState('');
+  const [rosterFieldErrors, setRosterFieldErrors] = useState<
+    Record<string, string[]>
+  >({});
+  const [isManagingRoster, setIsManagingRoster] = useState(false);
 
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -248,6 +269,89 @@ export function MessengerChatBox({
     e.target.value = '';
   };
 
+  const channelRoster = channel?.roster || [];
+  const enrolledCount =
+    channel?.roster !== undefined
+      ? channel.roster.length
+      : channel?.members_count ?? 0;
+  const facultyInRoster = channelRoster.filter(
+    (m) => m.role === 'faculty' || m.role === 'dept_head'
+  );
+  const instructorFallback =
+    channel?.instructor_name &&
+    !channelRoster.some(
+      (m) => m.name === channel.instructor_name && m.role === 'student'
+    )
+      ? channel.instructor_name
+      : null;
+  const currentFacultyLabel =
+    facultyInRoster.length > 0
+      ? facultyInRoster.map((f) => f.name).join(', ')
+      : instructorFallback || 'No Faculty Assigned Yet';
+
+  const handleSyncRosterAccess = async () => {
+    setIsManagingRoster(true);
+    try {
+      const res = await joinChannelApi(channelKey);
+      await refreshChannels();
+      showToast(res.message || 'Course Hub roster synced.', 'success');
+    } catch (err) {
+      const apiErr = err as LaravelValidationError;
+      showToast(apiErr.message || 'Unable to sync channel roster.', 'error');
+    } finally {
+      setIsManagingRoster(false);
+    }
+  };
+
+  const handleAddMemberToRoster = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setRosterFieldErrors({});
+    setIsManagingRoster(true);
+    try {
+      const res = await manageChannelMemberApi(channelKey, {
+        institutional_id: newMemberId,
+        name: newMemberName,
+        section: channel?.scope_section || 'IT3R2',
+        action: 'add',
+      });
+      await refreshChannels();
+      setNewMemberId('');
+      setNewMemberName('');
+      showToast(res.message || 'Member added to Course Hub roster.', 'success');
+    } catch (err) {
+      const apiErr = err as LaravelValidationError;
+      if (apiErr.status === 422 && apiErr.errors) {
+        setRosterFieldErrors(apiErr.errors);
+      } else {
+        showToast(apiErr.message || 'Failed to add member.', 'error');
+      }
+    } finally {
+      setIsManagingRoster(false);
+    }
+  };
+
+  const handleRemoveMemberFromRoster = async (institutionalId: string) => {
+    setIsManagingRoster(true);
+    try {
+      const res = await manageChannelMemberApi(channelKey, {
+        institutional_id: institutionalId,
+        action: 'remove',
+      });
+      await refreshChannels();
+      showToast(res.message || 'Member removed from roster.', 'info');
+    } catch (err) {
+      const apiErr = err as LaravelValidationError;
+      showToast(apiErr.message || 'Failed to remove member.', 'error');
+    } finally {
+      setIsManagingRoster(false);
+    }
+  };
+
+  const memberIdError = getFieldValidationError(
+    rosterFieldErrors,
+    'institutional_id'
+  );
+
   return (
     <section
       aria-label="Course Hub Messenger Box"
@@ -349,29 +453,156 @@ export function MessengerChatBox({
         </div>
 
         {showSettingsMenu && (
-          <div className="absolute right-4 top-12 z-20 bg-white border border-slate-300 rounded-lg shadow-lg p-3 w-64 space-y-2 text-xs">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-1.5">
-              <span className="font-extrabold text-ustp-navy">
-                Course Hub Chat Settings
-              </span>
+          <div
+            role="dialog"
+            aria-label="Course Hub Settings and Channel Roster"
+            className="absolute right-2 sm:right-5 top-12 z-30 bg-white border border-slate-300 rounded-lg shadow-xl p-3.5 sm:p-4 w-[calc(100vw-1.5rem)] max-w-md space-y-3 text-xs"
+          >
+            {/* Header */}
+            <div className="flex items-center justify-between border-b border-slate-200 pb-2">
+              <div className="flex items-center gap-1.5">
+                <Settings className="w-4 h-4 text-ustp-navy" />
+                <span className="font-extrabold text-ustp-navy text-xs sm:text-sm">
+                  Course Hub Settings &amp; Channel Roster
+                </span>
+              </div>
               <button
                 type="button"
                 onClick={() => setShowSettingsMenu(false)}
-                aria-label="Close chat settings"
-                className="text-slate-400 hover:text-slate-700 cursor-pointer"
+                aria-label="Close course hub settings"
+                className="p-1 rounded text-slate-400 hover:text-slate-700 hover:bg-slate-100 cursor-pointer"
               >
-                <X className="w-3.5 h-3.5" />
+                <X className="w-4 h-4" />
               </button>
             </div>
-            <p className="text-[11px] text-slate-600">
-              Active User:{' '}
-              <span className="font-bold text-ustp-navy uppercase">
-                {currentUser.role.replace('_', ' ')} ({currentUser.name})
-              </span>
-            </p>
-            <p className="text-[11px] text-slate-500">
-              Channel: <span className="font-semibold">{courseHeaderTitle}</span>
-            </p>
+
+            {/* Course Hub Metadata Summary */}
+            <div className="bg-ustp-cream border border-amber-200/80 rounded-md p-2.5 space-y-1">
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-bold text-ustp-navy truncate">
+                  {courseHeaderTitle}
+                </span>
+                <span className="px-2 py-0.5 rounded bg-ustp-navy text-ustp-gold font-mono font-bold text-[10px] shrink-0">
+                  {channel?.scope_department || 'CITC'} •{' '}
+                  {channel?.scope_section || 'IT3R2'}
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-600">
+                Current Faculty:{' '}
+                <span className="font-bold text-ustp-navy">
+                  {currentFacultyLabel}
+                </span>
+              </p>
+              <p className="text-[11px] text-slate-600">
+                Active Session:{' '}
+                <span className="font-bold text-ustp-navy uppercase">
+                  {currentUser.role.replace('_', ' ')} ({currentUser.name})
+                </span>
+              </p>
+            </div>
+
+            {/* Channel Roster Section */}
+            <div className="space-y-2.5">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-1.5">
+                  <Users className="w-3.5 h-3.5 text-ustp-navy" />
+                  <span className="font-extrabold text-ustp-navy">
+                    Channel Roster ({enrolledCount})
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  disabled={isManagingRoster}
+                  onClick={handleSyncRosterAccess}
+                  className="px-2.5 py-1 text-[11px] font-bold bg-ustp-gold text-ustp-navy rounded hover:opacity-95 disabled:opacity-50 cursor-pointer"
+                >
+                  Verify / Sync Roster
+                </button>
+              </div>
+
+              {/* Add Student / Faculty Form */}
+              <form
+                onSubmit={handleAddMemberToRoster}
+                className="p-2.5 bg-slate-50 border border-slate-200 rounded-md space-y-2"
+              >
+                <p className="text-[11px] font-bold text-ustp-navy flex items-center gap-1">
+                  <UserPlus className="w-3.5 h-3.5" />
+                  <span>Add Student or Faculty to Roster</span>
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-1.5">
+                  <input
+                    type="text"
+                    value={newMemberId}
+                    onChange={(e) => setNewMemberId(e.target.value)}
+                    placeholder="ID e.g. 2020201199"
+                    className="px-2.5 py-1.5 text-xs font-mono border border-slate-300 rounded bg-white text-ustp-text"
+                  />
+                  <input
+                    type="text"
+                    value={newMemberName}
+                    onChange={(e) => setNewMemberName(e.target.value)}
+                    placeholder="Full Name (optional)"
+                    className="px-2.5 py-1.5 text-xs border border-slate-300 rounded bg-white text-ustp-text"
+                  />
+                  <button
+                    type="submit"
+                    disabled={isManagingRoster}
+                    className="px-2.5 py-1.5 text-xs font-bold bg-ustp-navy text-white rounded hover:opacity-95 disabled:opacity-50 cursor-pointer"
+                  >
+                    + Add Member
+                  </button>
+                </div>
+                {memberIdError && (
+                  <p className="text-[11px] font-semibold text-red-600" role="alert">
+                    {memberIdError}
+                  </p>
+                )}
+              </form>
+
+              {/* Enrolled Roster Member List */}
+              <div className="border border-slate-200 rounded-md divide-y divide-slate-100 max-h-52 overflow-y-auto bg-white">
+                {channelRoster.length === 0 ? (
+                  <div className="px-3 py-4 text-center text-[11px] text-slate-500">
+                    No members enrolled yet. Click{' '}
+                    <span className="font-bold text-ustp-navy">
+                      Verify / Sync Roster
+                    </span>{' '}
+                    or add a member above.
+                  </div>
+                ) : (
+                  channelRoster.map((member) => (
+                    <div
+                      key={member.institutional_id}
+                      className="flex items-center justify-between gap-2 px-3 py-2 text-xs hover:bg-slate-50/80"
+                    >
+                      <div className="min-w-0">
+                        <p className="font-bold text-ustp-text truncate">
+                          {member.name}{' '}
+                          <span className="text-slate-500 font-mono font-normal text-[11px]">
+                            ({member.institutional_id})
+                          </span>
+                        </p>
+                        <p className="text-[10px] font-semibold text-slate-500 uppercase">
+                          {member.role.replace('_', ' ')} • {member.section}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        disabled={isManagingRoster}
+                        onClick={() =>
+                          handleRemoveMemberFromRoster(member.institutional_id)
+                        }
+                        aria-label={`Remove ${member.name} from roster`}
+                        title={`Remove ${member.name} from roster`}
+                        className="p-1 text-red-600 hover:text-red-800 hover:bg-red-50 rounded shrink-0 cursor-pointer"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
           </div>
         )}
       </div>

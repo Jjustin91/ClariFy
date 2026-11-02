@@ -1,13 +1,9 @@
 'use client';
 
 import React, { useState } from 'react';
-import { Hash, Plus, Trash2, UserPlus, Users, X } from 'lucide-react';
+import { Hash, Plus, X } from 'lucide-react';
 import { useClarify } from '../../context/ClarifyContext';
-import {
-  createChannelApi,
-  joinChannelApi,
-  manageChannelMemberApi,
-} from '../../lib/api-client';
+import { createChannelApi, joinChannelApi } from '../../lib/api-client';
 import { getFieldValidationError } from '../../lib/domain-logic';
 import type { LaravelValidationError } from '../../types/api';
 
@@ -21,14 +17,7 @@ export function ChannelRosterModal() {
     showToast,
   } = useClarify();
 
-  const [activeTab, setActiveTab] = useState<'browse' | 'roster' | 'create'>(
-    'browse'
-  );
-  const [selectedChannelId, setSelectedChannelId] = useState<number>(
-    channels[0]?.id || 1
-  );
-  const [newMemberId, setNewMemberId] = useState('');
-  const [newMemberName, setNewMemberName] = useState('');
+  const [activeTab, setActiveTab] = useState<'browse' | 'create'>('browse');
 
   // Create channel fields
   const [courseCode, setCourseCode] = useState('');
@@ -45,61 +34,14 @@ export function ChannelRosterModal() {
 
   if (!isChannelModalOpen) return null;
 
-  const currentChannel =
-    channels.find((c) => c.id === selectedChannelId) || channels[0];
-  const currentRoster = currentChannel?.roster || [];
-  const currentMemberCount =
-    currentChannel?.roster !== undefined
-      ? currentChannel.roster.length
-      : currentChannel?.members_count ?? 0;
-
   const handleJoinChannel = async (channelId: number) => {
     try {
       const res = await joinChannelApi(channelId);
       await refreshChannels();
-      setSelectedChannelId(channelId);
       showToast(res.message || 'Joined channel.', 'success');
     } catch (err) {
       const apiErr = err as LaravelValidationError;
       showToast(apiErr.message || 'Unable to join channel.', 'error');
-    }
-  };
-
-  const handleAddMember = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setFieldErrors({});
-    try {
-      const res = await manageChannelMemberApi(currentChannel.id, {
-        institutional_id: newMemberId,
-        name: newMemberName,
-        section: currentChannel.scope_section || 'IT3R2',
-        action: 'add',
-      });
-      await refreshChannels();
-      setNewMemberId('');
-      setNewMemberName('');
-      showToast(res.message || 'Member added to roster.', 'success');
-    } catch (err) {
-      const apiErr = err as LaravelValidationError;
-      if (apiErr.status === 422 && apiErr.errors) {
-        setFieldErrors(apiErr.errors);
-      } else {
-        showToast(apiErr.message || 'Failed to add member.', 'error');
-      }
-    }
-  };
-
-  const handleRemoveMember = async (institutionalId: string) => {
-    try {
-      const res = await manageChannelMemberApi(currentChannel.id, {
-        institutional_id: institutionalId,
-        action: 'remove',
-      });
-      await refreshChannels();
-      showToast(res.message || 'Member removed from roster.', 'info');
-    } catch (err) {
-      const apiErr = err as LaravelValidationError;
-      showToast(apiErr.message || 'Failed to remove member.', 'error');
     }
   };
 
@@ -118,14 +60,11 @@ export function ChannelRosterModal() {
         scope_section: scopeSection,
       });
       await refreshChannels();
-      if (res.data?.id) {
-        setSelectedChannelId(res.data.id);
-      }
       showToast(res.message || 'Scoped channel created.', 'success');
       setCourseCode('');
       setChannelName('');
       setDescription('');
-      setActiveTab('roster');
+      setActiveTab('browse');
     } catch (err) {
       const apiErr = err as LaravelValidationError;
       if (apiErr.status === 422 && apiErr.errors) {
@@ -140,7 +79,6 @@ export function ChannelRosterModal() {
 
   const nameError = getFieldValidationError(fieldErrors, 'name');
   const codeError = getFieldValidationError(fieldErrors, 'course_code');
-  const memberError = getFieldValidationError(fieldErrors, 'institutional_id');
 
   return (
     <div
@@ -154,7 +92,7 @@ export function ChannelRosterModal() {
           <div className="flex items-center gap-2">
             <Hash className="w-4 h-4 text-ustp-gold" />
             <h2 id="channel-portal-modal-title" className="text-sm font-bold">
-              Scoped Channel Management &amp; Roster Portal
+              Scoped Course Hub Channels
             </h2>
           </div>
           <button
@@ -179,17 +117,6 @@ export function ChannelRosterModal() {
             }`}
           >
             Browse &amp; Join Channels
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveTab('roster')}
-            className={`px-4 py-2 text-xs font-bold border-b-2 transition-colors cursor-pointer ${
-              activeTab === 'roster'
-                ? 'border-ustp-navy text-ustp-navy'
-                : 'border-transparent text-slate-600 hover:text-ustp-text'
-            }`}
-          >
-            Channel Roster ({currentMemberCount})
           </button>
           <button
             type="button"
@@ -259,136 +186,6 @@ export function ChannelRosterModal() {
                   </div>
                 );
               })}
-            </div>
-          )}
-
-          {activeTab === 'roster' && currentChannel && (
-            <div className="space-y-4">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div className="flex items-center gap-2">
-                  <label
-                    htmlFor="roster-channel-select"
-                    className="text-xs font-bold text-slate-700"
-                  >
-                    Inspecting Roster for:
-                  </label>
-                  <span className="px-2 py-0.5 text-[11px] font-mono font-bold bg-ustp-navy text-ustp-gold rounded">
-                    {currentMemberCount}{' '}
-                    {currentMemberCount === 1 ? 'Member' : 'Members'}
-                  </span>
-                </div>
-                <select
-                  id="roster-channel-select"
-                  value={currentChannel.id}
-                  onChange={(e) => setSelectedChannelId(Number(e.target.value))}
-                  className="text-xs font-bold text-ustp-navy border border-slate-300 rounded px-3 py-1.5 bg-white"
-                >
-                  {channels.map((c) => {
-                    const cnt =
-                      c.roster !== undefined
-                        ? c.roster.length
-                        : c.members_count ?? 0;
-                    return (
-                      <option key={c.id} value={c.id}>
-                        {c.name} ({c.scope_section} · {cnt}{' '}
-                        {cnt === 1 ? 'member' : 'members'})
-                      </option>
-                    );
-                  })}
-                </select>
-              </div>
-
-              <form
-                onSubmit={handleAddMember}
-                className="p-3.5 bg-slate-50 border border-slate-200 rounded-lg space-y-2"
-              >
-                <p className="text-xs font-bold text-ustp-navy flex items-center gap-1.5">
-                  <UserPlus className="w-3.5 h-3.5" />
-                  Add Student / Faculty to Channel Roster
-                </p>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                  <input
-                    type="text"
-                    value={newMemberId}
-                    onChange={(e) => setNewMemberId(e.target.value)}
-                    placeholder="ID e.g. 2020201199"
-                    className="px-3 py-1.5 text-xs font-mono border border-slate-300 rounded bg-white"
-                  />
-                  <input
-                    type="text"
-                    value={newMemberName}
-                    onChange={(e) => setNewMemberName(e.target.value)}
-                    placeholder="Full Name (optional)"
-                    className="px-3 py-1.5 text-xs border border-slate-300 rounded bg-white"
-                  />
-                  <button
-                    type="submit"
-                    className="px-3 py-1.5 text-xs font-bold bg-ustp-navy text-white rounded hover:opacity-95 cursor-pointer"
-                  >
-                    + Add to Roster
-                  </button>
-                </div>
-                {memberError && (
-                  <p className="text-xs font-semibold text-red-600" role="alert">
-                    {memberError}
-                  </p>
-                )}
-              </form>
-
-              <div className="border border-slate-200 rounded-lg divide-y divide-slate-200">
-                {currentRoster.length === 0 ? (
-                  <div className="px-4 py-6 text-center text-xs text-slate-500">
-                    No enrolled members found in {currentChannel.name} yet. Use{' '}
-                    <span className="font-bold text-ustp-navy">
-                      + Add to Roster
-                    </span>{' '}
-                    above or click{' '}
-                    <button
-                      type="button"
-                      onClick={() => handleJoinChannel(currentChannel.id)}
-                      className="font-bold text-ustp-navy underline cursor-pointer"
-                    >
-                      Verify / Sync Access
-                    </button>{' '}
-                    to sync section members.
-                  </div>
-                ) : (
-                  currentRoster.map((member) => (
-                    <div
-                      key={member.institutional_id}
-                      className="flex items-center justify-between px-4 py-2.5 text-xs"
-                    >
-                      <div className="flex items-center gap-2.5">
-                        <Users className="w-3.5 h-3.5 text-slate-400" />
-                        <div>
-                          <span className="font-bold text-ustp-text">
-                            {member.name}
-                          </span>
-                          <span className="text-slate-500 font-mono tabular-nums ml-2">
-                            ({member.institutional_id})
-                          </span>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-3">
-                        <span className="text-slate-600 font-medium">
-                          {member.role.toUpperCase()} · {member.section}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            handleRemoveMember(member.institutional_id)
-                          }
-                          aria-label={`Remove ${member.name} from roster`}
-                          title={`Remove ${member.name} from roster`}
-                          className="text-red-600 hover:text-red-800 p-1 cursor-pointer"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    </div>
-                  ))
-                )}
-              </div>
             </div>
           )}
 
