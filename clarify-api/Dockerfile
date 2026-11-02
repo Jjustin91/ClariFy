@@ -1,4 +1,4 @@
-FROM php:8.2-cli-alpine
+FROM php:8.4-cli-alpine
 
 # Install PostgreSQL client libraries and system utilities
 RUN apk add --no-cache libpq-dev bash git curl unzip \
@@ -23,7 +23,7 @@ RUN mkdir -p storage/app/public \
     && rm -f bootstrap/cache/*.php
 
 # Install PHP production dependencies
-RUN composer install --no-dev --optimize-autoloader --no-interaction
+RUN composer install --no-dev --optimize-autoloader --no-interaction --ignore-platform-req=php+
 
 # Set directory permissions for Laravel runtime caching
 RUN chown -R www-data:www-data storage bootstrap/cache public \
