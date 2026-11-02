@@ -514,15 +514,61 @@ export default function CourseHubPage() {
             </nav>
           </div>
 
-          {/* Bottom Channel Scope Metadata */}
-          <div className="pt-4 mt-4 border-t border-white/10 text-[11px] text-slate-300 space-y-1">
-            <p className="font-bold text-ustp-gold">
-              {activeChannel?.scope_college || 'CITC'} •{' '}
-              {activeChannel?.scope_section || 'IT3R2'}
-            </p>
-            <p className="font-mono tabular-nums text-slate-400">
-              Enrolled Roster: {activeChannel?.members_count || 42} students
-            </p>
+          {/* Bottom Channel Scope Metadata & Accurate Enrolled Roster */}
+          <div className="pt-4 mt-4 border-t border-white/10 text-[11px] text-slate-300 space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <p className="font-bold text-ustp-gold">
+                {activeChannel?.scope_college || 'CITC'} •{' '}
+                {activeChannel?.scope_section || 'IT3R2'}
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsMobileChannelsOpen(false);
+                  setIsChannelModalOpen(true);
+                }}
+                className="text-[10px] font-bold text-ustp-gold hover:underline cursor-pointer"
+              >
+                Manage
+              </button>
+            </div>
+            {(() => {
+              const members = activeChannel?.roster || [];
+              const enrolledCount =
+                activeChannel?.roster !== undefined
+                  ? activeChannel.roster.length
+                  : activeChannel?.members_count ?? 0;
+              return (
+                <div className="space-y-1.5">
+                  <p className="font-mono tabular-nums text-slate-300 font-semibold">
+                    Enrolled Roster: {enrolledCount}{' '}
+                    {enrolledCount === 1 ? 'member' : 'members'}
+                  </p>
+                  {members.length > 0 && (
+                    <ul
+                      aria-label="Enrolled Course Hub Members"
+                      className="space-y-1 max-h-28 overflow-y-auto pr-1"
+                    >
+                      {members.map((m) => (
+                        <li
+                          key={m.institutional_id}
+                          className="flex items-center justify-between gap-1.5 text-[10px] text-slate-300 bg-white/5 px-2 py-1 rounded"
+                        >
+                          <span className="truncate font-medium text-white">
+                            {m.name}
+                          </span>
+                          <span className="shrink-0 font-mono uppercase text-[9px] text-ustp-gold">
+                            {m.role === 'faculty' || m.role === 'dept_head'
+                              ? 'FACULTY'
+                              : m.section}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              );
+            })()}
           </div>
         </aside>
 

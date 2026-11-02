@@ -10,7 +10,8 @@ class ChannelResource extends JsonResource
     public function toArray(Request $request): array
     {
         $latestAnnouncement = $this->announcements()->latest('published_at')->first();
-        $members = $this->relationLoaded('members') ? $this->members : $this->members()->with('academicProfile')->get();
+        $rawMembers = $this->relationLoaded('members') ? $this->members : $this->members()->with('academicProfile')->get();
+        $members = $rawMembers->filter(fn ($m) => $m->role !== 'it_admin' && $m->verification_status === 'approved')->values();
         $openThreadsCount = $this->threads()->where('is_resolved', false)->count();
 
         return [
@@ -23,7 +24,7 @@ class ChannelResource extends JsonResource
             'scope_department' => $this->scope_department,
             'scope_section' => $this->scope_section,
             'unread_count' => $openThreadsCount,
-            'members_count' => max(42, $members->count()),
+            'members_count' => $members->count(),
             'instructor_name' => $this->instructor_name ?? 'Aki Hayakawa',
             'latest_activity_preview' => $latestAnnouncement
                 ? "{$latestAnnouncement->publisher?->name}: " . mb_strimwidth($latestAnnouncement->content, 0, 95, '...')

@@ -54,6 +54,7 @@ interface PgAdapterState {
   lastError: string | null;
   lastCheckedAt: number;
   tokens: Record<string, number>;
+  rosterSynced?: boolean;
 }
 
 const globalForPg = globalThis as unknown as {
@@ -482,6 +483,23 @@ async function ensurePostgresSchema(pool: Pool): Promise<void> {
       );
     }
 
+    // Auto-sync approved non-admin users into Course Hubs matching their section, plus creators & active participants
+    await client.query(`
+      INSERT INTO channel_user (channel_id, user_id, can_publish)
+      SELECT c.id, u.id, (u.role IN ('faculty', 'dept_head'))
+      FROM channels c
+      JOIN users u ON u.verification_status = 'approved' AND u.role != 'it_admin'
+      LEFT JOIN academic_profiles ap ON ap.user_id = u.id
+      WHERE (
+        LOWER(TRIM(COALESCE(ap.section, ''))) = LOWER(TRIM(COALESCE(c.scope_section, '')))
+        OR c.created_by = u.id
+        OR EXISTS (
+          SELECT 1 FROM messages m WHERE m.channel_id = c.id AND m.sender_id = u.id
+        )
+      )
+      ON CONFLICT (channel_id, user_id) DO NOTHING
+    `);
+
     // Safely align sequences so next INSERT never collides with existing primary keys
     const tablesWithSeq = [
       'users',
@@ -798,12 +816,25 @@ async function fetchAnnouncementsFromPg(
     readsByAnn[aid].push(uid);
   }
 
+  const channelMemberCountsRes = await pool.query(`
+    SELECT cu.channel_id, COUNT(*)::int AS cnt
+    FROM channel_user cu
+    JOIN users u ON u.id = cu.user_id
+    WHERE u.role != 'it_admin' AND u.verification_status = 'approved'
+    GROUP BY cu.channel_id
+  `);
+  const enrolledByChannel: Record<number, number> = {};
+  for (const r of channelMemberCountsRes.rows) {
+    enrolledByChannel[Number(r.channel_id)] = Number(r.cnt);
+  }
+
   return res.rows.map((row) => {
     const id = Number(row.id);
+    const cid = Number(row.channel_id);
     const readerIds = readsByAnn[id] || [];
     const hasAck = readerIds.includes(activeUser.id);
     const ackCount = Math.max(1, readerIds.length);
-    const enrolledTotal = 42;
+    const enrolledTotal = Math.max(1, enrolledByChannel[cid] || 1, ackCount);
     const percentage = Number(((ackCount / enrolledTotal) * 100).toFixed(1));
 
     let parsedTags: string[] = [];
@@ -857,6 +888,28 @@ async function fetchAnnouncementsFromPg(
 }
 
 async function fetchChannelsFromPg(pool: Pool): Promise<Channel[]> {
+  const state = getPgState();
+  if (!state.rosterSynced) {
+    await pool
+      .query(`
+        INSERT INTO channel_user (channel_id, user_id, can_publish)
+        SELECT c.id, u.id, (u.role IN ('faculty', 'dept_head'))
+        FROM channels c
+        JOIN users u ON u.verification_status = 'approved' AND u.role != 'it_admin'
+        LEFT JOIN academic_profiles ap ON ap.user_id = u.id
+        WHERE (
+          LOWER(TRIM(COALESCE(ap.section, ''))) = LOWER(TRIM(COALESCE(c.scope_section, '')))
+          OR c.created_by = u.id
+          OR EXISTS (
+            SELECT 1 FROM messages m WHERE m.channel_id = c.id AND m.sender_id = u.id
+          )
+        )
+        ON CONFLICT (channel_id, user_id) DO NOTHING
+      `)
+      .catch(() => {});
+    state.rosterSynced = true;
+  }
+
   const chRes = await pool.query(`
     SELECT c.*
     FROM channels c
@@ -875,7 +928,9 @@ async function fetchChannelsFromPg(pool: Pool): Promise<Channel[]> {
     FROM channel_user cu
     JOIN users u ON u.id = cu.user_id
     LEFT JOIN academic_profiles ap ON ap.user_id = u.id
-    ORDER BY cu.joined_at ASC
+    WHERE u.role != 'it_admin'
+      AND u.verification_status = 'approved'
+    ORDER BY cu.joined_at ASC, u.id ASC
   `);
 
   const latestAnnRes = await pool.query(`
@@ -943,7 +998,7 @@ async function fetchChannelsFromPg(pool: Pool): Promise<Channel[]> {
         : 'CITC',
       scope_section: row.scope_section ? String(row.scope_section) : 'IT3R2',
       unread_count: unreadByChannel[cid] || 0,
-      members_count: Math.max(roster.length, 42),
+      members_count: roster.length,
       instructor_name: row.instructor_name
         ? String(row.instructor_name)
         : 'Aki Hayakawa',
@@ -1192,13 +1247,16 @@ export async function handlePostgresApiRequest(
         ]
       );
 
-      // Enroll in the default Course Hub channel so the user has immediate channel access once approved
+      // Enroll in matching section Course Hubs and the default Course Hub channel
       const defaultChannel = await resolveValidChannel(pool, null);
       await pool.query(
         `INSERT INTO channel_user (channel_id, user_id, can_publish)
-         VALUES ($1, $2, $3)
+         SELECT c.id, $1, $2
+         FROM channels c
+         WHERE c.id = $3
+            OR LOWER(TRIM(COALESCE(c.scope_section, ''))) = LOWER(TRIM($4))
          ON CONFLICT (channel_id, user_id) DO NOTHING`,
-        [defaultChannel.id, newUid, isFaculty]
+        [newUid, isFaculty, defaultChannel.id, section]
       );
 
       const createdUserRes = await pool.query(
@@ -1444,13 +1502,13 @@ export async function handlePostgresApiRequest(
     }
 
     if (method === 'POST' && cleanPath === '/channels') {
-      if (activeUser.role === 'it_admin' || activeUser.role === 'student') {
+      if (activeUser.role === 'it_admin') {
         return {
           status: 403,
           body: {
             status: 403,
             message:
-              'HTTP 403 Forbidden: Only Faculty and Department Heads can create Course Hub channels.',
+              'HTTP 403 Forbidden: IT Administrator accounts are restricted to the IT Admin Console.',
           },
         };
       }
@@ -1500,11 +1558,25 @@ export async function handlePostgresApiRequest(
       );
 
       const newChannelId = Number(insCh.rows[0].id);
+      const canCreatorPublish = activeUser.role !== 'student';
       await pool.query(
         `INSERT INTO channel_user (channel_id, user_id, can_publish)
          VALUES ($1, $2, $3)
          ON CONFLICT (channel_id, user_id) DO NOTHING`,
-        [newChannelId, activeUser.id, true]
+        [newChannelId, activeUser.id, canCreatorPublish]
+      );
+
+      // Auto-sync all approved non-admin users in the target section into the new Course Hub roster
+      await pool.query(
+        `INSERT INTO channel_user (channel_id, user_id, can_publish)
+         SELECT $1, u.id, (u.role IN ('faculty', 'dept_head'))
+         FROM users u
+         JOIN academic_profiles ap ON ap.user_id = u.id
+         WHERE u.verification_status = 'approved'
+           AND u.role != 'it_admin'
+           AND LOWER(TRIM(COALESCE(ap.section, ''))) = LOWER(TRIM($2))
+         ON CONFLICT (channel_id, user_id) DO NOTHING`,
+        [newChannelId, scopeSection]
       );
 
       const allChannels = await fetchChannelsFromPg(pool);
@@ -1529,6 +1601,20 @@ export async function handlePostgresApiRequest(
          VALUES ($1, $2, $3)
          ON CONFLICT (channel_id, user_id) DO NOTHING`,
         [channelId, activeUser.id, activeUser.role !== 'student']
+      );
+
+      // Also sync any approved users matching this channel's target section
+      await pool.query(
+        `INSERT INTO channel_user (channel_id, user_id, can_publish)
+         SELECT c.id, u.id, (u.role IN ('faculty', 'dept_head'))
+         FROM channels c
+         JOIN academic_profiles ap ON LOWER(TRIM(COALESCE(ap.section, ''))) = LOWER(TRIM(COALESCE(c.scope_section, '')))
+         JOIN users u ON u.id = ap.user_id
+         WHERE c.id = $1
+           AND u.verification_status = 'approved'
+           AND u.role != 'it_admin'
+         ON CONFLICT (channel_id, user_id) DO NOTHING`,
+        [channelId]
       );
 
       const allChannels = await fetchChannelsFromPg(pool);
@@ -2072,6 +2158,13 @@ export async function handlePostgresApiRequest(
         [channelId, activeUser.id, content]
       );
 
+      await pool.query(
+        `INSERT INTO channel_user (channel_id, user_id, can_publish)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (channel_id, user_id) DO NOTHING`,
+        [channelId, activeUser.id, activeUser.role !== 'student']
+      );
+
       const createdMsg: ChatMessage = {
         id: Number(insMsg.rows[0].id),
         channel_id: channelId,
@@ -2551,14 +2644,19 @@ export async function handlePostgresApiRequest(
 
       if (isApproved && updatedUser.role !== 'it_admin') {
         const defaultChannel = await resolveValidChannel(pool, null);
+        const userSection = updatedUser.academic_profile?.section || '';
         await pool.query(
           `INSERT INTO channel_user (channel_id, user_id, can_publish)
-           VALUES ($1, $2, $3)
+           SELECT c.id, $1, $2
+           FROM channels c
+           WHERE c.id = $3
+              OR LOWER(TRIM(COALESCE(c.scope_section, ''))) = LOWER(TRIM($4))
            ON CONFLICT (channel_id, user_id) DO UPDATE SET can_publish = EXCLUDED.can_publish`,
           [
-            defaultChannel.id,
             updatedUser.id,
             updatedUser.role === 'faculty' || updatedUser.role === 'dept_head',
+            defaultChannel.id,
+            userSection,
           ]
         );
       }

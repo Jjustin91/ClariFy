@@ -43,16 +43,16 @@ class ChannelController
     }
 
     /**
-     * POST /api/v1/channels (Workflow 5 — Faculty/Admin only)
+     * POST /api/v1/channels (Workflow 5 — Students, Faculty, and Dept Heads)
      */
     public function store(Request $request): JsonResponse
     {
         $user = $request->user();
 
-        if (! $user->canPublishOrManage()) {
+        if ($user->role === 'it_admin') {
             return response()->json([
                 'status' => 403,
-                'message' => 'Access Denied: Students cannot create Course Hub channels (NFR-01_REV).',
+                'message' => 'HTTP 403 Forbidden: IT Administrator accounts are restricted to the IT Admin Console.',
             ], 403);
         }
 
@@ -73,24 +73,42 @@ class ChannelController
             ? trim($validated['name'])
             : '# ' . trim($validated['name']);
 
+        $scopeSection = $validated['scope_section'] ?? 'IT3R2';
+
         $channel = Channel::create([
             'course_code' => strtoupper(trim($validated['course_code'])),
             'name' => $formattedName,
-            'description' => $validated['description'] ?? "{$validated['scope_section']} Scoped Course Hub",
+            'description' => $validated['description'] ?? "{$scopeSection} Scoped Course Hub",
             'channel_type' => $validated['channel_type'],
             'scope_college' => $validated['scope_college'] ?? 'CITC',
             'scope_department' => $validated['scope_department'] ?? 'CITC',
-            'scope_section' => $validated['scope_section'] ?? 'IT3R2',
+            'scope_section' => $scopeSection,
             'instructor_name' => $user->name,
             'created_by' => $user->id,
         ]);
 
-        $channel->members()->syncWithoutDetaching([
+        $syncPayload = [
             $user->id => [
-                'can_publish' => true,
+                'can_publish' => $user->canPublishOrManage(),
                 'joined_at' => now(),
             ],
-        ]);
+        ];
+
+        $sectionUsers = User::where('verification_status', 'approved')
+            ->where('role', '!=', 'it_admin')
+            ->whereHas('academicProfile', function ($q) use ($scopeSection) {
+                $q->whereRaw('LOWER(TRIM(section)) = LOWER(TRIM(?))', [$scopeSection]);
+            })
+            ->get();
+
+        foreach ($sectionUsers as $secUser) {
+            $syncPayload[$secUser->id] = [
+                'can_publish' => $secUser->canPublishOrManage(),
+                'joined_at' => now(),
+            ];
+        }
+
+        $channel->members()->syncWithoutDetaching($syncPayload);
 
         RealtimeStateUpdated::safeDispatch('channel.created', (int) $channel->id, (int) $user->id);
 
@@ -108,12 +126,30 @@ class ChannelController
         $channel = Channel::find($id) ?? Channel::firstOrFail();
         $user = $request->user();
 
-        $channel->members()->syncWithoutDetaching([
+        $syncPayload = [
             $user->id => [
                 'can_publish' => $user->canPublishOrManage(),
                 'joined_at' => now(),
             ],
-        ]);
+        ];
+
+        if ($channel->scope_section) {
+            $sectionUsers = User::where('verification_status', 'approved')
+                ->where('role', '!=', 'it_admin')
+                ->whereHas('academicProfile', function ($q) use ($channel) {
+                    $q->whereRaw('LOWER(TRIM(section)) = LOWER(TRIM(?))', [$channel->scope_section]);
+                })
+                ->get();
+
+            foreach ($sectionUsers as $secUser) {
+                $syncPayload[$secUser->id] = [
+                    'can_publish' => $secUser->canPublishOrManage(),
+                    'joined_at' => now(),
+                ];
+            }
+        }
+
+        $channel->members()->syncWithoutDetaching($syncPayload);
 
         RealtimeStateUpdated::safeDispatch('channel.updated', (int) $channel->id, (int) $user->id);
 
@@ -129,10 +165,10 @@ class ChannelController
     public function manageMembers(Request $request, int $id): JsonResponse
     {
         $user = $request->user();
-        if (! $user->canPublishOrManage()) {
+        if ($user->role === 'it_admin') {
             return response()->json([
                 'status' => 403,
-                'message' => 'Only Faculty or IT Administrators can modify channel rosters.',
+                'message' => 'IT Administrator accounts are restricted to the IT Admin Console.',
             ], 403);
         }
 

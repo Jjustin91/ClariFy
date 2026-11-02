@@ -13,6 +13,7 @@ import type { LaravelValidationError } from '../../types/api';
 
 export function ChannelRosterModal() {
   const {
+    user,
     channels,
     refreshChannels,
     isChannelModalOpen,
@@ -33,8 +34,12 @@ export function ChannelRosterModal() {
   const [courseCode, setCourseCode] = useState('');
   const [channelName, setChannelName] = useState('');
   const [description, setDescription] = useState('');
-  const [scopeDepartment, setScopeDepartment] = useState('CITC');
-  const [scopeSection, setScopeSection] = useState('IT3R2');
+  const [scopeDepartment, setScopeDepartment] = useState(
+    user?.academic_profile?.department || 'CITC'
+  );
+  const [scopeSection, setScopeSection] = useState(
+    user?.academic_profile?.section || 'IT3R2'
+  );
   const [fieldErrors, setFieldErrors] = useState<Record<string, string[]>>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -42,11 +47,17 @@ export function ChannelRosterModal() {
 
   const currentChannel =
     channels.find((c) => c.id === selectedChannelId) || channels[0];
+  const currentRoster = currentChannel?.roster || [];
+  const currentMemberCount =
+    currentChannel?.roster !== undefined
+      ? currentChannel.roster.length
+      : currentChannel?.members_count ?? 0;
 
   const handleJoinChannel = async (channelId: number) => {
     try {
       const res = await joinChannelApi(channelId);
       await refreshChannels();
+      setSelectedChannelId(channelId);
       showToast(res.message || 'Joined channel.', 'success');
     } catch (err) {
       const apiErr = err as LaravelValidationError;
@@ -67,7 +78,7 @@ export function ChannelRosterModal() {
       await refreshChannels();
       setNewMemberId('');
       setNewMemberName('');
-      showToast(res.message || 'Student added to roster.', 'success');
+      showToast(res.message || 'Member added to roster.', 'success');
     } catch (err) {
       const apiErr = err as LaravelValidationError;
       if (apiErr.status === 422 && apiErr.errors) {
@@ -107,11 +118,14 @@ export function ChannelRosterModal() {
         scope_section: scopeSection,
       });
       await refreshChannels();
+      if (res.data?.id) {
+        setSelectedChannelId(res.data.id);
+      }
       showToast(res.message || 'Scoped channel created.', 'success');
       setCourseCode('');
       setChannelName('');
       setDescription('');
-      setActiveTab('browse');
+      setActiveTab('roster');
     } catch (err) {
       const apiErr = err as LaravelValidationError;
       if (apiErr.status === 422 && apiErr.errors) {
@@ -164,7 +178,7 @@ export function ChannelRosterModal() {
                 : 'border-transparent text-slate-600 hover:text-ustp-text'
             }`}
           >
-            Browse & Join Channels
+            Browse &amp; Join Channels
           </button>
           <button
             type="button"
@@ -175,7 +189,7 @@ export function ChannelRosterModal() {
                 : 'border-transparent text-slate-600 hover:text-ustp-text'
             }`}
           >
-            Channel Roster ({currentChannel?.members_count || 42})
+            Channel Roster ({currentMemberCount})
           </button>
           <button
             type="button"
@@ -206,61 +220,81 @@ export function ChannelRosterModal() {
                   <span>+ Add Channel / Course Hub</span>
                 </button>
               </div>
-              {channels.map((ch) => (
-                <div
-                  key={ch.id}
-                  className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 rounded-lg border border-slate-200 bg-slate-50/60"
-                >
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-bold text-ustp-navy">
-                        {ch.name}
-                      </span>
-                      <span className="text-xs font-semibold text-slate-600">
-                        · {ch.scope_section} · {ch.scope_department}
-                      </span>
+              {channels.map((ch) => {
+                const enrolledCount =
+                  ch.roster !== undefined
+                    ? ch.roster.length
+                    : ch.members_count ?? 0;
+                return (
+                  <div
+                    key={ch.id}
+                    className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 rounded-lg border border-slate-200 bg-slate-50/60"
+                  >
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-bold text-ustp-navy">
+                          {ch.name}
+                        </span>
+                        <span className="text-xs font-semibold text-slate-600">
+                          · {ch.scope_section} · {ch.scope_department}
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-600 mt-0.5">
+                        {ch.description}
+                      </p>
                     </div>
-                    <p className="text-xs text-slate-600 mt-0.5">
-                      {ch.description}
-                    </p>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <span className="text-xs font-mono tabular-nums text-slate-600">
+                        {enrolledCount}{' '}
+                        {enrolledCount === 1 ? 'member' : 'members'} enrolled
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => handleJoinChannel(ch.id)}
+                        className="px-3 py-1.5 text-xs font-bold bg-ustp-navy text-white rounded hover:opacity-95 cursor-pointer"
+                      >
+                        Verify / Sync Access
+                      </button>
+                    </div>
                   </div>
-                  <div className="flex items-center gap-2 shrink-0">
-                    <span className="text-xs font-mono tabular-nums text-slate-600">
-                      {ch.members_count || 42} enrolled
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => handleJoinChannel(ch.id)}
-                      className="px-3 py-1.5 text-xs font-bold bg-ustp-navy text-white rounded hover:opacity-95 cursor-pointer"
-                    >
-                      Verify / Sync Access
-                    </button>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
 
           {activeTab === 'roster' && currentChannel && (
             <div className="space-y-4">
-              <div className="flex items-center justify-between gap-3">
-                <label
-                  htmlFor="roster-channel-select"
-                  className="text-xs font-bold text-slate-700"
-                >
-                  Inspecting Roster for:
-                </label>
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-center gap-2">
+                  <label
+                    htmlFor="roster-channel-select"
+                    className="text-xs font-bold text-slate-700"
+                  >
+                    Inspecting Roster for:
+                  </label>
+                  <span className="px-2 py-0.5 text-[11px] font-mono font-bold bg-ustp-navy text-ustp-gold rounded">
+                    {currentMemberCount}{' '}
+                    {currentMemberCount === 1 ? 'Member' : 'Members'}
+                  </span>
+                </div>
                 <select
                   id="roster-channel-select"
                   value={currentChannel.id}
                   onChange={(e) => setSelectedChannelId(Number(e.target.value))}
                   className="text-xs font-bold text-ustp-navy border border-slate-300 rounded px-3 py-1.5 bg-white"
                 >
-                  {channels.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name} ({c.scope_section})
-                    </option>
-                  ))}
+                  {channels.map((c) => {
+                    const cnt =
+                      c.roster !== undefined
+                        ? c.roster.length
+                        : c.members_count ?? 0;
+                    return (
+                      <option key={c.id} value={c.id}>
+                        {c.name} ({c.scope_section} · {cnt}{' '}
+                        {cnt === 1 ? 'member' : 'members'})
+                      </option>
+                    );
+                  })}
                 </select>
               </div>
 
@@ -302,41 +336,58 @@ export function ChannelRosterModal() {
               </form>
 
               <div className="border border-slate-200 rounded-lg divide-y divide-slate-200">
-                {(currentChannel.roster || []).map((member) => (
-                  <div
-                    key={member.institutional_id}
-                    className="flex items-center justify-between px-4 py-2.5 text-xs"
-                  >
-                    <div className="flex items-center gap-2.5">
-                      <Users className="w-3.5 h-3.5 text-slate-400" />
-                      <div>
-                        <span className="font-bold text-ustp-text">
-                          {member.name}
-                        </span>
-                        <span className="text-slate-500 font-mono tabular-nums ml-2">
-                          ({member.institutional_id})
-                        </span>
+                {currentRoster.length === 0 ? (
+                  <div className="px-4 py-6 text-center text-xs text-slate-500">
+                    No enrolled members found in {currentChannel.name} yet. Use{' '}
+                    <span className="font-bold text-ustp-navy">
+                      + Add to Roster
+                    </span>{' '}
+                    above or click{' '}
+                    <button
+                      type="button"
+                      onClick={() => handleJoinChannel(currentChannel.id)}
+                      className="font-bold text-ustp-navy underline cursor-pointer"
+                    >
+                      Verify / Sync Access
+                    </button>{' '}
+                    to sync section members.
+                  </div>
+                ) : (
+                  currentRoster.map((member) => (
+                    <div
+                      key={member.institutional_id}
+                      className="flex items-center justify-between px-4 py-2.5 text-xs"
+                    >
+                      <div className="flex items-center gap-2.5">
+                        <Users className="w-3.5 h-3.5 text-slate-400" />
+                        <div>
+                          <span className="font-bold text-ustp-text">
+                            {member.name}
+                          </span>
+                          <span className="text-slate-500 font-mono tabular-nums ml-2">
+                            ({member.institutional_id})
+                          </span>
+                        </div>
                       </div>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <span className="text-slate-600 font-medium">
-                        {member.role.toUpperCase()} · {member.section}
-                      </span>
-                      {member.role === 'student' && (
+                      <div className="flex items-center gap-3">
+                        <span className="text-slate-600 font-medium">
+                          {member.role.toUpperCase()} · {member.section}
+                        </span>
                         <button
                           type="button"
                           onClick={() =>
                             handleRemoveMember(member.institutional_id)
                           }
                           aria-label={`Remove ${member.name} from roster`}
+                          title={`Remove ${member.name} from roster`}
                           className="text-red-600 hover:text-red-800 p-1 cursor-pointer"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>
-                      )}
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  ))
+                )}
               </div>
             </div>
           )}

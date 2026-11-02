@@ -1,34 +1,44 @@
-# USTP System Palette & Branding Refinement Plan
+# Course Hub Creation for Students & Accurate Enrolled Roster Plan
 
-## Overview
-Update the ClariFy interface across three targeted areas to ensure cohesive USTP institutional branding and color palette alignment:
-1. **Messenger Chat Widget (`MessengerChatBox.tsx`)**: Replace generic `#0084ff` and `#f0f0f0` colors with the USTP system palette (`ustp-navy`, `ustp-gold`, `ustp-cream`, `ustp-text`, `ustp-blue`).
-2. **Login Badge (`app/login/page.tsx`)**: Replace `PRISMS SSO` inside the circular emblem with `ClariFy`.
-3. **Top Navigation Brand (`AppShell.tsx`)**: Convert the white rectangular `USTP` button in the top header into plain `USTP` letters styled in bold `ustp-gold` (`#fcb315`), removing the link to the login screen.
+## 1. Overview
+Update the ClariFy Course Hub and Roster system so that **Students, Faculty, and Department Heads** can create Course Hub channels and manage channel rosters, and ensure every Course Hub displays an **accurate Enrolled Roster** and member count based on real enrolled users rather than a hardcoded `42` placeholder.
 
 ---
 
-## Planned Changes
+## 2. Key Functional Changes
 
-### 1. Messenger Chat System Palette (`src/components/threads/MessengerChatBox.tsx`)
-- **Floating Trigger Button & Chat Header**:
-  - Restyle the floating Messenger button and active chat header bar in `bg-ustp-navy` (`#1a1851`) with `border-ustp-gold` accents and `text-ustp-gold` / `text-white` typography.
-  - Style active status indicators and unread badges with `bg-ustp-gold` (`#fcb315`) and `text-ustp-navy`.
-- **Chat Message Bubbles**:
-  - **Outgoing Messages (`isMe`)**: Style bubbles with `bg-ustp-navy` (`#1a1851`), `text-white`, and a subtle `border-ustp-navy` edge.
-  - **Incoming Messages**: Style bubbles with `bg-ustp-cream` (`#FFFAF2`), `text-ustp-text` (`#031c2e`), and `border-amber-200/80` border for crisp legibility against the message canvas.
-  - **Official Endorsed Replies**: Highlight endorsed faculty/admin answers with a `ring-2 ring-ustp-gold` accent and a `bg-ustp-gold/20 text-ustp-navy` badge.
-- **Avatars, Composer & Controls**:
-  - Style sender avatars using `bg-ustp-navy text-ustp-gold` (or `bg-ustp-blue text-white` for peers) instead of generic blue gradients.
-  - Style the bottom message input bar with `bg-ustp-cream` input field, `focus:ring-ustp-navy/30 focus:border-ustp-navy`, and a `bg-ustp-navy text-ustp-gold` send button.
+### A. Allow Students to Create Course Hub Channels
+- **Direct PostgreSQL Engine (`/clarify-web/src/server/postgres-adapter.ts`)**:
+  - Update `POST /api/v1/channels` so authenticated `student`, `faculty`, and `dept_head` accounts can create Course Hub channels (removing the `"HTTP 403 Forbidden: Only Faculty and Department Heads can create Course Hub channels."` block for students).
+  - Automatically enroll the creator and all approved users whose academic profile matches the channel's `scope_section` into `channel_user`.
+- **Laravel 13 Backend (`/clarify-api/app/Http/Controllers/Api/V1/ChannelController.php`)**:
+  - Update `ChannelController@store` to permit authenticated students as well as faculty and department heads to create Course Hub channels, and auto-sync matching section users into the channel roster.
 
-### 2. Login Emblem Text (`app/login/page.tsx`)
-- In the right-side login panel emblem, replace the label `PRISMS SSO` under the `ShieldCheck` icon with `ClariFy`.
+### B. Accurate Enrolled Roster & Member Counts (Auto-Sync Section + Joined Users)
+- **Auto-Sync Section & Activity Members**:
+  - Synchronize approved users whose `academic_profiles.section` matches a Course Hub's `scope_section` (along with the channel creator, explicitly joined users, and chat/thread participants) into the channel's `channel_user` roster.
+  - Ensure newly registered or newly approved users are automatically added to Course Hubs matching their section.
+- **Remove Hardcoded `42` Member Counts**:
+  - In `/clarify-web/src/server/postgres-adapter.ts`:
+    - Change `members_count: Math.max(roster.length, 42)` to `members_count: roster.length`.
+    - Update announcement `read_reach.enrolled_total` in `fetchAnnouncementsFromPg` to use the channel's actual enrolled member count (minimum `1` to prevent division by zero) instead of hardcoded `42`.
+  - In `/clarify-api/app/Http/Resources/ChannelResource.php`:
+    - Change `'members_count' => max(42, $members->count())` to `'members_count' => $members->count()`.
+  - In `/clarify-web/src/components/modals/ChannelRosterModal.tsx` and `/clarify-web/app/channels/[channelId]/page.tsx`:
+    - Replace all `members_count || 42` fallbacks with the actual `roster?.length ?? members_count ?? 0` count, and display the real member count in the sidebar (`Enrolled Roster: X members`) and modal tabs.
 
-### 3. Top Header USTP Branding (`src/components/layout/AppShell.tsx`)
-- Replace `<Link href="/login" title="Universal Login Screen" className="px-3.5 py-1.5 bg-white text-ustp-navy ...">USTP</Link>` with a non-clickable `<span className="text-lg sm:text-xl font-extrabold text-ustp-gold tracking-wider select-none">USTP</span>` so it renders purely as bold USTP Gold letters without a surrounding box or redirect link.
+### C. Full Roster Add & Remove Permissions for Students and Faculty
+- **Backend (`postgres-adapter.ts` & `ChannelController.php`)**:
+  - Allow both Students and Faculty/Department Heads to add and remove members via `POST /api/v1/channels/{id}/members`.
+  - Prevent removing a member from being undone by section auto-sync by allowing explicit removal of any roster entry (and allowing any member role in the roster list to be removed).
+- **Frontend (`/clarify-web/src/components/modals/ChannelRosterModal.tsx`)**:
+  - Enable the remove button across roster entries for both Student and Faculty users and show clear role/section badges and empty-state feedback when a roster has no members.
 
 ---
 
-## Verification
-- Run `compile_applet` and `lint_applet` to verify there are no TypeScript or ESLint errors.
+## 3. Files to Modify
+1. `/clarify-web/src/server/postgres-adapter.ts`
+2. `/clarify-api/app/Http/Controllers/Api/V1/ChannelController.php`
+3. `/clarify-api/app/Http/Resources/ChannelResource.php`
+4. `/clarify-web/src/components/modals/ChannelRosterModal.tsx`
+5. `/clarify-web/app/channels/[channelId]/page.tsx`
