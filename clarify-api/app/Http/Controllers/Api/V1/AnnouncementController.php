@@ -76,14 +76,18 @@ class AnnouncementController
             $query->orderByDesc('published_at');
         }
 
-        $perPage = (int) $request->query('per_page', 4);
-        $paginator = $query->paginate($perPage);
+        $perPage = max(1, (int) $request->query('per_page', 4));
+        $page = max(1, (int) $request->query('page', 1));
+        $paginator = $query->paginate($perPage, ['*'], 'page', $page);
+        if ($paginator->lastPage() > 0 && $page > $paginator->lastPage()) {
+            $paginator = $query->paginate($perPage, ['*'], 'page', $paginator->lastPage());
+        }
 
         return response()->json([
             'data' => AnnouncementResource::collection($paginator->items()),
             'meta' => [
                 'current_page' => $paginator->currentPage(),
-                'last_page' => $paginator->lastPage(),
+                'last_page' => max(1, $paginator->lastPage()),
                 'per_page' => $paginator->perPage(),
                 'total' => $paginator->total(),
             ],

@@ -107,7 +107,7 @@ export default function InstructorsPage() {
 
   return (
     <AppShell title="View Instructors">
-      <div className="p-4 sm:p-6 lg:p-8 max-w-6xl w-full mx-auto space-y-5 sm:space-y-6">
+      <div className="flex-1 flex flex-col p-4 sm:p-6 lg:p-8 max-w-6xl w-full mx-auto space-y-5 sm:space-y-6">
         {/* Top Bar matching Wireframes Pages 3 & 6 */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4">
           <div className="relative w-full sm:max-w-xs">
@@ -331,15 +331,10 @@ export default function InstructorsPage() {
           const pageItems = getPageItems();
 
           return (
-            <div className="pt-4 flex flex-col sm:flex-row items-center justify-between gap-3">
-              <p className="text-xs font-semibold text-slate-600 font-mono tabular-nums">
-                Page {currentPage} of {totalPages} ({meta.total}{' '}
-                {meta.total === 1 ? 'instructor' : 'instructors'})
-              </p>
-
+            <div className="mt-auto pt-6 flex flex-col items-center justify-center gap-2 w-full text-center">
               <nav
                 aria-label="Instructor Directory Pagination"
-                className="flex items-center justify-center gap-1.5 font-mono text-xs font-bold text-ustp-text tabular-nums flex-wrap"
+                className="flex items-center justify-center gap-2 font-mono text-xs font-bold text-ustp-text tabular-nums flex-wrap"
               >
                 <button
                   type="button"
@@ -387,6 +382,11 @@ export default function InstructorsPage() {
                   &gt;&gt;
                 </button>
               </nav>
+
+              <p className="text-xs font-semibold text-slate-600 font-mono tabular-nums">
+                Page {currentPage} of {totalPages} ({meta.total}{' '}
+                {meta.total === 1 ? 'instructor' : 'instructors'})
+              </p>
             </div>
           );
         })()}

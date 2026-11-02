@@ -124,7 +124,7 @@ export default function AnnouncementsPage() {
 
   return (
     <AppShell title="Announcements">
-      <div className="p-4 sm:p-6 lg:p-8 max-w-6xl w-full mx-auto space-y-5 sm:space-y-6">
+      <div className="flex-1 flex flex-col p-4 sm:p-6 lg:p-8 max-w-6xl w-full mx-auto space-y-5 sm:space-y-6">
         {/* Top Controls Row matching Wireframes Pages 2, 5 & 6 */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4">
           {/* Left: Rounded "Search....." input (FR-05) */}
@@ -274,15 +274,10 @@ export default function AnnouncementsPage() {
           const pageItems = getPageItems();
 
           return (
-            <div className="pt-4 flex flex-col sm:flex-row items-center justify-between gap-3">
-              <p className="text-xs font-semibold text-slate-600 font-mono tabular-nums">
-                Page {currentPage} of {totalPages} ({meta.total}{' '}
-                {meta.total === 1 ? 'announcement' : 'announcements'})
-              </p>
-
+            <div className="mt-auto pt-6 flex flex-col items-center justify-center gap-2 w-full text-center">
               <nav
                 aria-label="Announcements Pagination"
-                className="flex items-center justify-center gap-1.5 font-mono text-xs font-bold text-ustp-text tabular-nums flex-wrap"
+                className="flex items-center justify-center gap-2 font-mono text-xs font-bold text-ustp-text tabular-nums flex-wrap"
               >
                 <button
                   type="button"
@@ -330,6 +325,11 @@ export default function AnnouncementsPage() {
                   &gt;&gt;
                 </button>
               </nav>
+
+              <p className="text-xs font-semibold text-slate-600 font-mono tabular-nums">
+                Page {currentPage} of {totalPages} ({meta.total}{' '}
+                {meta.total === 1 ? 'announcement' : 'announcements'})
+              </p>
             </div>
           );
         })()}
