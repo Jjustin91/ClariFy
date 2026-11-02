@@ -18,6 +18,14 @@ const nextConfig: NextConfig = {
   output: 'standalone',
   transpilePackages: ['motion'],
   turbopack: {},
+  async rewrites() {
+    return [
+      {
+        source: '/api/v1/:path*',
+        destination: 'https://clarify-api.onrender.com/api/v1/:path*',
+      },
+    ];
+  },
 };
 
 export default nextConfig;
