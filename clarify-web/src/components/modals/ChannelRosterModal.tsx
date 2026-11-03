@@ -366,6 +366,8 @@ export function ChannelRosterModal() {
               <Hash className="w-4 h-4 text-ustp-gold" />
             ) : activeTab === 'edit_hub' ? (
               <Edit3 className="w-4 h-4 text-ustp-gold" />
+            ) : activeTab === 'browse' ? (
+              <Search className="w-4 h-4 text-ustp-gold" />
             ) : (
               <FolderPlus className="w-4 h-4 text-ustp-gold" />
             )}
@@ -374,7 +376,9 @@ export function ChannelRosterModal() {
                 ? `Add Channel inside ${formatCourseHubName(targetParentHub)}`
                 : activeTab === 'edit_hub'
                 ? 'Edit Course Hub'
-                : 'Course Hubs & Scoped Channels'}
+                : activeTab === 'browse'
+                ? `Browse Course Hubs (${courseHubs.length})`
+                : '+ Add Course Hub'}
             </h2>
           </div>
           <button
@@ -386,49 +390,6 @@ export function ChannelRosterModal() {
             <X className="w-4 h-4" />
           </button>
         </div>
-
-        {/* Navigation Tabs (shown when creating/editing/browsing Course Hubs) */}
-        {activeTab !== 'create_channel' && (
-          <div className="flex flex-wrap items-center gap-2 px-6 pt-3 border-b border-slate-200 bg-ustp-cream">
-            <button
-              type="button"
-              onClick={() => {
-                setFieldErrors({});
-                setEditingHubId(null);
-                setCourseCode('');
-                setHubName('');
-                setDescription('');
-                setActiveTab('create_hub');
-              }}
-              className={`px-3.5 py-2 text-xs font-extrabold border-b-2 transition-colors cursor-pointer ${
-                activeTab === 'create_hub'
-                  ? 'border-ustp-navy text-ustp-navy'
-                  : 'border-transparent text-slate-600 hover:text-ustp-text'
-              }`}
-            >
-              + Add Course Hub
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setFieldErrors({});
-                setActiveTab('browse');
-              }}
-              className={`px-3.5 py-2 text-xs font-bold border-b-2 transition-colors cursor-pointer ${
-                activeTab === 'browse'
-                  ? 'border-ustp-navy text-ustp-navy'
-                  : 'border-transparent text-slate-600 hover:text-ustp-text'
-              }`}
-            >
-              Browse Course Hubs ({courseHubs.length})
-            </button>
-            {activeTab === 'edit_hub' && (
-              <span className="px-3.5 py-2 text-xs font-extrabold border-b-2 border-ustp-navy text-ustp-navy">
-                Edit Course Hub
-              </span>
-            )}
-          </div>
-        )}
 
         <div className="p-6 max-h-[74vh] overflow-y-auto">
           {(activeTab === 'create_hub' || activeTab === 'edit_hub') && (
@@ -694,32 +655,18 @@ export function ChannelRosterModal() {
 
           {activeTab === 'browse' && (
             <div className="space-y-3">
-              {/* Search & Add Course Hub Bar */}
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-1">
-                <div className="relative flex-1">
+              {/* Search Course Hubs Bar */}
+              <div className="pb-1">
+                <div className="relative">
                   <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
                   <input
                     type="search"
                     value={browseSearch}
                     onChange={(e) => setBrowseSearch(e.target.value)}
                     placeholder="Search Course Hubs by code, name, section, or college..."
-                    className="w-full pl-8 pr-3 py-1.5 text-xs border border-slate-300 rounded focus:outline-none focus:border-ustp-navy"
+                    className="w-full pl-8 pr-3 py-2 text-xs border border-slate-300 rounded focus:outline-none focus:border-ustp-navy"
                   />
                 </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setEditingHubId(null);
-                    setCourseCode('');
-                    setHubName('');
-                    setDescription('');
-                    setActiveTab('create_hub');
-                  }}
-                  className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 text-xs font-extrabold bg-ustp-gold text-ustp-navy rounded hover:opacity-95 shrink-0 cursor-pointer"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  <span>+ Add Course Hub</span>
-                </button>
               </div>
 
               {filteredBrowseHubs.length === 0 ? (

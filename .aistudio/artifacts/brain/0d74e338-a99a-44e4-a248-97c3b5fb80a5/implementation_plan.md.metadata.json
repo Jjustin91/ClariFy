@@ -1,6 +1,6 @@
 {
-  "summary": "Implementation plan for adding Edit and Delete Course Hub actions for both Students and Faculty, making Browse Course Hubs functional with explicit opt-in joining (no auto-enrollment for new users), fixing notification counts and timestamps to reflect real Q&A threads and chat messages, and enabling real image sending, downloadable file sending, and playable voice recording in chat.",
-  "updatedAt": "2026-11-03T06:53:01.479803184Z",
+  "summary": "Implementation plan to isolate the Add Course Hub, Browse Course Hubs, and Edit Course Hub modal views by removing cross-tab navigation headers and the + Add Course Hub button inside Browse Course Hubs.",
+  "updatedAt": "2026-11-03T08:41:04.379826318Z",
   "requestFeedback": true,
   "userFacing": true
 }
