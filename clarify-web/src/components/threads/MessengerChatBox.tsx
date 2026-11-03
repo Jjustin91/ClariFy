@@ -3,6 +3,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
+  AlertCircle,
   ArrowRight,
   Check,
   Clock,
@@ -14,6 +15,7 @@ import {
   MessageCircle,
   Mic,
   Plus,
+  RotateCcw,
   Search,
   Settings,
   ShieldCheck,
@@ -24,6 +26,7 @@ import {
   Volume2,
   X,
 } from 'lucide-react';
+import { isSupabaseConfigured, supabase } from '@/lib/supabase';
 import { formatShortTime } from '../announcements/AnnouncementCard';
 import { useClarify } from '../../context/ClarifyContext';
 import {
@@ -257,12 +260,15 @@ export function MessengerChatBox({
   const [messagesByChannel, setMessagesByChannel] = useState<
     Record<number, ChatMessage[]>
   >({});
+  const [loadedChannelKeys, setLoadedChannelKeys] = useState<
+    Record<number, boolean>
+  >({});
+  const [isLoadingChannel, setIsLoadingChannel] = useState(false);
   const [messageText, setMessageText] = useState('');
   const [stagedMedia, setStagedMedia] = useState<ChatMediaAttachment | null>(
     null
   );
   const [showSettingsMenu, setShowSettingsMenu] = useState(false);
-  const [isSending, setIsSending] = useState(false);
 
   // Voice recording state
   const [isRecordingVoice, setIsRecordingVoice] = useState(false);
@@ -284,6 +290,19 @@ export function MessengerChatBox({
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const streamContainerRef = useRef<HTMLDivElement | null>(null);
+  const composerTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  const scrollToBottomSmooth = useCallback(() => {
+    if (typeof window === 'undefined') return;
+    window.requestAnimationFrame(() => {
+      if (streamContainerRef.current) {
+        streamContainerRef.current.scrollTo({
+          top: streamContainerRef.current.scrollHeight,
+          behavior: 'smooth',
+        });
+      }
+    });
+  }, []);
 
   const cleanupRecordingTimersAndStream = useCallback(() => {
     if (recordingTimerRef.current !== null) {
@@ -303,34 +322,115 @@ export function MessengerChatBox({
     };
   }, [cleanupRecordingTimersAndStream]);
 
+  /**
+   * Appends an incoming real-time message or reconciles it with an in-flight optimistic message
+   * matching by confirmed `id`, `temp_id`, or pending sender+content to prevent duplicate rendering.
+   */
   const appendMessageIdempotently = useCallback(
     (targetChannelId: number, incomingMessage: ChatMessage) => {
       setMessagesByChannel((prev) => {
         const existing = prev[targetChannelId] || [];
-        if (existing.some((m) => String(m.id) === String(incomingMessage.id))) {
-          return prev;
+        const incomingIdStr = String(incomingMessage.id);
+        const incomingTempIdStr = incomingMessage.temp_id
+          ? String(incomingMessage.temp_id)
+          : null;
+
+        // 1. Check if already present by confirmed ID or temp_id
+        const exactMatchIndex = existing.findIndex(
+          (m) =>
+            String(m.id) === incomingIdStr ||
+            (incomingTempIdStr !== null &&
+              (String(m.id) === incomingTempIdStr ||
+                (m.temp_id && String(m.temp_id) === incomingTempIdStr)))
+        );
+
+        if (exactMatchIndex !== -1) {
+          const updated = [...existing];
+          updated[exactMatchIndex] = {
+            ...existing[exactMatchIndex],
+            ...incomingMessage,
+            status: 'sent',
+          };
+          return {
+            ...prev,
+            [targetChannelId]: updated,
+          };
         }
+
+        // 2. If a realtime INSERT arrives before the sender's POST response resolves,
+        // match the oldest in-flight optimistic message from the same sender with identical content.
+        const optimisticMatchIndex = existing.findIndex(
+          (m) =>
+            m.status === 'sending' &&
+            String(m.id).startsWith('temp-') &&
+            Number(m.author.id) === Number(incomingMessage.author.id) &&
+            m.content === incomingMessage.content
+        );
+
+        if (optimisticMatchIndex !== -1) {
+          const updated = [...existing];
+          updated[optimisticMatchIndex] = {
+            ...incomingMessage,
+            temp_id: String(existing[optimisticMatchIndex].id),
+            status: 'sent',
+          };
+          return {
+            ...prev,
+            [targetChannelId]: updated,
+          };
+        }
+
         return {
           ...prev,
-          [targetChannelId]: [...existing, incomingMessage],
+          [targetChannelId]: [
+            ...existing,
+            { ...incomingMessage, status: incomingMessage.status || 'sent' },
+          ],
         };
       });
     },
     []
   );
 
+  const hasLoadedCurrentChannel = Boolean(
+    channelKey && loadedChannelKeys[channelKey]
+  );
+  const isInitialChannelLoading =
+    Boolean(channelKey) && !hasLoadedCurrentChannel && isLoadingChannel;
+
   const loadChatMessages = useCallback(async () => {
     if (!isAuthReady || !isAuthenticated || !channelKey) return;
+    setIsLoadingChannel(true);
     try {
       const res = await getChannelChatMessagesApi(channelKey);
       if (Array.isArray(res.data)) {
-        setMessagesByChannel((prev) => ({
-          ...prev,
-          [channelKey]: res.data,
-        }));
+        setMessagesByChannel((prev) => {
+          const currentList = prev[channelKey] || [];
+          // Preserve any optimistic messages currently in 'sending' or 'failed' state
+          const pendingOptimistic = currentList.filter(
+            (m) =>
+              (m.status === 'sending' || m.status === 'failed') &&
+              !res.data.some(
+                (serverMsg) =>
+                  String(serverMsg.id) === String(m.id) ||
+                  (serverMsg.temp_id &&
+                    String(serverMsg.temp_id) === String(m.temp_id || m.id))
+              )
+          );
+          return {
+            ...prev,
+            [channelKey]: [
+              ...res.data.map((m) => ({ ...m, status: 'sent' as const })),
+              ...pendingOptimistic,
+            ],
+          };
+        });
       }
     } catch {
       // Retain existing messages if offline
+    } finally {
+      setLoadedChannelKeys((prev) => ({ ...prev, [channelKey]: true }));
+      setIsLoadingChannel(false);
     }
   }, [channelKey, isAuthReady, isAuthenticated]);
 
@@ -345,7 +445,7 @@ export function MessengerChatBox({
     channelKey,
   ]);
 
-  // Subscribe to Laravel Reverb channel & SSE/BroadcastChannel for instant Live Channel Chat
+  // Supabase Realtime WebSocket Subscription: listen to INSERT events on "messages" filtered by channel_id=eq.${channelKey}
   useEffect(() => {
     if (!isAuthReady || !isAuthenticated || !channelKey) return;
 
@@ -358,6 +458,7 @@ export function MessengerChatBox({
       }
       if (event.message && event.message.id !== undefined) {
         appendMessageIdempotently(channelKey, event.message);
+        scrollToBottomSmooth();
       } else {
         void loadChatMessages();
       }
@@ -369,16 +470,103 @@ export function MessengerChatBox({
     );
     const unsubscribeStream = subscribeRealtimeEvents(handleRealtimeChatEvent);
 
+    // Subscribe to Supabase Realtime postgres_changes INSERT on public.messages
+    const realtimeChannel = isSupabaseConfigured
+      ? supabase
+          .channel(`channel-messages-${channelKey}`)
+          .on(
+            'postgres_changes',
+            {
+              event: 'INSERT',
+              schema: 'public',
+              table: 'messages',
+              filter: `channel_id=eq.${channelKey}`,
+            },
+            (payload) => {
+              const raw = payload.new as Record<string, unknown> | undefined;
+              if (!raw || raw.id === undefined) return;
+
+              // Only process channel chat rows (exclude Q&A thread roots or thread replies)
+              if (
+                raw.parent_id !== null &&
+                raw.parent_id !== undefined
+              ) {
+                return;
+              }
+              if (
+                typeof raw.subject_hashtag === 'string' &&
+                raw.subject_hashtag !== '__CHAT__'
+              ) {
+                return;
+              }
+
+              const senderId = Number(raw.sender_id || 0);
+              const isSenderCurrentUser =
+                senderId > 0 && Number(currentUser.id) === senderId;
+              const rosterMatch = channel?.roster?.find(
+                (member) => Number(member.id) === senderId
+              );
+              const rawAuthor =
+                raw.author && typeof raw.author === 'object'
+                  ? (raw.author as Partial<ChatMessage['author']>)
+                  : null;
+
+              const incomingMsg: ChatMessage = {
+                id: raw.id as number | string,
+                temp_id:
+                  typeof raw.temp_id === 'string' ? raw.temp_id : undefined,
+                channel_id: Number(raw.channel_id || channelKey),
+                sender_id: senderId,
+                content: String(raw.content || ''),
+                created_at:
+                  typeof raw.created_at === 'string'
+                    ? raw.created_at
+                    : new Date().toISOString(),
+                status: 'sent',
+                author: {
+                  id: Number(rawAuthor?.id || senderId),
+                  name:
+                    rawAuthor?.name ||
+                    (isSenderCurrentUser
+                      ? currentUser.name
+                      : rosterMatch?.name || 'USTP Member'),
+                  role:
+                    rawAuthor?.role ||
+                    (isSenderCurrentUser
+                      ? currentUser.role
+                      : rosterMatch?.role || 'student'),
+                  avatar_url:
+                    rawAuthor?.avatar_url ??
+                    (isSenderCurrentUser ? currentUser.avatar_url : null),
+                },
+              };
+
+              appendMessageIdempotently(channelKey, incomingMsg);
+              scrollToBottomSmooth();
+            }
+          )
+          .subscribe()
+      : null;
+
     return () => {
       unsubscribeReverb();
       unsubscribeStream();
+      if (realtimeChannel) {
+        void supabase.removeChannel(realtimeChannel);
+      }
     };
   }, [
     channelKey,
+    channel?.roster,
+    currentUser.id,
+    currentUser.name,
+    currentUser.role,
+    currentUser.avatar_url,
     isAuthReady,
     isAuthenticated,
     appendMessageIdempotently,
     loadChatMessages,
+    scrollToBottomSmooth,
     subscribeRealtimeEvents,
   ]);
 
@@ -388,8 +576,10 @@ export function MessengerChatBox({
 
   useEffect(() => {
     if (streamContainerRef.current && activeTab === 'messenger') {
-      streamContainerRef.current.scrollTop =
-        streamContainerRef.current.scrollHeight;
+      streamContainerRef.current.scrollTo({
+        top: streamContainerRef.current.scrollHeight,
+        behavior: 'smooth',
+      });
     }
   }, [channelKey, conversationMessages.length, activeTab]);
 
@@ -400,37 +590,170 @@ export function MessengerChatBox({
       )}`
     : 'No Course Hub Selected';
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const sendOptimisticMessage = useCallback(
+    async (
+      targetChannelId: number,
+      finalContent: string,
+      existingTempId?: string
+    ) => {
+      const tempId =
+        existingTempId ||
+        `temp-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      const nowIso = new Date().toISOString();
+
+      if (existingTempId) {
+        // Mark existing failed message as 'sending' again
+        setMessagesByChannel((prev) => ({
+          ...prev,
+          [targetChannelId]: (prev[targetChannelId] || []).map((m) =>
+            String(m.id) === existingTempId ||
+            String(m.temp_id) === existingTempId
+              ? { ...m, status: 'sending' as const }
+              : m
+          ),
+        }));
+      } else {
+        const optimisticMessage: ChatMessage = {
+          id: tempId,
+          temp_id: tempId,
+          channel_id: targetChannelId,
+          sender_id: currentUser.id,
+          content: finalContent,
+          created_at: nowIso,
+          status: 'sending',
+          author: {
+            id: currentUser.id,
+            name: currentUser.name,
+            role: currentUser.role,
+            avatar_url: currentUser.avatar_url,
+          },
+        };
+
+        setMessagesByChannel((prev) => ({
+          ...prev,
+          [targetChannelId]: [
+            ...(prev[targetChannelId] || []),
+            optimisticMessage,
+          ],
+        }));
+      }
+
+      scrollToBottomSmooth();
+
+      try {
+        const res = await sendChannelChatMessageApi(
+          targetChannelId,
+          finalContent,
+          tempId
+        );
+        const confirmedRecord: ChatMessage = {
+          ...res.data,
+          temp_id: tempId,
+          status: 'sent',
+        };
+
+        setMessagesByChannel((prev) => {
+          const list = prev[targetChannelId] || [];
+          // If Realtime already reconciled or appended confirmedRecord.id, deduplicate cleanly
+          const alreadyHasConfirmed = list.some(
+            (m) =>
+              String(m.id) === String(confirmedRecord.id) &&
+              String(m.id) !== tempId
+          );
+
+          if (alreadyHasConfirmed) {
+            return {
+              ...prev,
+              [targetChannelId]: list
+                .filter(
+                  (m) =>
+                    String(m.id) !== tempId && String(m.temp_id) !== tempId
+                )
+                .map((m) =>
+                  String(m.id) === String(confirmedRecord.id)
+                    ? { ...m, ...confirmedRecord, status: 'sent' as const }
+                    : m
+                ),
+            };
+          }
+
+          const replaced = list.map((m) =>
+            String(m.id) === tempId || String(m.temp_id) === tempId
+              ? confirmedRecord
+              : m
+          );
+
+          return {
+            ...prev,
+            [targetChannelId]: replaced,
+          };
+        });
+
+        scrollToBottomSmooth();
+        void refreshChannels();
+        onMessageSentToast?.(
+          res.message || 'Message sent to Course Hub chat.'
+        );
+      } catch {
+        setMessagesByChannel((prev) => ({
+          ...prev,
+          [targetChannelId]: (prev[targetChannelId] || []).map((m) =>
+            String(m.id) === tempId || String(m.temp_id) === tempId
+              ? { ...m, status: 'failed' as const }
+              : m
+          ),
+        }));
+      }
+    },
+    [
+      currentUser.id,
+      currentUser.name,
+      currentUser.role,
+      currentUser.avatar_url,
+      onMessageSentToast,
+      refreshChannels,
+      scrollToBottomSmooth,
+    ]
+  );
+
+  const submitCurrentDraft = () => {
     if (!channelKey) {
       showToast('Please join or select a Course Hub first.', 'error');
       return;
     }
     const trimmed = messageText.trim();
-    if ((!trimmed && !stagedMedia) || isSending) return;
+    if (!trimmed && !stagedMedia) return;
 
     const finalContent = encodeChatMessageWithAttachment(trimmed, stagedMedia);
 
-    setIsSending(true);
-    try {
-      const res = await sendChannelChatMessageApi(channelKey, finalContent);
-      appendMessageIdempotently(channelKey, res.data);
-      setMessageText('');
-      setStagedMedia(null);
-      triggerAnnouncementRefresh();
-      void refreshChannels();
-      onMessageSentToast?.(
-        res.message || 'Message sent to Course Hub chat.'
-      );
-    } catch (err) {
-      const msg =
-        err && typeof err === 'object' && 'message' in err
-          ? String((err as { message?: string }).message)
-          : 'Failed to send message to database.';
-      showToast(msg, 'error');
-    } finally {
-      setIsSending(false);
+    // Clear input field and staged attachment immediately (zero-latency optimistic UI)
+    setMessageText('');
+    setStagedMedia(null);
+    if (composerTextareaRef.current) {
+      composerTextareaRef.current.style.height = 'auto';
     }
+
+    void sendOptimisticMessage(channelKey, finalContent);
+  };
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    submitCurrentDraft();
+  };
+
+  const handleComposerKeyDown = (
+    e: React.KeyboardEvent<HTMLTextAreaElement>
+  ) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      submitCurrentDraft();
+    }
+  };
+
+  const handleRetryFailedMessage = (failedMsg: ChatMessage) => {
+    if (!channelKey) return;
+    const tempKey = String(failedMsg.temp_id || failedMsg.id);
+    void sendOptimisticMessage(channelKey, failedMsg.content, tempKey);
   };
 
   const handleStartVoiceRecording = async () => {
@@ -1286,19 +1609,50 @@ export function MessengerChatBox({
                       <div className="flex flex-col items-end">
                         <div className="flex items-end justify-end gap-2 w-full">
                           <div
-                            className="bg-ustp-navy text-white border border-ustp-navy rounded-[20px] rounded-br-xs px-4 py-2.5 text-xs sm:text-sm leading-relaxed shadow-2xs max-w-[82%] sm:max-w-[68%] break-words"
+                            className={`rounded-[20px] rounded-br-xs px-4 py-2.5 text-xs sm:text-sm leading-relaxed shadow-2xs max-w-[82%] sm:max-w-[68%] break-words transition-opacity ${
+                              msg.status === 'failed'
+                                ? 'bg-red-900/90 text-white border border-red-500'
+                                : msg.status === 'sending'
+                                ? 'bg-ustp-navy/80 text-white border border-ustp-navy/80 opacity-85'
+                                : 'bg-ustp-navy text-white border border-ustp-navy'
+                            }`}
                             title={`Sent by you (${currentUser.name}) at ${displayTime}`}
                           >
                             {renderMessageContent(msg.content, true)}
                           </div>
                         </div>
-                        {isLastMessage && (
+                        {msg.status === 'sending' && (
                           <div className="mt-1 pr-1 flex items-center gap-1.5 select-none">
+                            <Clock className="w-3 h-3 text-slate-400 animate-spin" />
                             <span className="text-[10px] font-medium text-slate-400">
-                              Sent {displayTime}
+                              Sending...
                             </span>
                           </div>
                         )}
+                        {msg.status === 'failed' && (
+                          <div className="mt-1 pr-1 flex items-center gap-2 select-none">
+                            <span className="inline-flex items-center gap-1 text-[10px] font-bold text-red-600">
+                              <AlertCircle className="w-3 h-3" />
+                              Failed to send
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => handleRetryFailedMessage(msg)}
+                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 text-[10px] font-extrabold cursor-pointer"
+                            >
+                              <RotateCcw className="w-2.5 h-2.5" />
+                              Retry
+                            </button>
+                          </div>
+                        )}
+                        {(!msg.status || msg.status === 'sent') &&
+                          isLastMessage && (
+                            <div className="mt-1 pr-1 flex items-center gap-1.5 select-none">
+                              <span className="text-[10px] font-medium text-slate-400">
+                                Sent {displayTime}
+                              </span>
+                            </div>
+                          )}
                       </div>
                     ) : (
                       /* RESPONDENT MESSAGE: Left-aligned USTP Cream Bubble (#FFFAF2) */
@@ -1526,23 +1880,32 @@ export function MessengerChatBox({
               <FileText className="w-5 h-5 stroke-[2.2]" />
             </button>
 
-            {/* Rounded Pill Message Input */}
+            {/* Rounded Pill Message Input (Enter to submit, Shift + Enter for newline) */}
             <label htmlFor="messenger-chat-input" className="sr-only">
               Type a message in {activeChatChannelLabel} ({courseHeaderTitle})
             </label>
-            <input
+            <textarea
+              ref={composerTextareaRef}
               id="messenger-chat-input"
-              type="text"
+              rows={1}
               value={messageText}
+              disabled={isInitialChannelLoading}
               onChange={(e) => setMessageText(e.target.value)}
-              placeholder={`Message ${activeChatChannelLabel} in ${courseHeaderTitle}...`}
-              className="flex-1 min-w-0 bg-white border border-slate-300 rounded-full px-4 py-2 text-xs sm:text-sm text-ustp-text placeholder:text-slate-400 focus:outline-none focus:border-ustp-navy focus:ring-2 focus:ring-ustp-gold/40"
+              onKeyDown={handleComposerKeyDown}
+              placeholder={
+                isInitialChannelLoading
+                  ? 'Loading channel messages...'
+                  : `Message ${activeChatChannelLabel} in ${courseHeaderTitle}...`
+              }
+              className="flex-1 min-w-0 bg-white border border-slate-300 rounded-2xl px-4 py-2 text-xs sm:text-sm text-ustp-text placeholder:text-slate-400 focus:outline-none focus:border-ustp-navy focus:ring-2 focus:ring-ustp-gold/40 resize-none max-h-28 overflow-y-auto leading-snug disabled:opacity-50"
             />
 
             {/* Circular USTP Navy & Gold Send Arrow Button */}
             <button
               type="submit"
-              disabled={(!messageText.trim() && !stagedMedia) || isSending}
+              disabled={
+                (!messageText.trim() && !stagedMedia) || isInitialChannelLoading
+              }
               aria-label="Send message"
               className="w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-ustp-navy hover:opacity-95 disabled:opacity-45 text-ustp-gold border border-ustp-gold flex items-center justify-center shrink-0 transition-opacity cursor-pointer shadow-2xs"
             >

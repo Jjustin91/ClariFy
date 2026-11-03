@@ -13,6 +13,7 @@
     "clean": "cd clarify-web && ./node_modules/.bin/next clean"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.118.0",
     "laravel-echo": "^2.6.3",
     "pg": "^8.23.1",
     "pusher-js": "^8.6.0"

@@ -82,39 +82,51 @@ export function AnnouncementFormModal() {
   const [fieldErrors, setFieldErrors] = useState<Record<string, string[]>>({});
   const [generalError, setGeneralError] = useState<string | null>(null);
 
+  const wasOpenRef = React.useRef(false);
+  const lastEditingIdRef = React.useRef<number | null>(null);
+
   useEffect(() => {
-    if (isOpen) {
-      setFieldErrors({});
-      setGeneralError(null);
-      if (editingAnnouncement) {
-        setTitle(editingAnnouncement.title);
-        setContent(editingAnnouncement.content);
-        setSelectedChannelIds([editingAnnouncement.channel_id]);
-        setSelectedTags(editingAnnouncement.tags);
-        setIsUrgent(editingAnnouncement.is_urgent);
-        setTriggerSmsFallback(Boolean(editingAnnouncement.trigger_sms_fallback));
-        setStatus(
-          editingAnnouncement.status === 'draft' ? 'draft' : 'published'
-        );
-        setAttachmentName(editingAnnouncement.attachment_name || null);
-        setAttachmentType(editingAnnouncement.attachment_type || null);
-      } else {
-        setTitle('');
-        setContent('');
-        const validDefault =
-          defaultChannelId &&
-          handledCourseHubs.some((c) => c.id === defaultChannelId)
-            ? defaultChannelId
-            : handledCourseHubs[0]?.id || 1;
-        setSelectedChannelIds([validDefault]);
-        const userDept = user?.academic_profile?.department || 'CITC';
-        setSelectedTags(['OFFICIAL MEMO', 'CDO CAMPUS', userDept]);
-        setIsUrgent(false);
-        setTriggerSmsFallback(false);
-        setStatus('published');
-        setAttachmentName(null);
-        setAttachmentType(null);
-      }
+    const editingId = editingAnnouncement?.id ?? null;
+    const justOpened = isOpen && !wasOpenRef.current;
+    const switchedTarget = isOpen && editingId !== lastEditingIdRef.current;
+
+    wasOpenRef.current = isOpen;
+    lastEditingIdRef.current = editingId;
+
+    if (!justOpened && !switchedTarget) {
+      return;
+    }
+
+    setFieldErrors({});
+    setGeneralError(null);
+    if (editingAnnouncement) {
+      setTitle(editingAnnouncement.title);
+      setContent(editingAnnouncement.content);
+      setSelectedChannelIds([editingAnnouncement.channel_id]);
+      setSelectedTags(editingAnnouncement.tags);
+      setIsUrgent(editingAnnouncement.is_urgent);
+      setTriggerSmsFallback(Boolean(editingAnnouncement.trigger_sms_fallback));
+      setStatus(
+        editingAnnouncement.status === 'draft' ? 'draft' : 'published'
+      );
+      setAttachmentName(editingAnnouncement.attachment_name || null);
+      setAttachmentType(editingAnnouncement.attachment_type || null);
+    } else {
+      setTitle('');
+      setContent('');
+      const validDefault =
+        defaultChannelId &&
+        handledCourseHubs.some((c) => c.id === defaultChannelId)
+          ? defaultChannelId
+          : handledCourseHubs[0]?.id || 1;
+      setSelectedChannelIds([validDefault]);
+      const userDept = user?.academic_profile?.department || 'CITC';
+      setSelectedTags(['OFFICIAL MEMO', 'CDO CAMPUS', userDept]);
+      setIsUrgent(false);
+      setTriggerSmsFallback(false);
+      setStatus('published');
+      setAttachmentName(null);
+      setAttachmentType(null);
     }
   }, [
     isOpen,

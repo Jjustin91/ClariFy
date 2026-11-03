@@ -45,12 +45,13 @@ class ChannelChatController
     }
 
     /**
-     * POST /api/v1/channels/{channelId}/chat
+     * POST /api/v1/channels/{channelId}/messages & /api/v1/channels/{channelId}/chat
      */
     public function store(Request $request, int $channelId): JsonResponse
     {
         $validated = $request->validate([
             'content' => ['required', 'string'],
+            'temp_id' => ['nullable', 'string', 'max:100'],
         ], [
             'content.required' => 'Please type a message before sending.',
         ]);
@@ -74,9 +75,12 @@ class ChannelChatController
 
         $chatPayload = [
             'id' => $msg->id,
+            'temp_id' => $validated['temp_id'] ?? null,
             'channel_id' => $msg->channel_id,
+            'sender_id' => $user->id,
             'content' => $msg->content,
             'created_at' => $msg->created_at?->toIso8601String(),
+            'status' => 'sent',
             'author' => [
                 'id' => $user->id,
                 'name' => $user->name,

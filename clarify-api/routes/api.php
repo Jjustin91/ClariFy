@@ -48,7 +48,9 @@ Route::prefix('v1')->group(function () {
         Route::post('/channels/{id}/leave', [ChannelController::class, 'leave']);
         Route::post('/channels/{id}/members', [ChannelController::class, 'manageMembers']);
 
-        // Course Hub Messenger Chat
+        // Course Hub Messenger Chat (/messages & /chat aliases)
+        Route::get('/channels/{channelId}/messages', [ChannelChatController::class, 'index']);
+        Route::post('/channels/{channelId}/messages', [ChannelChatController::class, 'store']);
         Route::get('/channels/{channelId}/chat', [ChannelChatController::class, 'index']);
         Route::post('/channels/{channelId}/chat', [ChannelChatController::class, 'store']);
 

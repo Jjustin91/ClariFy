@@ -675,22 +675,52 @@ export async function getAdminMetricsApi(): Promise<
 export async function getChannelChatMessagesApi(
   channelId: number
 ): Promise<SingleResourceResponse<ChatMessage[]>> {
-  return requestLaravel<SingleResourceResponse<ChatMessage[]>>(
-    `/channels/${channelId}/chat`
-  );
+  try {
+    return await requestLaravel<SingleResourceResponse<ChatMessage[]>>(
+      `/channels/${channelId}/messages`
+    );
+  } catch (err) {
+    const apiErr = err as LaravelValidationError;
+    if (apiErr?.status === 404) {
+      return requestLaravel<SingleResourceResponse<ChatMessage[]>>(
+        `/channels/${channelId}/chat`
+      );
+    }
+    throw err;
+  }
 }
 
 export async function sendChannelChatMessageApi(
   channelId: number,
-  content: string
+  content: string,
+  tempId?: string
 ): Promise<SingleResourceResponse<ChatMessage>> {
-  return requestLaravel<SingleResourceResponse<ChatMessage>>(
-    `/channels/${channelId}/chat`,
-    {
-      method: 'POST',
-      body: JSON.stringify({ content }),
+  const body = JSON.stringify({
+    content,
+    ...(tempId ? { temp_id: tempId } : {}),
+  });
+
+  try {
+    return await requestLaravel<SingleResourceResponse<ChatMessage>>(
+      `/channels/${channelId}/messages`,
+      {
+        method: 'POST',
+        body,
+      }
+    );
+  } catch (err) {
+    const apiErr = err as LaravelValidationError;
+    if (apiErr?.status === 404) {
+      return requestLaravel<SingleResourceResponse<ChatMessage>>(
+        `/channels/${channelId}/chat`,
+        {
+          method: 'POST',
+          body,
+        }
+      );
     }
-  );
+    throw err;
+  }
 }
 
 export async function getPersistenceStatusApi(): Promise<

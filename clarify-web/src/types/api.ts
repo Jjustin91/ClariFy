@@ -191,9 +191,12 @@ export interface SingleResourceResponse<T> {
 
 export interface ChatMessage {
   id: number | string;
+  temp_id?: string | null;
   channel_id: number;
+  sender_id?: number;
   content: string;
   created_at: string;
+  status?: 'sending' | 'sent' | 'failed';
   author: {
     id: number;
     name: string;

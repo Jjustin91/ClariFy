@@ -1,91 +1,91 @@
-# Lightweight File-Based API Caching for ClariFy (`clarify-api`)
+# Announcement Form Input Fix & Zero-Latency Real-Time Channel Chat
 
-This plan implements zero-dependency, file-based caching (`CACHE_STORE=file`) in `clarify-api` to reduce redundant Supabase PostgreSQL round-trips across announcements, course hub channels, and the verified faculty directory, complete with automatic cache invalidation on writes.
+This plan resolves the input reset bug in the **Create / Edit Announcement Modal** and upgrades the **Course Hub Channel Chat** (`clarify-web`) with zero-latency optimistic UI updates, retryable error states, multi-line `Enter` / `Shift+Enter` keyboard UX, and a live Supabase Realtime WebSocket subscription (`@supabase/supabase-js`).
 
 ## User Review & Critical Decisions
 
 > [!IMPORTANT]
-> **Why Registry-Backed Keys Instead of `Cache::tags()`**: Laravel's `file` cache driver does not support `Cache::tags()` (which throws a `BadMethodCallException` without Redis/Memcached). To achieve targeted per-channel and per-resource invalidation using only the native `file` driver, we use deterministic cache key conventions paired with a lightweight file-cached key index (`Cache::forget()`) so every parameterized query variant for a specific `channel_id` is cleanly invalidated on create/update/delete.
+> All functional and architectural requirements were specified in the prompt. Please review the summary below and click **Proceed** to execute.
 
-- **Confirmed TTLs & Store**:
-  - `AnnouncementController@index`: **10 minutes** (`600` seconds) via `Cache::remember()`
-  - `ChannelController@index`: **10 minutes** (`600` seconds) via `Cache::remember()`
-  - `InstructorController@index`: **30 minutes** (`1800` seconds) via `Cache::remember()`
-  - Default Store: `'file'` in `config/cache.php` and `CACHE_STORE=file` / `CACHE_DRIVER=file` in `.env.example`
-  - Preflight Caching: `'max_age' => 86400` (24 hours) in `config/cors.php`
+- **Announcement Modal Input Stability**: Stabilize the modal initialization `useEffect` in the Announcement Form so typing into the **Title** or **Content** fields never triggers a form state reset when derived Course Hub lists re-evaluate on render.
+- **Zero-Latency Optimistic Messaging**: Immediately append outgoing messages with a temporary ID (`temp-${Date.now()}`), current ISO timestamp, sender profile, and `status: 'sending'`, clear the composer input, and smoothly scroll to the bottom while the `POST /channels/${channelId}/messages` request executes in the background.
+- **Supabase Realtime Subscription (`messages` Table)**: Subscribe to `postgres_changes` (`INSERT` on `public.messages` filtered by `channel_id=eq.${channelId}`) via `@supabase/supabase-js` and deduplicate incoming payloads against existing confirmed `id` or optimistic `temp_id` entries.
 
 ---
 
 ## 1. Overview & Core Concept
 
-- **What It Does**: Caches serialized JSON-ready resource payloads for the three highest-traffic read endpoints in `clarify-api` on local disk (`storage/framework/cache/data`) while immediately invalidating affected channel or directory keys when announcements, channels, or rosters change.
-- **Target Audience / Persona**: Students, Faculty, Department Heads, and mobile/web clients communicating with the Render/Supabase Laravel API.
-- **Key Value**: Eliminates costly cross-region PostgreSQL pooler queries on repeated page loads and caches CORS preflight `OPTIONS` requests for 24 hours.
+- **What It Does**:
+  1. Fixes the **Create / Edit Announcement** modal so Department Heads and Faculty can type freely into the Title and Content inputs without characters being wiped on re-render.
+  2. Delivers instant, zero-latency message sending in Course Hub channels (`#general` and custom sub-channels) with optimistic status indicators (`Sending...`, `Sent`, `Failed — Tap to retry`) and live WebSocket message delivery via Supabase Realtime.
+- **Target Audience / Persona**: USTP Students, Faculty Instructors, and Department Heads collaborating in Course Hub channels and publishing official announcements.
+- **Key Value**: Eliminates perceived network latency when chatting and ensures multi-participant messages appear live without page refreshes.
 
 ---
 
 ## 2. User Experience & Visual Design
 
 - **Key User Flows**:
-  1. **Course Hub Noticeboard & All Announcements (`GET /api/v1/announcements`)**: First request queries Supabase and caches the resolved response under the channel-scoped key for 10 minutes; subsequent requests serve directly from the local file cache until an announcement is created, updated, acknowledged, or deleted.
-  2. **Course Hub Sidebar & Browse Modal (`GET /api/v1/channels`)**: Caches the user's visible channel list for 10 minutes; creating, editing, deleting, joining, leaving, or managing members immediately invalidates the channel cache so the UI reflects roster and metadata changes right away.
-  3. **Verified Faculty Directory (`GET /api/v1/instructors`)**: Caches the approved faculty directory for 30 minutes per filter/pagination combination.
-- **Visual Identity & Theme**: Backend performance enhancement; preserves existing ClariFy USTP Navy (`#1a1851`) and Gold (`#fdb913`) UI behavior and real-time synchronization.
-- **Interactive Feedback & Motion**: Mutations immediately invalidate stale cache entries before returning the response and broadcasting real-time events, preventing any stale UI reads on follow-up fetches.
+  1. **Creating an Announcement**:
+     - Opening the modal initializes the form fields once per open session (`isOpen` transition / `editingAnnouncement?.id`).
+     - Typing into **Title** and **Type here** updates state smoothly without re-running initialization logic.
+  2. **Optimistic Channel Messaging**:
+     - Pressing `Enter` (without `Shift`) or clicking the Send button immediately appends the message bubble into the chat stream with a subtle `Sending...` status indicator, clears the composer input, and smoothly scrolls the chat container to the latest message.
+     - Pressing `Shift + Enter` inserts a newline in the auto-expanding composer textarea.
+     - The composer remains active and responsive while background requests are in flight (only disabled during the initial channel load).
+     - When the API responds with `201 Created`, the temporary optimistic record (`temp-...`) is seamlessly replaced in-place by the confirmed database record.
+     - If the API request fails, the message bubble remains visible with a red `Failed to send • Retry` action button that re-submits the payload on click.
+  3. **Live Incoming Messages (Supabase Realtime)**:
+     - When another participant posts a message to the same channel, the Supabase Realtime `postgres_changes` listener receives the `INSERT` event on `messages`, checks that the message is not already present in local state (by confirmed `id` or matching `temp_id`), appends it to the conversation, and smoothly scrolls to the bottom.
 
 ---
 
 ## 3. Key Product Decisions & Trade-Offs
 
-- **Decision 1: Cache Key Naming Convention & Index-Based `Cache::forget()`**
-  - *Chosen Approach*:
-    - **Channel Announcements**: `announcements.channel.{channel_id}.{query_hash}` (tracked under index key `announcements.channel.{channel_id}.keys`) and `announcements.feed.user.{user_id}.{query_hash}` (tracked under `announcements.feed.keys`).
-    - **User Visible Channels**: `channels.user.{user_id}.{query_hash}` (tracked under index key `channels.keys`).
-    - **Instructor Directory**: `instructors.directory.{query_hash}` (tracked under index key `instructors.keys`).
-  - *Why*: Allows `AnnouncementObserver` (`created`, `updated`, `deleted`) to invalidate all cached pages/filters for a specific `$announcement->channel_id` (plus the combined campus/enrolled feed) using standard `Cache::forget()`, which works natively with the `'file'` driver.
-- **Decision 2: Caching Resolved Array Payloads Inside `Cache::remember()`**
-  - *Chosen Approach*: Cache the resolved `['data' => ..., 'meta' => ...]` array inside `Cache::remember()`, then return `response()->json($payload)`.
-  - *Why*: Avoids serializing Eloquent model connections or lazy-loaded relations while caching the full resource transformation and pagination metadata.
+- **Decision 1: Optimistic Reconciliation & Deduplication Strategy**
+  - *Chosen Approach*: Attach both `id` (`temp-${Date.now()}`) and `temp_id` to optimistic messages. Reconcile on API completion by replacing the matching `temp_id` item with the confirmed server record, and guard the Realtime `INSERT` handler against both `msg.id === incoming.id` and `msg.temp_id === incoming.temp_id` (plus matching sender + content + pending status if the WebSocket event arrives before the HTTP response returns).
+  - *Why*: Prevents duplicate bubbles when both the HTTP response and the Supabase Realtime WebSocket broadcast arrive within milliseconds of each other.
+- **Decision 2: Dual Endpoint Route Compatibility (`/channels/{channelId}/messages` & `/channels/{channelId}/chat`)**
+  - *Chosen Approach*: Register `GET` and `POST /api/v1/channels/{channelId}/messages` alongside `/channels/{channelId}/chat` in the Laravel API, and configure the Next.js API client to post to `/channels/${channelId}/messages` with automatic fallback to `/channels/${channelId}/chat`.
+  - *Why*: Guarantees compatibility with both the `/channels/${channelId}/messages` endpoint contract and any existing `/chat` callers.
 
 ---
 
 ## 4. Technical Architecture & Data Strategy *(Technical Reference)*
 
+### Architecture & Data Flow Diagram
+
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
-│                   Incoming GET Request (API v1)                          │
-│  • GET /api/v1/announcements   (TTL: 10 mins)                            │
-│  • GET /api/v1/channels        (TTL: 10 mins)                            │
-│  • GET /api/v1/instructors     (TTL: 30 mins)                            │
-└────────────────────────────────────┬─────────────────────────────────────┘
-                                     │
-                                     ▼
-┌──────────────────────────────────────────────────────────────────────────┐
-│                 Laravel File Cache (config/cache.php)                    │
-│  • Store: 'file' (storage/framework/cache/data)                          │
-│  • Cache::remember($cacheKey, $ttl, fn () => ...)                        │
-│  • Registers $cacheKey in per-channel / per-resource index key           │
-└───────────────┬──────────────────────────────────────────┬───────────────┘
-                │ Cache Hit                                │ Cache Miss
-                ▼                                          ▼
-┌───────────────────────────────┐          ┌───────────────────────────────┐
-│ Return Cached JSON Payload    │          │ Query Supabase PostgreSQL,    │
-│ (< 5ms disk read, 0 DB query) │          │ Transform Resource & Store    │
-└───────────────────────────────┘          └───────────────────────────────┘
-
-┌──────────────────────────────────────────────────────────────────────────┐
-│                        Cache Invalidation Triggers                       │
-│  • AnnouncementObserver (created / updated / deleted):                   │
-│    -> ApiCache::forgetChannelAnnouncements($announcement->channel_id)    │
-│  • ChannelController (store / update / destroy / join / leave / members):│
-│    -> ApiCache::forgetChannels()                                         │
-└──────────────────────────────────────────────────────────────────────────┘
+│                     Next.js Channel Chat Component                       │
+│  ┌─────────────────────────┐        ┌─────────────────────────────────┐  │
+│  │ Composer Textarea       │        │ Optimistic Message State        │  │
+│  │ • Enter = Submit        │───────▶│ • id: "temp-173065..."          │  │
+│  │ • Shift+Enter = Newline │        │ • status: 'sending' | 'failed'  │  │
+│  └─────────────────────────┘        └───────────┬─────────────────────┘  │
+│                                                 │                        │
+│               ┌─────────────────────────────────┴───────────────┐        │
+│               ▼                                                 ▼        │
+│  ┌────────────────────────────────────┐   ┌───────────────────────────┐  │
+│  │ POST /channels/{id}/messages       │   │ Supabase Realtime Client  │  │
+│  │ • Background async request         │   │ • channel_id=eq.{id}      │  │
+│  │ • Success: swap temp_id -> DB row  │   │ • Deduplicate id/temp_id  │  │
+│  │ • Error: status='failed' + Retry   │   │ • Auto-scroll on insert   │  │
+│  └────────────────┬───────────────────┘   └─────────────▲─────────────┘  │
+└───────────────────┼─────────────────────────────────────┼────────────────┘
+                    ▼                                     │
+       ┌─────────────────────────┐           ┌────────────┴────────────┐
+       │ Laravel 11 REST API     │──────────▶│ Supabase PostgreSQL     │
+       │ ChannelChatController   │  INSERT   │ Table: public.messages  │
+       └─────────────────────────┘           └─────────────────────────┘
 ```
 
-- **Data Model & State**:
-  - `config/cache.php`: Configures `'default' => env('CACHE_STORE', env('CACHE_DRIVER', 'file'))` and `'stores.file'` pointing to `storage_path('framework/cache/data')`.
-  - `.env.example`: Sets `CACHE_STORE=file` and `CACHE_DRIVER=file`.
-  - `config/cors.php`: Ensures `'max_age' => 86400` for browser/mobile preflight `OPTIONS` caching.
-- **Interactive Component & State Mapping**:
-  - `AnnouncementObserver`: Implements `created(Announcement $announcement)`, `updated(Announcement $announcement)`, and `deleted(Announcement $announcement)` (alongside existing `updating()` audit logging) to invalidate the channel's announcement cache keys.
-  - `ChannelController`: Calls `ApiCache::forgetChannels()` on channel creation (`store`), update (`update`), deletion (`destroy`), and roster changes (`join`, `leave`, `manageMembers`).
+### Interactive Component & State Mapping
+- **Announcement Modal (`AnnouncementFormModal`)**:
+  - Track modal open lifecycle so form reset only executes when opening the modal or switching the target announcement being edited, never on keystrokes.
+- **Supabase Client Helper (`clarify-web/lib/supabase.ts`)**:
+  - Initialize `@supabase/supabase-js` client with `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY`, providing a safe no-op guard if environment variables are not configured in local preview.
+- **Channel Chat (`MessengerChatBox` / `ChannelChat`)**:
+  - Maintain `messagesByChannel` with `status?: 'sending' | 'sent' | 'failed'` and `temp_id?: string`.
+  - Provide `handleRetryMessage(failedMsg)` to re-dispatch failed optimistic messages without re-typing.
+  - Clean up the Supabase Realtime subscription via `supabase.removeChannel(realtimeChannel)` on unmount or `channelId` change.
