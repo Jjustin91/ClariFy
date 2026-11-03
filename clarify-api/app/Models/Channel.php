@@ -37,7 +37,19 @@ class Channel extends Model
 
     public function threads(): HasMany
     {
-        return $this->hasMany(Message::class)->whereNull('parent_id');
+        return $this->hasMany(Message::class)
+            ->whereNull('parent_id')
+            ->where(function ($q) {
+                $q->whereNull('subject_hashtag')
+                    ->orWhere('subject_hashtag', '!=', '__CHAT__');
+            });
+    }
+
+    public function chatMessages(): HasMany
+    {
+        return $this->hasMany(Message::class)
+            ->whereNull('parent_id')
+            ->where('subject_hashtag', '__CHAT__');
     }
 
     public function creator(): BelongsTo

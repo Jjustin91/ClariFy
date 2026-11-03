@@ -2,18 +2,36 @@
 
 import React, { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { BookOpen, FolderPlus, Hash, Plus, X } from 'lucide-react';
+import {
+  ArrowRight,
+  BookOpen,
+  CheckCircle2,
+  Edit3,
+  FolderPlus,
+  Hash,
+  Plus,
+  Search,
+  Trash2,
+  X,
+} from 'lucide-react';
 import { useClarify } from '../../context/ClarifyContext';
-import { createChannelApi, joinChannelApi } from '../../lib/api-client';
+import {
+  createChannelApi,
+  deleteChannelApi,
+  joinChannelApi,
+  updateChannelApi,
+} from '../../lib/api-client';
 import {
   formatCourseHubName,
   formatSubChannelDisplayName,
   getCleanChannelDescription,
   getFieldValidationError,
+  getJoinedCourseHubs,
   getSubChannelsForHub,
   getTopLevelCourseHubs,
+  isUserEnrolledInCourseHub,
 } from '../../lib/domain-logic';
-import type { LaravelValidationError } from '../../types/api';
+import type { Channel, LaravelValidationError } from '../../types/api';
 
 export function ChannelRosterModal() {
   const router = useRouter();
@@ -29,12 +47,14 @@ export function ChannelRosterModal() {
   } = useClarify();
 
   const courseHubs = getTopLevelCourseHubs(channels);
+  const joinedCourseHubs = getJoinedCourseHubs(channels, user);
 
   const [activeTab, setActiveTab] = useState<
-    'create_hub' | 'create_channel' | 'browse'
+    'create_hub' | 'edit_hub' | 'create_channel' | 'browse'
   >('create_hub');
 
-  // Create Course Hub fields
+  // Create / Edit Course Hub fields
+  const [editingHubId, setEditingHubId] = useState<number | null>(null);
   const [courseCode, setCourseCode] = useState('');
   const [hubName, setHubName] = useState('');
   const [description, setDescription] = useState('');
@@ -52,37 +72,113 @@ export function ChannelRosterModal() {
   const [subChannelName, setSubChannelName] = useState('');
   const [subChannelTopic, setSubChannelTopic] = useState('');
 
+  // Browse Course Hubs search & delete confirmation
+  const [browseSearch, setBrowseSearch] = useState('');
+  const [confirmDeleteHubId, setConfirmDeleteHubId] = useState<number | null>(
+    null
+  );
+  const [isDeletingId, setIsDeletingId] = useState<number | null>(null);
+  const [joiningHubId, setJoiningHubId] = useState<number | null>(null);
+
   const [fieldErrors, setFieldErrors] = useState<Record<string, string[]>>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const populateEditFields = (hub: Channel) => {
+    setEditingHubId(hub.id);
+    const code = (hub.course_code || '').trim();
+    const cleanFull = formatCourseHubName(hub);
+    const strippedTitle =
+      code && cleanFull.toLowerCase().startsWith(code.toLowerCase())
+        ? cleanFull.slice(code.length).trim() || cleanFull
+        : cleanFull;
+    setCourseCode(code);
+    setHubName(strippedTitle);
+    setDescription(getCleanChannelDescription(hub.description));
+    setScopeDepartment(hub.scope_department || 'CITC');
+    setScopeSection(hub.scope_section || 'IT3R2');
+  };
 
   useEffect(() => {
     if (isChannelModalOpen) {
       setFieldErrors({});
-      setActiveTab(channelModalDefaultTab || 'create_hub');
+      setConfirmDeleteHubId(null);
+      const nextTab = channelModalDefaultTab || 'create_hub';
+      setActiveTab(nextTab);
+
       const fallbackHubId =
         channelModalTargetHubId &&
         courseHubs.some((h) => h.id === channelModalTargetHubId)
           ? channelModalTargetHubId
           : courseHubs[0]?.id || 1;
       setSelectedParentHubId(fallbackHubId);
+
+      if (nextTab === 'edit_hub') {
+        const targetHub =
+          courseHubs.find((h) => h.id === channelModalTargetHubId) ||
+          courseHubs[0];
+        if (targetHub) {
+          populateEditFields(targetHub);
+        }
+      } else if (nextTab === 'create_hub') {
+        setEditingHubId(null);
+        setCourseCode('');
+        setHubName('');
+        setDescription('');
+        setScopeDepartment(user?.academic_profile?.department || 'CITC');
+        setScopeSection(user?.academic_profile?.section || 'IT3R2');
+      }
     }
   }, [
     isChannelModalOpen,
     channelModalDefaultTab,
     channelModalTargetHubId,
     courseHubs,
+    user?.academic_profile?.department,
+    user?.academic_profile?.section,
   ]);
 
   if (!isChannelModalOpen) return null;
 
-  const handleJoinChannel = async (channelId: number) => {
+  const handleJoinChannel = async (
+    channelId: number,
+    openAfterJoin = true
+  ) => {
+    setJoiningHubId(channelId);
     try {
       const res = await joinChannelApi(channelId);
       await refreshChannels();
-      showToast(res.message || 'Joined Course Hub.', 'success');
+      showToast(res.message || 'Joined Course Hub!', 'success');
+      if (openAfterJoin) {
+        setIsChannelModalOpen(false);
+        router.push(`/channels/${channelId}`);
+      }
     } catch (err) {
       const apiErr = err as LaravelValidationError;
       showToast(apiErr.message || 'Unable to join Course Hub.', 'error');
+    } finally {
+      setJoiningHubId(null);
+    }
+  };
+
+  const handleDeleteHub = async (hub: Channel) => {
+    setIsDeletingId(hub.id);
+    try {
+      const res = await deleteChannelApi(hub.id);
+      await refreshChannels();
+      setConfirmDeleteHubId(null);
+      showToast(
+        res.message || `Deleted ${formatCourseHubName(hub)}.`,
+        'info'
+      );
+      const remainingJoined = joinedCourseHubs.filter((h) => h.id !== hub.id);
+      if (remainingJoined.length > 0) {
+        router.push(`/channels/${remainingJoined[0].id}`);
+      }
+    } catch (err) {
+      const apiErr = err as LaravelValidationError;
+      showToast(apiErr.message || 'Failed to delete Course Hub.', 'error');
+    } finally {
+      setIsDeletingId(null);
     }
   };
 
@@ -129,6 +225,46 @@ export function ChannelRosterModal() {
         setFieldErrors(apiErr.errors);
       } else {
         showToast(apiErr.message || 'Failed to create Course Hub.', 'error');
+      }
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleUpdateCourseHub = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingHubId) return;
+    setIsSubmitting(true);
+    setFieldErrors({});
+    try {
+      const cleanHubTitle = hubName.replace(/^#\s*/, '').trim();
+      const formattedHubName =
+        courseCode.trim() &&
+        !cleanHubTitle
+          .toLowerCase()
+          .startsWith(courseCode.trim().toLowerCase())
+          ? `${courseCode.trim().toUpperCase()} ${cleanHubTitle}`
+          : cleanHubTitle;
+
+      const res = await updateChannelApi(editingHubId, {
+        course_code: courseCode.trim().toUpperCase(),
+        name: formattedHubName,
+        description:
+          description.trim() ||
+          `${scopeSection} Scoped Course Hub with built-in Noticeboard Feed, Isolated Q&A Threads, and #general chat.`,
+        scope_college: scopeDepartment,
+        scope_department: scopeDepartment,
+        scope_section: scopeSection,
+      });
+      await refreshChannels();
+      showToast(res.message || 'Course Hub updated successfully!', 'success');
+      setIsChannelModalOpen(false);
+    } catch (err) {
+      const apiErr = err as LaravelValidationError;
+      if (apiErr.status === 422 && apiErr.errors) {
+        setFieldErrors(apiErr.errors);
+      } else {
+        showToast(apiErr.message || 'Failed to update Course Hub.', 'error');
       }
     } finally {
       setIsSubmitting(false);
@@ -206,6 +342,16 @@ export function ChannelRosterModal() {
     courseHubs.find((h) => h.id === Number(selectedParentHubId)) ||
     courseHubs[0];
 
+  const filteredBrowseHubs = courseHubs.filter((hub) => {
+    const q = browseSearch.trim().toLowerCase();
+    if (!q) return true;
+    return `${hub.name} ${hub.course_code || ''} ${hub.scope_section || ''} ${
+      hub.scope_department || ''
+    } ${hub.description || ''}`
+      .toLowerCase()
+      .includes(q);
+  });
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
@@ -218,12 +364,16 @@ export function ChannelRosterModal() {
           <div className="flex items-center gap-2">
             {activeTab === 'create_channel' ? (
               <Hash className="w-4 h-4 text-ustp-gold" />
+            ) : activeTab === 'edit_hub' ? (
+              <Edit3 className="w-4 h-4 text-ustp-gold" />
             ) : (
               <FolderPlus className="w-4 h-4 text-ustp-gold" />
             )}
             <h2 id="channel-portal-modal-title" className="text-sm font-bold">
               {activeTab === 'create_channel' && targetParentHub
                 ? `Add Channel inside ${formatCourseHubName(targetParentHub)}`
+                : activeTab === 'edit_hub'
+                ? 'Edit Course Hub'
                 : 'Course Hubs & Scoped Channels'}
             </h2>
           </div>
@@ -237,13 +387,17 @@ export function ChannelRosterModal() {
           </button>
         </div>
 
-        {/* Navigation Tabs (shown only when creating/browsing Course Hubs) */}
+        {/* Navigation Tabs (shown when creating/editing/browsing Course Hubs) */}
         {activeTab !== 'create_channel' && (
           <div className="flex flex-wrap items-center gap-2 px-6 pt-3 border-b border-slate-200 bg-ustp-cream">
             <button
               type="button"
               onClick={() => {
                 setFieldErrors({});
+                setEditingHubId(null);
+                setCourseCode('');
+                setHubName('');
+                setDescription('');
                 setActiveTab('create_hub');
               }}
               className={`px-3.5 py-2 text-xs font-extrabold border-b-2 transition-colors cursor-pointer ${
@@ -268,34 +422,48 @@ export function ChannelRosterModal() {
             >
               Browse Course Hubs ({courseHubs.length})
             </button>
+            {activeTab === 'edit_hub' && (
+              <span className="px-3.5 py-2 text-xs font-extrabold border-b-2 border-ustp-navy text-ustp-navy">
+                Edit Course Hub
+              </span>
+            )}
           </div>
         )}
 
-        <div className="p-6 max-h-[72vh] overflow-y-auto">
-          {activeTab === 'create_hub' && (
-            <form onSubmit={handleCreateCourseHub} className="space-y-4">
-              <div className="p-3 bg-ustp-cream border border-amber-200/80 rounded-md text-xs text-ustp-text space-y-1">
-                <p className="font-extrabold text-ustp-navy flex items-center gap-1.5">
-                  <BookOpen className="w-3.5 h-3.5 text-ustp-orange" />
-                  <span>What comes built-in with every Course Hub:</span>
-                </p>
-                <p className="text-slate-600 leading-relaxed">
-                  Every new Course Hub automatically includes{' '}
-                  <span className="font-bold text-ustp-navy">
-                    Noticeboard Feed
-                  </span>
-                  ,{' '}
-                  <span className="font-bold text-ustp-navy">
-                    Isolated Q&amp;A Threads
-                  </span>
-                  , and a default{' '}
-                  <span className="font-mono font-bold text-ustp-navy">
-                    # general
-                  </span>{' '}
-                  chat channel. You can then add custom sub-channels inside the
-                  Course Hub anytime.
-                </p>
-              </div>
+        <div className="p-6 max-h-[74vh] overflow-y-auto">
+          {(activeTab === 'create_hub' || activeTab === 'edit_hub') && (
+            <form
+              onSubmit={
+                activeTab === 'edit_hub'
+                  ? handleUpdateCourseHub
+                  : handleCreateCourseHub
+              }
+              className="space-y-4"
+            >
+              {activeTab === 'create_hub' && (
+                <div className="p-3 bg-ustp-cream border border-amber-200/80 rounded-md text-xs text-ustp-text space-y-1">
+                  <p className="font-extrabold text-ustp-navy flex items-center gap-1.5">
+                    <BookOpen className="w-3.5 h-3.5 text-ustp-orange" />
+                    <span>What comes built-in with every Course Hub:</span>
+                  </p>
+                  <p className="text-slate-600 leading-relaxed">
+                    Every new Course Hub automatically includes{' '}
+                    <span className="font-bold text-ustp-navy">
+                      Noticeboard Feed
+                    </span>
+                    ,{' '}
+                    <span className="font-bold text-ustp-navy">
+                      Isolated Q&amp;A Threads
+                    </span>
+                    , and a default{' '}
+                    <span className="font-mono font-bold text-ustp-navy">
+                      # general
+                    </span>{' '}
+                    chat channel. You can then add custom sub-channels inside the
+                    Course Hub anytime.
+                  </p>
+                </div>
+              )}
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
@@ -319,6 +487,7 @@ export function ChannelRosterModal() {
                     </p>
                   )}
                 </div>
+
                 <div>
                   <label
                     htmlFor="new-hub-name"
@@ -331,7 +500,7 @@ export function ChannelRosterModal() {
                     type="text"
                     value={hubName}
                     onChange={(e) => setHubName(e.target.value)}
-                    placeholder="e.g., IT315 Elective 1 or Capstone Group"
+                    placeholder="e.g., Capstone 1 or Information Assurance"
                     className="w-full px-3 py-2 text-xs border border-slate-300 rounded focus:outline-none focus:border-ustp-navy"
                   />
                   {nameError && (
@@ -342,40 +511,41 @@ export function ChannelRosterModal() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label
                     htmlFor="new-hub-dept"
                     className="block text-xs font-bold text-ustp-text mb-1"
                   >
-                    Department Scope
+                    College / Department Scope
                   </label>
                   <select
                     id="new-hub-dept"
                     value={scopeDepartment}
                     onChange={(e) => setScopeDepartment(e.target.value)}
-                    className="w-full px-3 py-2 text-xs border border-slate-300 rounded bg-white focus:outline-none focus:border-ustp-navy"
+                    className="w-full px-3 py-2 text-xs font-semibold border border-slate-300 rounded bg-white"
                   >
-                    <option value="CITC">CITC</option>
-                    <option value="CEA">CEA</option>
-                    <option value="COT">COT</option>
-                    <option value="CSM">CSM</option>
+                    <option value="CITC">CITC — Information Tech &amp; Computing</option>
+                    <option value="CEA">CEA — Engineering &amp; Architecture</option>
+                    <option value="COT">COT — College of Technology</option>
+                    <option value="CSM">CSM — Science &amp; Mathematics</option>
                   </select>
                 </div>
+
                 <div>
                   <label
                     htmlFor="new-hub-section"
                     className="block text-xs font-bold text-ustp-text mb-1"
                   >
-                    Target Section
+                    Target Class Section
                   </label>
                   <input
                     id="new-hub-section"
                     type="text"
                     value={scopeSection}
                     onChange={(e) => setScopeSection(e.target.value)}
-                    placeholder="IT3R2"
-                    className="w-full px-3 py-2 text-xs border border-slate-300 rounded focus:outline-none focus:border-ustp-navy"
+                    placeholder="e.g., IT3R2"
+                    className="w-full px-3 py-2 text-xs font-mono border border-slate-300 rounded focus:outline-none focus:border-ustp-navy"
                   />
                 </div>
               </div>
@@ -392,12 +562,12 @@ export function ChannelRosterModal() {
                   rows={2}
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
-                  placeholder="Scoped Course Hub for announcements, Q&A threads, and class channels..."
+                  placeholder="Describe the course hub scope, consultation schedule, and Q&A guidelines..."
                   className="w-full px-3 py-2 text-xs border border-slate-300 rounded focus:outline-none focus:border-ustp-navy"
                 />
               </div>
 
-              <div className="flex justify-end gap-2">
+              <div className="flex justify-end gap-2 pt-1">
                 <button
                   type="button"
                   onClick={() => setIsChannelModalOpen(false)}
@@ -410,10 +580,23 @@ export function ChannelRosterModal() {
                   disabled={isSubmitting}
                   className="inline-flex items-center gap-1.5 px-5 py-2 text-xs font-extrabold bg-ustp-navy text-ustp-gold rounded hover:opacity-95 disabled:opacity-50 cursor-pointer"
                 >
-                  <Plus className="w-3.5 h-3.5" />
-                  <span>
-                    {isSubmitting ? 'Creating Hub...' : 'Create Course Hub'}
-                  </span>
+                  {activeTab === 'edit_hub' ? (
+                    <>
+                      <Edit3 className="w-3.5 h-3.5" />
+                      <span>
+                        {isSubmitting ? 'Saving Changes...' : 'Save Changes'}
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>
+                        {isSubmitting
+                          ? 'Creating Course Hub...'
+                          : 'Create Course Hub'}
+                      </span>
+                    </>
+                  )}
                 </button>
               </div>
             </form>
@@ -511,96 +694,204 @@ export function ChannelRosterModal() {
 
           {activeTab === 'browse' && (
             <div className="space-y-3">
-              <div className="flex items-center justify-between gap-2 pb-1">
-                <p className="text-xs font-bold text-slate-600">
-                  Available Course Hubs ({courseHubs.length})
-                </p>
+              {/* Search & Add Course Hub Bar */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-1">
+                <div className="relative flex-1">
+                  <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                  <input
+                    type="search"
+                    value={browseSearch}
+                    onChange={(e) => setBrowseSearch(e.target.value)}
+                    placeholder="Search Course Hubs by code, name, section, or college..."
+                    className="w-full pl-8 pr-3 py-1.5 text-xs border border-slate-300 rounded focus:outline-none focus:border-ustp-navy"
+                  />
+                </div>
                 <button
                   type="button"
-                  onClick={() => setActiveTab('create_hub')}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold bg-ustp-gold text-ustp-navy rounded hover:opacity-95 cursor-pointer"
+                  onClick={() => {
+                    setEditingHubId(null);
+                    setCourseCode('');
+                    setHubName('');
+                    setDescription('');
+                    setActiveTab('create_hub');
+                  }}
+                  className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 text-xs font-extrabold bg-ustp-gold text-ustp-navy rounded hover:opacity-95 shrink-0 cursor-pointer"
                 >
                   <Plus className="w-3.5 h-3.5" />
                   <span>+ Add Course Hub</span>
                 </button>
               </div>
-              {courseHubs.map((hub) => {
-                const enrolledCount =
-                  hub.roster !== undefined
-                    ? hub.roster.length
-                    : hub.members_count ?? 0;
-                const hubSubChannels = getSubChannelsForHub(channels, hub.id);
 
-                return (
-                  <div
-                    key={hub.id}
-                    className="p-3.5 rounded-lg border border-slate-200 bg-slate-50/60 space-y-2.5"
-                  >
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <span className="text-sm font-extrabold text-ustp-navy">
-                            {formatCourseHubName(hub)}
-                          </span>
-                          <span className="text-xs font-semibold text-slate-600">
-                            · {hub.scope_section} · {hub.scope_department}
-                          </span>
+              {filteredBrowseHubs.length === 0 ? (
+                <div className="py-8 text-center border border-dashed border-slate-300 rounded-lg bg-slate-50">
+                  <p className="text-xs font-bold text-ustp-navy">
+                    No Course Hubs Found
+                  </p>
+                  <p className="text-[11px] text-slate-500 mt-1">
+                    Create a new Course Hub to start collaborating with your class.
+                  </p>
+                </div>
+              ) : (
+                filteredBrowseHubs.map((hub) => {
+                  const enrolledCount =
+                    hub.roster !== undefined
+                      ? hub.roster.length
+                      : hub.members_count ?? 0;
+                  const hubSubChannels = getSubChannelsForHub(channels, hub.id);
+                  const isJoined = isUserEnrolledInCourseHub(hub, user);
+
+                  return (
+                    <div
+                      key={hub.id}
+                      className="p-3.5 rounded-lg border border-slate-200 bg-slate-50/60 space-y-2.5"
+                    >
+                      <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="text-sm font-extrabold text-ustp-navy">
+                              {formatCourseHubName(hub)}
+                            </span>
+                            <span className="text-xs font-semibold text-slate-600">
+                              · {hub.scope_section || 'IT3R2'} ·{' '}
+                              {hub.scope_department || 'CITC'}
+                            </span>
+                            {isJoined && (
+                              <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-700">
+                                <CheckCircle2 className="w-3.5 h-3.5" />
+                                <span>Joined</span>
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-xs text-slate-600 mt-0.5">
+                            {getCleanChannelDescription(hub.description)}
+                          </p>
+                          <p className="text-[11px] text-slate-500 mt-1 font-mono tabular-nums">
+                            {enrolledCount}{' '}
+                            {enrolledCount === 1 ? 'member' : 'members'} ·{' '}
+                            {hub.unread_count || 0} open{' '}
+                            {hub.unread_count === 1 ? 'inquiry' : 'inquiries'} ·{' '}
+                            {hub.chat_messages_count || 0}{' '}
+                            {hub.chat_messages_count === 1 ? 'chat' : 'chats'}
+                          </p>
                         </div>
-                        <p className="text-xs text-slate-600 mt-0.5">
-                          {getCleanChannelDescription(hub.description)}
-                        </p>
-                      </div>
-                      <div className="flex items-center gap-2 shrink-0">
-                        <span className="text-xs font-mono tabular-nums text-slate-600">
-                          {enrolledCount}{' '}
-                          {enrolledCount === 1 ? 'member' : 'members'}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => handleJoinChannel(hub.id)}
-                          className="px-3 py-1.5 text-xs font-bold bg-ustp-navy text-white rounded hover:opacity-95 cursor-pointer"
-                        >
-                          Verify / Sync Access
-                        </button>
-                      </div>
-                    </div>
 
-                    {/* Built-in + Custom Channels Preview */}
-                    <div className="pt-2 border-t border-slate-200/80 flex flex-wrap items-center justify-between gap-2">
-                      <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
-                        <span className="px-2 py-0.5 rounded bg-amber-100 text-amber-950 font-bold">
-                          Noticeboard Feed
-                        </span>
-                        <span className="px-2 py-0.5 rounded bg-sky-100 text-sky-950 font-bold">
-                          Isolated Q&amp;A Threads
-                        </span>
-                        <span className="px-2 py-0.5 rounded bg-slate-200 text-ustp-navy font-mono font-bold">
-                          # general
-                        </span>
-                        {hubSubChannels.map((sub) => (
-                          <span
-                            key={sub.id}
-                            className="px-2 py-0.5 rounded bg-slate-200 text-ustp-navy font-mono font-bold"
+                        <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                          {isJoined ? (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setIsChannelModalOpen(false);
+                                router.push(`/channels/${hub.id}`);
+                              }}
+                              className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-extrabold bg-ustp-navy text-ustp-gold rounded hover:opacity-95 cursor-pointer"
+                            >
+                              <span>Open Hub</span>
+                              <ArrowRight className="w-3.5 h-3.5" />
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              disabled={joiningHubId === hub.id}
+                              onClick={() => handleJoinChannel(hub.id, true)}
+                              className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-extrabold bg-ustp-gold text-ustp-navy rounded hover:opacity-95 disabled:opacity-50 cursor-pointer"
+                            >
+                              <Plus className="w-3.5 h-3.5" />
+                              <span>
+                                {joiningHubId === hub.id
+                                  ? 'Joining...'
+                                  : 'Join Course Hub'}
+                              </span>
+                            </button>
+                          )}
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              populateEditFields(hub);
+                              setActiveTab('edit_hub');
+                            }}
+                            title={`Edit ${formatCourseHubName(hub)}`}
+                            className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-bold border border-slate-300 bg-white text-slate-700 hover:text-ustp-navy hover:border-ustp-navy rounded cursor-pointer"
                           >
-                            {formatSubChannelDisplayName(sub)}
-                          </span>
-                        ))}
+                            <Edit3 className="w-3.5 h-3.5" />
+                            <span>Edit</span>
+                          </button>
+
+                          {confirmDeleteHubId === hub.id ? (
+                            <div className="inline-flex items-center gap-1 bg-red-50 border border-red-200 rounded px-2 py-1">
+                              <button
+                                type="button"
+                                disabled={isDeletingId === hub.id}
+                                onClick={() => handleDeleteHub(hub)}
+                                className="text-[11px] font-extrabold text-red-700 hover:underline cursor-pointer"
+                              >
+                                {isDeletingId === hub.id
+                                  ? 'Deleting...'
+                                  : 'Confirm Delete'}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setConfirmDeleteHubId(null)}
+                                className="text-[11px] font-semibold text-slate-500 hover:text-slate-800 ml-1 cursor-pointer"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => setConfirmDeleteHubId(hub.id)}
+                              title={`Delete ${formatCourseHubName(hub)}`}
+                              className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-bold border border-red-200 bg-white text-red-600 hover:bg-red-50 rounded cursor-pointer"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                              <span>Delete</span>
+                            </button>
+                          )}
+                        </div>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setSelectedParentHubId(hub.id);
-                          setActiveTab('create_channel');
-                        }}
-                        className="inline-flex items-center gap-1 text-[11px] font-extrabold text-ustp-navy hover:underline cursor-pointer"
-                      >
-                        <Plus className="w-3 h-3" />
-                        <span>Add Channel</span>
-                      </button>
+
+                      {/* Built-in + Custom Channels Preview */}
+                      <div className="pt-2 border-t border-slate-200/80 flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-600">
+                          <span className="font-bold text-ustp-navy">
+                            Noticeboard Feed
+                          </span>
+                          <span aria-hidden="true">·</span>
+                          <span className="font-bold text-ustp-navy">
+                            Isolated Q&amp;A Threads
+                          </span>
+                          <span aria-hidden="true">·</span>
+                          <span className="font-mono font-bold text-ustp-navy">
+                            # general
+                          </span>
+                          {hubSubChannels.map((sub) => (
+                            <React.Fragment key={sub.id}>
+                              <span aria-hidden="true">·</span>
+                              <span className="font-mono font-bold text-ustp-navy">
+                                {formatSubChannelDisplayName(sub)}
+                              </span>
+                            </React.Fragment>
+                          ))}
+                        </div>
+                        {isJoined && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedParentHubId(hub.id);
+                              setActiveTab('create_channel');
+                            }}
+                            className="inline-flex items-center gap-1 text-[11px] font-extrabold text-ustp-navy hover:underline cursor-pointer"
+                          >
+                            <Plus className="w-3 h-3" />
+                            <span>Add Channel</span>
+                          </button>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                );
-              })}
+                  );
+                })
+              )}
             </div>
           )}
         </div>

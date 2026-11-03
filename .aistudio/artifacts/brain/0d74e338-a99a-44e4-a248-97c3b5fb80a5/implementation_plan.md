@@ -1,62 +1,69 @@
-# ClariFy Header Cleanup, Scoped Q&A Button & Transparent Logo Box Removal
+# Course Hub CRUD, Opt-In Browse & Join, Accurate Notification Counts & Rich Media Chat
 
-Remove the redundant workspace tab header (`Messenger Chat | Noticeboard Feed | Isolated Q&A Threads`), move **`+ Ask in Q&A Thread`** inside the **`Isolated Q&A Threads`** channel view, remove **`+ Add Channel in Course Hub`** from the **`+ Add Course Hub`** modal, and remove the noticeable dark-blue rectangular box around the `ClariFy` letters on all logos.
+Add Edit and Delete controls for Course Hubs (for both Students and Faculty), remove automatic Course Hub enrollment for new accounts so users join via **Browse Course Hubs**, fix the Q&A and chat notification badges/timestamps so they reflect real database counts, and implement real image, file, and voice-note sending and playback in chat.
 
 ## User Review & Critical Decisions
 
 > [!IMPORTANT]
-> Here is the exact breakdown of the 4 updates we will make once you click **Proceed**:
+> Confirmed decisions from your answers and requirements:
 
-1. **Remove the Blue Box Around the `ClariFy` Letters**:
-   - The logo image (`image_07899ab9.png`) currently has a solid dark-blue rectangular background (`#001242`) around the orange `ClariFy` letters that clashes with the navbar (`#1a1851`), plus a dark-blue box wrapper on the Login and Register pages.
-   - We will make the background of the `ClariFy` logo PNG **100% transparent** so only the orange `ClariFy` letters and speech-bubble icon remain (no blue box around the letters), and remove the blue container boxes on the Login and Registration pages.
-2. **Remove the Header Row Shown in Your Screenshot**:
-   - Remove the horizontal tab bar row (`Messenger Chat` | `Noticeboard Feed` | `Isolated Q&A Threads (0)` | `+ Ask in Q&A Thread`) from the top of the Course Hub view, since those channels/views are now selected directly from the left Course Hub sidebar.
-3. **Remove `+ Add Channel in Course Hub` from `+ Add Course Hub` Modal**:
-   - Clicking **`+ Add Course Hub`** will only show **`+ Add Course Hub`** and **`Browse Course Hubs`** (removing the `+ Add Channel in Course Hub` tab from that modal). Creating a sub-channel is done strictly via the **`+ Add Channel`** button inside each Course Hub.
-4. **Move `+ Ask in Q&A Thread` Inside the `Isolated Q&A Threads` Channel**:
-   - Move the **`+ Ask in Q&A Thread`** button inside the **`Isolated Q&A Threads`** view so it only appears when viewing `Isolated Q&A Threads`.
+- **Course Hub Edit & Delete (Students & Faculty)**: Both Students and Faculty will have **Edit** (pencil icon) and **Delete** (trash icon) actions on Course Hubs to update Course Hub details (Course Code, Name, Section, Department, Description) or delete a Course Hub and its sub-channels.
+- **No Auto-Enrollment + Working Browse Course Hubs**:
+  - Newly registered/verified Students and Faculty will no longer be automatically added to any Course Hub.
+  - Creating a Course Hub only enrolls its creator (not the entire section automatically).
+  - The left sidebar and Dashboard will display only the Course Hubs the user has joined, while **Browse Course Hubs** lists all campus Course Hubs with working **Join Course Hub** and **Open Hub** buttons.
+- **Accurate Notification Counts & Real Timestamps**:
+  - Fixes the bug where regular chat messages (`__CHAT__`) were counted as open Q&A threads in `Channel::threads()` (which caused `30` and `30 inquiries` to appear even when there were 0 Q&A threads).
+  - Replaces hardcoded `'9+ chats'` and `'30 mins'` with real open Q&A thread counts, real chat message counts, and actual relative timestamps from the latest activity.
+- **Working Image Sending, File Sending & Voice Recording**:
+  - **Images**: Selecting an image previews the thumbnail and sends an inline image attachment rendered directly inside the chat bubble.
+  - **Files**: Selecting a document/file sends a downloadable file card (`<a download>`) inside the chat bubble.
+  - **Voice Recording**: Clicking the microphone starts live audio recording (`MediaRecorder`) with a recording timer and stop/send controls, rendering a playable `<audio controls>` element inside the chat bubble.
 
 ---
 
 ## 1. Overview & Core Concept
 
 - **What It Does**:
-  - Strips the dark-blue rectangular background around the `ClariFy` letters so the logo is cleanly transparent on the Top Navbar, Login page, and Registration page.
-  - Removes the duplicate horizontal tab bar header (`Messenger Chat | Noticeboard Feed | Isolated Q&A Threads`) from the Course Hub workspace.
-  - Moves **`+ Ask in Q&A Thread`** inside the **`Isolated Q&A Threads`** view (and keeps **`+ Create Announcement`** inside **`Noticeboard Feed`**).
-  - Removes the **`+ Add Channel in Course Hub`** tab from the **`+ Add Course Hub`** modal.
-- **Target Audience / Persona**: Students and faculty using ClariFy Course Hubs.
-- **Key Value**: Clean visual polish with zero blue-box logo artifacts and a true Discord-style channel navigation flow.
+  1. Empowers both Students and Faculty to create, edit, and delete Course Hubs, as well as browse and join existing Course Hubs on demand.
+  2. Stops auto-enrolling newly created Student and Faculty accounts into default or section Course Hubs.
+  3. Calculates accurate notification counts and activity timestamps across the Course Hub sidebar and the Dashboard **Latest Messages** section.
+  4. Upgrades the Course Hub chat composer and message stream to support real image uploads, downloadable file attachments, and playable voice recordings.
+- **Target Audience / Persona**: USTP Students and Faculty collaborating in Course Hubs.
+- **Key Value**: Full lifecycle control over Course Hubs, accurate real-time counters, and rich multimedia messaging.
 
 ---
 
 ## 2. User Experience & Visual Design
 
 - **Key User Flows**:
-  1. **Transparent ClariFy Logo (No Blue Box Around the Letters)**:
-     - Every dark-blue background pixel around the `ClariFy` wordmark is converted to full alpha transparency (`rgba(0,0,0,0)`).
-     - On the Top Navbar, only the crisp orange `ClariFy` letters and icon render directly over the header.
-     - On the Login and Registration pages, the dark-blue box wrapper (`bg-ustp-navy`) around the logo is removed so the logo sits cleanly without any blue box border or background.
-  2. **Streamlined Center Header**:
-     - The center Course Hub header shows only the Course Hub title, active channel/view indicator, and the Settings gear icon—removing the second-row button strip shown in your screenshot.
-  3. **Contextual Action Inside `Isolated Q&A Threads`**:
-     - Opening **`Isolated Q&A Threads`** from the left sidebar displays an internal header bar with the thread count and the **`+ Ask in Q&A Thread`** button right inside that view.
-  4. **Separated `+ Add Course Hub` Modal**:
-     - Clicking **`+ Add Course Hub`** shows only Course Hub creation and browsing; clicking **`+ Add Channel`** inside a Course Hub opens the dedicated channel-creation modal for that Course Hub.
+  1. **Edit & Delete Course Hub**:
+     - Each Course Hub in the left sidebar (and in the Course Hub header/modal) provides **Edit** and **Delete** buttons for both Students and Faculty.
+     - Clicking **Edit** opens the Course Hub Edit form pre-filled with the hub's Course Code, Name, Section, Department, and Description.
+     - Clicking **Delete** prompts an inline confirmation and deletes the Course Hub along with its inner sub-channels.
+  2. **Opt-In Course Hub Membership & Browse Course Hubs**:
+     - A newly registered and approved Student or Faculty member starts with an empty Course Hub list and a prompt to **Browse Course Hubs** or **+ Add Course Hub**.
+     - Opening **Browse Course Hubs** displays a search bar and all available Course Hubs on campus, showing a **Join Course Hub** button if not yet joined, or **Joined · Open Hub** if already a member.
+  3. **Accurate Sidebar & Dashboard Notifications**:
+     - In the left sidebar (`image_18b85ab9.png`), the badge on `Isolated Q&A Threads` and on the Course Hub header counts **only** actual unresolved Q&A threads (hiding the badge when 0).
+     - On the Dashboard **Latest Messages** cards (`image_c57263ab.png`), each joined Course Hub displays its real open inquiry count and/or real chat message count (e.g., `2 inquiries`, `5 chats`, or `No messages yet`) along with the actual relative time of the latest message or announcement (e.g., `Just now`, `5m ago`, `2h ago`).
+  4. **Multimedia Chat (Image, File & Voice Record)**:
+     - **Image Button**: Opens file picker (`image/*`), resizes/encodes the image as a data URL, displays a thumbnail preview in the staging bar, and renders the full image inside the chat bubble.
+     - **File Button**: Opens file picker for documents/archives, encodes the file payload, displays the filename + size in the staging bar, and renders a clickable download card in the chat bubble.
+     - **Voice Record Button**: Starts live microphone recording with a pulsing red indicator and elapsed timer (`0:04`), lets the user stop and preview the audio clip before sending, and renders an HTML5 `<audio controls>` player inside the chat bubble.
 - **Visual Identity & Theme**:
-  - Seamless USTP Navy (`#1a1851`), USTP Gold (`#fab417`), USTP Orange (`#ff9718`), and USTP Cream (`#FFFAF2`) palette with zero mismatched blue boxes around the logo.
+  - Maintains USTP Navy (`#1a1851`), USTP Gold (`#fab417`), USTP Orange (`#ff9718`), and USTP Cream (`#FFFAF2`) with `tabular-nums` on all counters and timers.
 
 ---
 
 ## 3. Key Product Decisions & Trade-Offs
 
-- **Decision 1: Pixel-Level Alpha Transparency for the ClariFy Logo**
-  - *Chosen Approach*: Process `/public/assets/aistudio/image_07899ab9.png` so all `#001242` navy background pixels become transparent (`alpha = 0`) with smooth anti-aliased edges around the orange `ClariFy` letters, and remove the `bg-ustp-navy` wrapper divs on Login and Register.
-  - *Why*: Eliminates the visible dark-blue rectangle around the letters `ClariFy` on every background color.
-- **Decision 2: Separate Modal Mode for `+ Add Course Hub` vs. `+ Add Channel`**
-  - *Chosen Approach*: Hide the `+ Add Channel in Course Hub` tab when the modal is opened from `+ Add Course Hub`, and show only the sub-channel creation form when opened from `+ Add Channel` inside a Course Hub.
-  - *Why*: Matches your Discord-style hierarchy where Course Hubs are created at the top level and channels are added inside each Course Hub.
+- **Decision 1: Self-Contained JSON/Data-URL Media Encoding in `messages.content`**
+  - *Chosen Approach*: Encode chat attachments (compressed images, small documents, and WebM/WAV voice notes) inside structured JSON/tagged payloads within `messages.content`.
+  - *Why*: Works immediately across both the Render Laravel API and direct Supabase PostgreSQL without requiring external S3 bucket credentials or destructive database column migrations.
+- **Decision 2: Strict Opt-In Course Hub Enrollment**
+  - *Chosen Approach*: Remove automatic `channel_user` insertion during account registration, channel creation section-sweeps, and adapter boot syncs. Only the creator is enrolled when creating a hub, and other users join explicitly via `POST /api/v1/channels/{id}/join` in **Browse Course Hubs** (or via manual roster addition).
+  - *Why*: Directly fulfills the requirement that newly created students and faculty are not automatically placed in any Course Hub.
 
 ---
 
@@ -65,30 +72,32 @@ Remove the redundant workspace tab header (`Messenger Chat | Noticeboard Feed | 
 - **Architecture & Component Diagram**:
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
-│                     Transparent ClariFy Logo Asset                       │
-│  • Transparent PNG (no #001242 blue box around "ClariFy" letters)        │
-│  • Used in Top Navbar, Login Page, and Registration Page                 │
-└────────────────────────────────────┬─────────────────────────────────────┘
+│                     Course Hub Lifecycle & Membership                    │
+├────────────────────────────────────┬─────────────────────────────────────┤
+│ Registration / Verification        │ Browse Course Hubs Modal            │
+│  • Creates User + AcademicProfile  │  • Lists all Campus Course Hubs     │
+│  • Zero auto-enrolled channels     │  • [Join Course Hub] -> POST /join  │
+│                                    │  • [Open Hub] -> /channels/[id]     │
+└────────────────────────────────────┴─────────────────────────────────────┘
                                      │
                                      ▼
 ┌──────────────────────────────────────────────────────────────────────────┐
 │                 View Messages (/channels/[channelId])                    │
-├──────────────────────────────┬───────────────────────────────────────────┤
-│ Left Sidebar: Course Hubs    │ Center Workspace Pane                     │
-│  [+ Add Course Hub] ────────►│  • Top Bar: Course Title + Settings Gear  │
-│   (Only Create/Browse Hubs;  │    (Removed tab strip row from screenshot)│
-│    no Add Channel tab)       │                                           │
-│                              │  • Noticeboard Feed View:                 │
-│  ▼ IT314 — Software Eng      │    [Feed Header + "+ Create Announcement"]│
-│    • Noticeboard Feed ──────►│  • Isolated Q&A Threads View:             │
-│    • Isolated Q&A Threads ──►│    [Q&A Header + "+ Ask in Q&A Thread"]   │
-│    CHANNELS        [+]       │    [Q&A Thread Cards / Inquiry Form]      │
-│    • # general               │  • # general / # sub-channel View:        │
-│    • + Add Channel           │    [Live Chat Stream + Message Composer]  │
-└──────────────────────────────┴───────────────────────────────────────────┘
+├────────────────────────────────────┬─────────────────────────────────────┤
+│ Left Sidebar (Joined Course Hubs)  │ Center Chat & Media Composer        │
+│  • [Edit Hub] -> PATCH /channels   │  • Image Picker -> Inline <img>     │
+│  • [Delete Hub] -> DELETE /channels│  • File Picker -> Download Card     │
+│  • Accurate Q&A Badge ( excludes   │  • Mic Recorder -> <audio controls> │
+│    __CHAT__ messages )             │  • Real-time Reverb / SSE sync      │
+└────────────────────────────────────┴─────────────────────────────────────┘
 ```
 
-- **Interactive Component & State Mapping**:
-  - **Center Workspace Header**: Removes the tablist row (`Messenger Chat`, `Noticeboard Feed`, `Isolated Q&A Threads (0)`, `+ Ask in Q&A Thread`) while keeping the active channel/view indicator and Settings gear menu functional.
-  - **Isolated Q&A Threads View**: Renders a top bar inside the `threads` view containing the `+ Ask in Q&A Thread` button for students (and `+ Create Announcement` inside the `feed` view for faculty).
-  - **Course Hub Modal**: Removes `+ Add Channel in Course Hub` from the `+ Add Course Hub` modal tabs while keeping direct `+ Add Channel` creation working when triggered from inside a Course Hub.
+- **Data Model & State**:
+  - **Backend Endpoints (`clarify-api` & `postgres-adapter.ts`)**:
+    - `PATCH /api/v1/channels/{id}`: Updates Course Hub `course_code`, `name`, `description`, `scope_college`, `scope_department`, and `scope_section` (accessible to both Students and Faculty).
+    - `DELETE /api/v1/channels/{id}`: Deletes the Course Hub and any child sub-channels (`description LIKE '[HUB:{id}]%'`) along with associated messages and announcements (accessible to both Students and Faculty).
+    - `POST /api/v1/channels/{id}/join`: Enrolls **only** the requesting user (`activeUser.id`) into the Course Hub (and its parent/sub-channels) without sweeping the entire section.
+  - **Channel Resource Fields**:
+    - `unread_count`: Count of unresolved root Q&A threads (`parent_id IS NULL AND is_resolved = false AND (subject_hashtag IS NULL OR subject_hashtag != '__CHAT__')`).
+    - `chat_messages_count`: Count of chat messages (`parent_id IS NULL AND subject_hashtag = '__CHAT__'`) across the Course Hub and its sub-channels.
+    - `latest_activity_preview` & `latest_activity_at`: Computed from the most recent announcement, Q&A thread, or chat message in that Course Hub.

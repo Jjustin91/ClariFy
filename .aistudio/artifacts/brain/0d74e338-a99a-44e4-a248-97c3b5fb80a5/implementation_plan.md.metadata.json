@@ -1,6 +1,6 @@
 {
-  "summary": "Updated implementation plan to remove the workspace tab bar header shown in the screenshot, remove '+ Add Channel in Course Hub' from the '+ Add Course Hub' modal, move '+ Ask in Q&A Thread' inside the Isolated Q&A Threads channel view, and strip the dark-blue box background around the ClariFy letters so the logo is completely transparent across the navbar, Login, and Register pages.",
-  "updatedAt": "2026-11-02T18:32:55.852282390Z",
+  "summary": "Implementation plan for adding Edit and Delete Course Hub actions for both Students and Faculty, making Browse Course Hubs functional with explicit opt-in joining (no auto-enrollment for new users), fixing notification counts and timestamps to reflect real Q&A threads and chat messages, and enabling real image sending, downloadable file sending, and playable voice recording in chat.",
+  "updatedAt": "2026-11-03T06:53:01.479803184Z",
   "requestFeedback": true,
   "userFacing": true
 }

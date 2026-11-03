@@ -483,20 +483,13 @@ async function ensurePostgresSchema(pool: Pool): Promise<void> {
       );
     }
 
-    // Auto-sync approved non-admin users into Course Hubs matching their section, plus creators & active participants
+    // Only ensure channel creators are enrolled in the channels they created (no auto-enrollment by section)
     await client.query(`
       INSERT INTO channel_user (channel_id, user_id, can_publish)
       SELECT c.id, u.id, (u.role IN ('faculty', 'dept_head'))
       FROM channels c
-      JOIN users u ON u.verification_status = 'approved' AND u.role != 'it_admin'
-      LEFT JOIN academic_profiles ap ON ap.user_id = u.id
-      WHERE (
-        LOWER(TRIM(COALESCE(ap.section, ''))) = LOWER(TRIM(COALESCE(c.scope_section, '')))
-        OR c.created_by = u.id
-        OR EXISTS (
-          SELECT 1 FROM messages m WHERE m.channel_id = c.id AND m.sender_id = u.id
-        )
-      )
+      JOIN users u ON u.id = c.created_by
+      WHERE u.verification_status = 'approved' AND u.role != 'it_admin'
       ON CONFLICT (channel_id, user_id) DO NOTHING
     `);
 
@@ -887,29 +880,21 @@ async function fetchAnnouncementsFromPg(
   });
 }
 
-async function fetchChannelsFromPg(pool: Pool): Promise<Channel[]> {
-  const state = getPgState();
-  if (!state.rosterSynced) {
-    await pool
-      .query(`
-        INSERT INTO channel_user (channel_id, user_id, can_publish)
-        SELECT c.id, u.id, (u.role IN ('faculty', 'dept_head'))
-        FROM channels c
-        JOIN users u ON u.verification_status = 'approved' AND u.role != 'it_admin'
-        LEFT JOIN academic_profiles ap ON ap.user_id = u.id
-        WHERE (
-          LOWER(TRIM(COALESCE(ap.section, ''))) = LOWER(TRIM(COALESCE(c.scope_section, '')))
-          OR c.created_by = u.id
-          OR EXISTS (
-            SELECT 1 FROM messages m WHERE m.channel_id = c.id AND m.sender_id = u.id
-          )
-        )
-        ON CONFLICT (channel_id, user_id) DO NOTHING
-      `)
-      .catch(() => {});
-    state.rosterSynced = true;
-  }
+function formatRelativeTimeAgo(rawDate: unknown): string {
+  if (!rawDate) return 'Just now';
+  const parsed = new Date(String(rawDate));
+  if (Number.isNaN(parsed.getTime())) return 'Just now';
+  const diffSec = Math.max(0, Math.floor((Date.now() - parsed.getTime()) / 1000));
+  if (diffSec < 60) return 'Just now';
+  const diffMin = Math.floor(diffSec / 60);
+  if (diffMin < 60) return `${diffMin}m ago`;
+  const diffHr = Math.floor(diffMin / 60);
+  if (diffHr < 24) return `${diffHr}h ago`;
+  const diffDays = Math.floor(diffHr / 24);
+  return `${diffDays}d ago`;
+}
 
+async function fetchChannelsFromPg(pool: Pool): Promise<Channel[]> {
   const chRes = await pool.query(`
     SELECT c.*
     FROM channels c
@@ -945,12 +930,31 @@ async function fetchChannelsFromPg(pool: Pool): Promise<Channel[]> {
     ORDER BY a.channel_id, a.published_at DESC
   `);
 
+  const latestMsgRes = await pool.query(`
+    SELECT DISTINCT ON (m.channel_id)
+      m.channel_id,
+      m.content,
+      m.created_at,
+      u.name AS sender_name
+    FROM messages m
+    JOIN users u ON u.id = m.sender_id
+    ORDER BY m.channel_id, m.created_at DESC
+  `);
+
   const openThreadsCountRes = await pool.query(`
     SELECT channel_id, COUNT(*)::int AS cnt
     FROM messages
     WHERE parent_id IS NULL
       AND is_resolved = FALSE
       AND (subject_hashtag IS NULL OR subject_hashtag != '__CHAT__')
+    GROUP BY channel_id
+  `);
+
+  const chatCountRes = await pool.query(`
+    SELECT channel_id, COUNT(*)::int AS cnt
+    FROM messages
+    WHERE parent_id IS NULL
+      AND subject_hashtag = '__CHAT__'
     GROUP BY channel_id
   `);
 
@@ -968,12 +972,35 @@ async function fetchChannelsFromPg(pool: Pool): Promise<Channel[]> {
     });
   }
 
-  const latestByChannel: Record<number, { preview: string; at: string }> = {};
+  const latestAnnByChannel: Record<
+    number,
+    { preview: string; timestamp: number; rawDate: unknown }
+  > = {};
   for (const r of latestAnnRes.rows) {
     const cid = Number(r.channel_id);
-    latestByChannel[cid] = {
-      preview: `${r.publisher_name}: ${String(r.content).slice(0, 110)}...`,
-      at: 'Recent',
+    const ts = new Date(String(r.published_at)).getTime() || 0;
+    latestAnnByChannel[cid] = {
+      preview: `${r.publisher_name}: ${String(r.content).slice(0, 95)}`,
+      timestamp: ts,
+      rawDate: r.published_at,
+    };
+  }
+
+  const latestMsgByChannel: Record<
+    number,
+    { preview: string; timestamp: number; rawDate: unknown }
+  > = {};
+  for (const r of latestMsgRes.rows) {
+    const cid = Number(r.channel_id);
+    const ts = new Date(String(r.created_at)).getTime() || 0;
+    const rawContent = String(r.content || '');
+    const cleanText = rawContent.startsWith('__CLARIFY_MEDIA__')
+      ? 'Shared an attachment in chat'
+      : rawContent.slice(0, 90);
+    latestMsgByChannel[cid] = {
+      preview: `${r.sender_name}: ${cleanText}`,
+      timestamp: ts,
+      rawDate: r.created_at,
     };
   }
 
@@ -982,15 +1009,67 @@ async function fetchChannelsFromPg(pool: Pool): Promise<Channel[]> {
     unreadByChannel[Number(r.channel_id)] = Number(r.cnt);
   }
 
+  const chatCountByChannel: Record<number, number> = {};
+  for (const r of chatCountRes.rows) {
+    chatCountByChannel[Number(r.channel_id)] = Number(r.cnt);
+  }
+
+  // Group sub-channel IDs by parent hub ID so parent Course Hubs aggregate chat counts & latest activity
+  const subIdsByHub: Record<number, number[]> = {};
+  for (const row of chRes.rows) {
+    const cid = Number(row.id);
+    const rawDesc = row.description ? String(row.description) : null;
+    const hubMatch = rawDesc ? rawDesc.match(/^\[HUB:(\d+)\]/i) : null;
+    const parentHubId = hubMatch && hubMatch[1] ? Number(hubMatch[1]) : null;
+    if (parentHubId) {
+      if (!subIdsByHub[parentHubId]) subIdsByHub[parentHubId] = [];
+      subIdsByHub[parentHubId].push(cid);
+    }
+  }
+
   return chRes.rows.map((row) => {
     const cid = Number(row.id);
     const roster = rosterByChannel[cid] || [];
     const rawDesc = row.description ? String(row.description) : null;
     const hubMatch = rawDesc ? rawDesc.match(/^\[HUB:(\d+)\]/i) : null;
     const parentHubId = hubMatch && hubMatch[1] ? Number(hubMatch[1]) : null;
+
+    const allHubChannelIds =
+      parentHubId === null ? [cid, ...(subIdsByHub[cid] || [])] : [cid];
+
+    const totalChatCount = allHubChannelIds.reduce(
+      (sum, id) => sum + (chatCountByChannel[id] || 0),
+      0
+    );
+
+    let bestPreview = `${
+      row.instructor_name ? String(row.instructor_name) : 'Course Hub'
+    }: No messages or inquiries yet.`;
+    let bestTimestamp = 0;
+    let bestRawDate: unknown = row.created_at;
+
+    for (const id of allHubChannelIds) {
+      const ann = latestAnnByChannel[id];
+      if (ann && ann.timestamp >= bestTimestamp) {
+        bestTimestamp = ann.timestamp;
+        bestPreview = ann.preview;
+        bestRawDate = ann.rawDate;
+      }
+      const msg = latestMsgByChannel[id];
+      if (msg && msg.timestamp >= bestTimestamp) {
+        bestTimestamp = msg.timestamp;
+        bestPreview = msg.preview;
+        bestRawDate = msg.rawDate;
+      }
+    }
+
     return {
       id: cid,
       parent_hub_id: parentHubId,
+      created_by:
+        row.created_by !== null && row.created_by !== undefined
+          ? Number(row.created_by)
+          : null,
       course_code: row.course_code ? String(row.course_code) : null,
       name: String(row.name),
       description: rawDesc,
@@ -1002,14 +1081,14 @@ async function fetchChannelsFromPg(pool: Pool): Promise<Channel[]> {
         : 'CITC',
       scope_section: row.scope_section ? String(row.scope_section) : 'IT3R2',
       unread_count: unreadByChannel[cid] || 0,
+      chat_messages_count: totalChatCount,
       members_count: roster.length,
       instructor_name: row.instructor_name
         ? String(row.instructor_name)
         : 'Aki Hayakawa',
-      latest_activity_preview:
-        latestByChannel[cid]?.preview ||
-        'Course Hub active for scoped announcements and Q&A.',
-      latest_activity_at: latestByChannel[cid]?.at || 'Active',
+      latest_activity_preview: bestPreview,
+      latest_activity_at:
+        bestTimestamp > 0 ? formatRelativeTimeAgo(bestRawDate) : 'No activity yet',
       roster,
     };
   });
@@ -1251,17 +1330,8 @@ export async function handlePostgresApiRequest(
         ]
       );
 
-      // Enroll in matching section Course Hubs and the default Course Hub channel
-      const defaultChannel = await resolveValidChannel(pool, null);
-      await pool.query(
-        `INSERT INTO channel_user (channel_id, user_id, can_publish)
-         SELECT c.id, $1, $2
-         FROM channels c
-         WHERE c.id = $3
-            OR LOWER(TRIM(COALESCE(c.scope_section, ''))) = LOWER(TRIM($4))
-         ON CONFLICT (channel_id, user_id) DO NOTHING`,
-        [newUid, isFaculty, defaultChannel.id, section]
-      );
+      // Newly registered Student and Faculty accounts start with 0 auto-enrolled Course Hubs;
+      // they can join Course Hubs via Browse Course Hubs or create their own Course Hub.
 
       const createdUserRes = await pool.query(
         `SELECT u.*, ap.campus, ap.college, ap.department, ap.program, ap.year_level, ap.section, ap.semester_code
@@ -1570,19 +1640,6 @@ export async function handlePostgresApiRequest(
         [newChannelId, activeUser.id, canCreatorPublish]
       );
 
-      // Auto-sync all approved non-admin users in the target section into the new Course Hub roster
-      await pool.query(
-        `INSERT INTO channel_user (channel_id, user_id, can_publish)
-         SELECT $1, u.id, (u.role IN ('faculty', 'dept_head'))
-         FROM users u
-         JOIN academic_profiles ap ON ap.user_id = u.id
-         WHERE u.verification_status = 'approved'
-           AND u.role != 'it_admin'
-           AND LOWER(TRIM(COALESCE(ap.section, ''))) = LOWER(TRIM($2))
-         ON CONFLICT (channel_id, user_id) DO NOTHING`,
-        [newChannelId, scopeSection]
-      );
-
       const allChannels = await fetchChannelsFromPg(pool);
       const created =
         allChannels.find((c) => c.id === newChannelId) || allChannels[0];
@@ -1592,6 +1649,155 @@ export async function handlePostgresApiRequest(
         body: {
           message: 'Scoped channel saved to PostgreSQL.',
           data: created,
+        },
+      };
+    }
+
+    const channelIdMatch = cleanPath.match(/^\/channels\/(\d+)$/);
+    if (
+      (method === 'PATCH' || method === 'PUT' || method === 'POST') &&
+      channelIdMatch
+    ) {
+      if (activeUser.role === 'it_admin') {
+        return {
+          status: 403,
+          body: {
+            status: 403,
+            message:
+              'HTTP 403 Forbidden: IT Administrator accounts are restricted to the IT Admin Console.',
+          },
+        };
+      }
+      const targetId = Number(channelIdMatch[1]);
+      const courseCode = String(body.course_code || '').trim();
+      const name = String(body.name || '').trim();
+      const description =
+        body.description !== undefined ? String(body.description).trim() : null;
+      const scopeDepartment = String(body.scope_department || 'CITC');
+      const scopeCollege = String(body.scope_college || scopeDepartment);
+      const scopeSection = String(body.scope_section || 'IT3R2').trim() || 'IT3R2';
+
+      const errors: Record<string, string[]> = {};
+      if (!name) errors.name = ['The Course Hub name field is required.'];
+      if (!courseCode) {
+        errors.course_code = ['The course code field is required.'];
+      }
+      if (Object.keys(errors).length > 0) {
+        return {
+          status: 422,
+          body: {
+            status: 422,
+            message: 'Course Hub validation failed.',
+            errors,
+          },
+        };
+      }
+
+      const formattedName = name.startsWith('#') ? name : `# ${name}`;
+      await pool.query(
+        `UPDATE channels
+         SET course_code = $1,
+             name = $2,
+             description = COALESCE($3, description),
+             scope_college = $4,
+             scope_department = $5,
+             scope_section = $6,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE id = $7`,
+        [
+          courseCode.toUpperCase(),
+          formattedName,
+          description,
+          scopeCollege,
+          scopeDepartment,
+          scopeSection,
+          targetId,
+        ]
+      );
+
+      // Sync scope fields to any child sub-channels of this Course Hub
+      await pool.query(
+        `UPDATE channels
+         SET course_code = $1,
+             scope_college = $2,
+             scope_department = $3,
+             scope_section = $4,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE description LIKE $5`,
+        [
+          courseCode.toUpperCase(),
+          scopeCollege,
+          scopeDepartment,
+          scopeSection,
+          `[HUB:${targetId}]%`,
+        ]
+      );
+
+      const allChannels = await fetchChannelsFromPg(pool);
+      const updated =
+        allChannels.find((c) => c.id === targetId) || allChannels[0];
+
+      return {
+        status: 200,
+        body: {
+          message: 'Course Hub updated successfully.',
+          data: updated,
+        },
+      };
+    }
+
+    if (method === 'DELETE' && channelIdMatch) {
+      if (activeUser.role === 'it_admin') {
+        return {
+          status: 403,
+          body: {
+            status: 403,
+            message:
+              'HTTP 403 Forbidden: IT Administrator accounts are restricted to the IT Admin Console.',
+          },
+        };
+      }
+      const targetId = Number(channelIdMatch[1]);
+      const existingCh = await pool.query(
+        'SELECT id, name FROM channels WHERE id = $1 LIMIT 1',
+        [targetId]
+      );
+      if (!existingCh.rowCount || existingCh.rowCount === 0) {
+        return {
+          status: 404,
+          body: { status: 404, message: 'Course Hub not found.' },
+        };
+      }
+      const chName = String(existingCh.rows[0].name);
+
+      const subRes = await pool.query(
+        'SELECT id FROM channels WHERE description LIKE $1',
+        [`[HUB:${targetId}]%`]
+      );
+      const allIds = [
+        targetId,
+        ...subRes.rows.map((r) => Number(r.id)),
+      ];
+
+      await pool.query('DELETE FROM messages WHERE channel_id = ANY($1::bigint[])', [
+        allIds,
+      ]);
+      await pool.query(
+        'DELETE FROM announcements WHERE channel_id = ANY($1::bigint[])',
+        [allIds]
+      );
+      await pool.query(
+        'DELETE FROM channel_user WHERE channel_id = ANY($1::bigint[])',
+        [allIds]
+      );
+      await pool.query('DELETE FROM channels WHERE id = ANY($1::bigint[])', [
+        allIds,
+      ]);
+
+      return {
+        status: 200,
+        body: {
+          message: `Deleted ${chName} successfully.`,
         },
       };
     }
@@ -1607,20 +1813,6 @@ export async function handlePostgresApiRequest(
         [channelId, activeUser.id, activeUser.role !== 'student']
       );
 
-      // Also sync any approved users matching this channel's target section
-      await pool.query(
-        `INSERT INTO channel_user (channel_id, user_id, can_publish)
-         SELECT c.id, u.id, (u.role IN ('faculty', 'dept_head'))
-         FROM channels c
-         JOIN academic_profiles ap ON LOWER(TRIM(COALESCE(ap.section, ''))) = LOWER(TRIM(COALESCE(c.scope_section, '')))
-         JOIN users u ON u.id = ap.user_id
-         WHERE c.id = $1
-           AND u.verification_status = 'approved'
-           AND u.role != 'it_admin'
-         ON CONFLICT (channel_id, user_id) DO NOTHING`,
-        [channelId]
-      );
-
       const allChannels = await fetchChannelsFromPg(pool);
       const updated =
         allChannels.find((c) => c.id === channelId) || allChannels[0];
@@ -1628,7 +1820,7 @@ export async function handlePostgresApiRequest(
       return {
         status: 200,
         body: {
-          message: `Enrolled in ${updated.name} roster.`,
+          message: `Joined ${updated.name} successfully.`,
           data: updated,
         },
       };

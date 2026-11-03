@@ -38,8 +38,40 @@ export function isSubChannel(channel: Channel | undefined): boolean {
  * Returns only top-level Course Hubs (excluding inner sub-channels).
  */
 export function getTopLevelCourseHubs(channels: Channel[]): Channel[] {
-  const topLevel = channels.filter((ch) => !isSubChannel(ch));
-  return topLevel.length > 0 ? topLevel : channels;
+  return channels.filter((ch) => !isSubChannel(ch));
+}
+
+/**
+ * Checks whether the given user is enrolled in or created a Course Hub.
+ */
+export function isUserEnrolledInCourseHub(
+  hub: Channel | undefined,
+  user: User | undefined
+): boolean {
+  if (!hub || !user || !user.id) return false;
+  if (hub.created_by && Number(hub.created_by) === Number(user.id)) {
+    return true;
+  }
+  const roster = hub.roster || [];
+  return roster.some(
+    (m) =>
+      Number(m.id) === Number(user.id) ||
+      (user.institutional_id &&
+        m.institutional_id.trim().toLowerCase() ===
+          user.institutional_id.trim().toLowerCase())
+  );
+}
+
+/**
+ * Returns only the top-level Course Hubs that the user has joined or created.
+ */
+export function getJoinedCourseHubs(
+  channels: Channel[],
+  user: User | undefined
+): Channel[] {
+  const allHubs = getTopLevelCourseHubs(channels);
+  if (!user || !user.id) return [];
+  return allHubs.filter((hub) => isUserEnrolledInCourseHub(hub, user));
 }
 
 /**
@@ -85,27 +117,40 @@ export function formatSubChannelDisplayName(channel: Channel | undefined): strin
  */
 export function resolveCourseHubSelection(
   channels: Channel[],
-  requestedChannelId: number
+  requestedChannelId: number,
+  user?: User
 ): {
   courseHubs: Channel[];
+  allCourseHubs: Channel[];
   activeChannel: Channel | undefined;
   activeSubChannel: Channel | undefined;
   parentHubId: number | null;
   channelId: number;
 } {
-  const courseHubs = getTopLevelCourseHubs(channels);
+  const allCourseHubs = getTopLevelCourseHubs(channels);
+  const courseHubs = user
+    ? getJoinedCourseHubs(channels, user)
+    : allCourseHubs;
+
   const requestedChannel =
     channels.find((c) => c.id === requestedChannelId) ||
     courseHubs[0] ||
+    allCourseHubs[0] ||
     channels[0];
 
   const parentHubId = getChannelParentHubId(requestedChannel);
   const activeChannel =
     parentHubId !== null
-      ? courseHubs.find((h) => h.id === parentHubId) ||
+      ? allCourseHubs.find((h) => h.id === parentHubId) ||
         courseHubs[0] ||
         requestedChannel
+      : courseHubs.length > 0 &&
+        requestedChannel &&
+        !isUserEnrolledInCourseHub(requestedChannel, user) &&
+        requestedChannelId === 1
+      ? courseHubs[0]
       : requestedChannel;
+
   const activeSubChannel =
     parentHubId !== null && isSubChannel(requestedChannel)
       ? requestedChannel
@@ -115,11 +160,70 @@ export function resolveCourseHubSelection(
 
   return {
     courseHubs,
+    allCourseHubs,
     activeChannel,
     activeSubChannel,
     parentHubId,
     channelId,
   };
+}
+
+export interface ChatMediaAttachment {
+  kind: 'image' | 'file' | 'audio' | 'voice';
+  name: string;
+  mimeType: string;
+  size?: number;
+  sizeBytes?: number;
+  durationSec?: number;
+  dataUrl: string;
+}
+
+const CHAT_MEDIA_PREFIX = '__CLARIFY_MEDIA__';
+
+/**
+ * Encodes a chat message with an optional rich attachment (image, downloadable file, or voice recording)
+ * into a self-contained string stored in `messages.content`.
+ */
+export function encodeChatMessageWithAttachment(
+  text: string,
+  attachment: ChatMediaAttachment | null
+): string {
+  const trimmed = text.trim();
+  if (!attachment) {
+    return trimmed;
+  }
+  const metaJson = JSON.stringify(attachment);
+  return `${CHAT_MEDIA_PREFIX}${metaJson}\n${trimmed}`;
+}
+
+/**
+ * Parses a raw chat message content string into its text body and optional rich media attachment.
+ */
+export function parseChatMessageContent(rawContent: string): {
+  text: string;
+  attachment: ChatMediaAttachment | null;
+} {
+  if (!rawContent) {
+    return { text: '', attachment: null };
+  }
+  if (rawContent.startsWith(CHAT_MEDIA_PREFIX)) {
+    const newlineIdx = rawContent.indexOf('\n');
+    const jsonPart =
+      newlineIdx === -1
+        ? rawContent.slice(CHAT_MEDIA_PREFIX.length)
+        : rawContent.slice(CHAT_MEDIA_PREFIX.length, newlineIdx);
+    const textPart =
+      newlineIdx === -1 ? '' : rawContent.slice(newlineIdx + 1).trim();
+    try {
+      const parsed = JSON.parse(jsonPart) as ChatMediaAttachment;
+      if (parsed && parsed.kind && parsed.dataUrl) {
+        return { text: textPart, attachment: parsed };
+      }
+    } catch {
+      // Fallback to plain text if malformed
+    }
+  }
+  return { text: rawContent, attachment: null };
 }
 
 

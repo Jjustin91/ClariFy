@@ -42,6 +42,8 @@ Route::prefix('v1')->group(function () {
         // Scoped Channels & Roster
         Route::get('/channels', [ChannelController::class, 'index']);
         Route::post('/channels', [ChannelController::class, 'store']);
+        Route::match(['post', 'patch', 'put'], '/channels/{id}', [ChannelController::class, 'update']);
+        Route::delete('/channels/{id}', [ChannelController::class, 'destroy']);
         Route::post('/channels/{id}/join', [ChannelController::class, 'join']);
         Route::post('/channels/{id}/members', [ChannelController::class, 'manageMembers']);
 

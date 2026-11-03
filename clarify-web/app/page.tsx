@@ -15,6 +15,7 @@ import { useClarify } from '@/src/context/ClarifyContext';
 import { getAnnouncementsApi } from '@/src/lib/api-client';
 import {
   canPublishOrManageAnnouncements,
+  getJoinedCourseHubs,
   getTopLevelCourseHubs,
 } from '@/src/lib/domain-logic';
 import type { Announcement, LaravelValidationError } from '@/src/types/api';
@@ -28,9 +29,11 @@ export default function DashboardPage() {
     channels,
     announcementVersion,
     openAnnouncementModal,
+    openCourseHubModal,
   } = useClarify();
 
-  const courseHubs = getTopLevelCourseHubs(channels);
+  const allCourseHubs = getTopLevelCourseHubs(channels);
+  const courseHubs = getJoinedCourseHubs(channels, user);
 
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
@@ -153,65 +156,122 @@ export default function DashboardPage() {
 
         {/* Section 2: Latest Messages (Course Hub Activity Summary) matching Wireframes Pages 2 & 5 */}
         <section aria-labelledby="latest-messages-heading" className="space-y-3">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-2">
             <h3
               id="latest-messages-heading"
               className="text-base sm:text-lg font-bold text-ustp-text"
             >
               Latest Messages
             </h3>
-            <Link
-              href={`/channels/${courseHubs[0]?.id || 1}`}
-              className="text-xs font-bold text-slate-600 hover:text-ustp-navy underline"
-            >
-              Open Course Hubs &rarr;
-            </Link>
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => openCourseHubModal('browse')}
+                className="text-xs font-bold text-ustp-navy hover:underline cursor-pointer"
+              >
+                Browse Course Hubs ({allCourseHubs.length})
+              </button>
+              <Link
+                href={`/channels/${courseHubs[0]?.id || allCourseHubs[0]?.id || 1}`}
+                className="text-xs font-bold text-slate-600 hover:text-ustp-navy underline"
+              >
+                Open Course Hubs &rarr;
+              </Link>
+            </div>
           </div>
 
-          <div className="space-y-3">
-            {courseHubs.map((ch) => {
-              const titleDisplay = ch.course_code
-                ? `${ch.scope_section || 'IT3R2'}-${ch.course_code} ${ch.name.replace(
-                    /^#\s*\S+\s*/,
-                    ''
-                  )}`
-                : ch.name;
-              const badgeCount =
-                ch.unread_count && ch.unread_count > 0
-                  ? `${ch.unread_count} inquiries`
-                  : '9+ chats';
-
-              return (
-                <Link
-                  key={ch.id}
-                  href={`/channels/${ch.id}`}
-                  className="block bg-white border border-slate-200/90 hover:border-ustp-navy rounded-lg px-5 py-3.5 shadow-xs hover:shadow-md transition-all"
+          {courseHubs.length === 0 ? (
+            <div className="bg-white border border-slate-200/90 rounded-lg p-6 text-center space-y-3">
+              <p className="text-sm font-extrabold text-ustp-navy">
+                You Haven&apos;t Joined Any Course Hubs Yet
+              </p>
+              <p className="text-xs text-slate-500 max-w-md mx-auto">
+                Browse existing Course Hubs to join your classes or create a new
+                Course Hub with built-in Noticeboard Feed, Isolated Q&amp;A
+                Threads, and #general chat.
+              </p>
+              <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => openCourseHubModal('browse')}
+                  className="px-4 py-2 text-xs font-extrabold bg-ustp-navy text-ustp-gold rounded hover:opacity-95 cursor-pointer"
                 >
-                  <div className="flex items-center justify-between gap-4">
-                    <div className="min-w-0">
-                      <p className="text-sm font-extrabold text-ustp-text truncate">
-                        {titleDisplay}
-                      </p>
-                      <p className="text-xs text-slate-500 truncate mt-0.5">
-                        {ch.latest_activity_preview ||
-                          `${ch.instructor_name || 'Instructor'}: Course Hub active for ${
-                            ch.scope_section || 'IT3R2'
+                  Browse Course Hubs ({allCourseHubs.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => openCourseHubModal('create_hub')}
+                  className="px-4 py-2 text-xs font-extrabold bg-ustp-gold text-ustp-navy rounded hover:opacity-95 cursor-pointer"
+                >
+                  + Add Course Hub
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {courseHubs.map((ch) => {
+                const titleDisplay = ch.course_code
+                  ? `${ch.scope_section || 'IT3R2'}-${ch.course_code} ${ch.name.replace(
+                      /^#\s*\S+\s*/,
+                      ''
+                    )}`
+                  : ch.name;
+
+                const openInquiries = ch.unread_count || 0;
+                const totalChats = ch.chat_messages_count || 0;
+                const hasActivity = openInquiries > 0 || totalChats > 0;
+
+                let badgeCount = '0 inquiries · 0 chats';
+                if (openInquiries > 0 && totalChats > 0) {
+                  badgeCount = `${openInquiries} ${
+                    openInquiries === 1 ? 'inquiry' : 'inquiries'
+                  } · ${totalChats} ${totalChats === 1 ? 'chat' : 'chats'}`;
+                } else if (openInquiries > 0) {
+                  badgeCount = `${openInquiries} ${
+                    openInquiries === 1 ? 'inquiry' : 'inquiries'
+                  }`;
+                } else if (totalChats > 0) {
+                  badgeCount = `${totalChats} ${
+                    totalChats === 1 ? 'chat' : 'chats'
+                  }`;
+                }
+
+                return (
+                  <Link
+                    key={ch.id}
+                    href={`/channels/${ch.id}`}
+                    className="block bg-white border border-slate-200/90 hover:border-ustp-navy rounded-lg px-5 py-3.5 shadow-xs hover:shadow-md transition-all"
+                  >
+                    <div className="flex items-center justify-between gap-4">
+                      <div className="min-w-0">
+                        <p className="text-sm font-extrabold text-ustp-text truncate">
+                          {titleDisplay}
+                        </p>
+                        <p className="text-xs text-slate-500 truncate mt-0.5">
+                          {ch.latest_activity_preview ||
+                            `${ch.instructor_name || 'Instructor'}: Course Hub active for ${
+                              ch.scope_section || 'IT3R2'
+                            }`}
+                        </p>
+                      </div>
+                      <div className="text-right shrink-0 font-mono tabular-nums">
+                        <span
+                          className={`block text-xs font-bold ${
+                            hasActivity ? 'text-red-600' : 'text-slate-500'
                           }`}
-                      </p>
+                        >
+                          {badgeCount}
+                        </span>
+                        <span className="block text-[11px] text-slate-400 mt-0.5">
+                          {ch.latest_activity_at || 'No activity yet'}
+                        </span>
+                      </div>
                     </div>
-                    <div className="text-right shrink-0 font-mono tabular-nums">
-                      <span className="block text-xs font-bold text-red-600">
-                        {badgeCount}
-                      </span>
-                      <span className="block text-[11px] text-slate-400 mt-0.5">
-                        {ch.latest_activity_at || '30 mins'}
-                      </span>
-                    </div>
-                  </div>
-                </Link>
-              );
-            })}
-          </div>
+                  </Link>
+                );
+              })}
+            </div>
+          )}
         </section>
       </div>
     </AppShell>

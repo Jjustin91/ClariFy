@@ -56,7 +56,8 @@ interface ClarifyContextValue {
   channelModalTargetHubId: number | null;
   openCourseHubModal: (defaultTab?: 'browse' | 'create_hub') => void;
   openAddSubChannelModal: (hubId: number) => void;
-  channelModalDefaultTab: 'browse' | 'create_hub' | 'create_channel';
+  openEditCourseHubModal: (hubId: number) => void;
+  channelModalDefaultTab: 'browse' | 'create_hub' | 'create_channel' | 'edit_hub';
   announcementModalState: {
     isOpen: boolean;
     editingAnnouncement: Announcement | null;
@@ -116,7 +117,7 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
     number | null
   >(null);
   const [channelModalDefaultTab, setChannelModalDefaultTab] = useState<
-    'browse' | 'create_hub' | 'create_channel'
+    'browse' | 'create_hub' | 'create_channel' | 'edit_hub'
   >('create_hub');
 
   const openCourseHubModal = useCallback(
@@ -131,6 +132,12 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
   const openAddSubChannelModal = useCallback((hubId: number) => {
     setChannelModalTargetHubId(hubId);
     setChannelModalDefaultTab('create_channel');
+    setIsChannelModalOpen(true);
+  }, []);
+
+  const openEditCourseHubModal = useCallback((hubId: number) => {
+    setChannelModalTargetHubId(hubId);
+    setChannelModalDefaultTab('edit_hub');
     setIsChannelModalOpen(true);
   }, []);
 
@@ -587,6 +594,7 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
         channelModalTargetHubId,
         openCourseHubModal,
         openAddSubChannelModal,
+        openEditCourseHubModal,
         channelModalDefaultTab,
         announcementModalState,
         openAnnouncementModal,

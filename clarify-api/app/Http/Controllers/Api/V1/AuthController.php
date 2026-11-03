@@ -61,16 +61,6 @@ class AuthController
             'courses_handled' => $validated['role'] === 'faculty' ? ['IT314 Software Engineering'] : [],
         ]);
 
-        $defaultChannel = Channel::first();
-        if ($defaultChannel) {
-            $defaultChannel->members()->syncWithoutDetaching([
-                $user->id => [
-                    'can_publish' => $validated['role'] === 'faculty',
-                    'joined_at' => now(),
-                ],
-            ]);
-        }
-
         RealtimeStateUpdated::safeDispatch('admin.updated', null, (int) $user->id);
 
         return response()->json([

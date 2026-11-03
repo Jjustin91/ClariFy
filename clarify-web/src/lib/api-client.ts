@@ -297,6 +297,34 @@ export async function createChannelApi(payload: {
   });
 }
 
+export async function updateChannelApi(
+  channelId: number,
+  payload: {
+    course_code: string;
+    name: string;
+    description?: string;
+    scope_college?: string;
+    scope_department?: string;
+    scope_section?: string;
+  }
+): Promise<SingleResourceResponse<Channel>> {
+  return requestLaravel<SingleResourceResponse<Channel>>(
+    `/channels/${channelId}`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }
+  );
+}
+
+export async function deleteChannelApi(
+  channelId: number
+): Promise<{ message: string }> {
+  return requestLaravel<{ message: string }>(`/channels/${channelId}`, {
+    method: 'DELETE',
+  });
+}
+
 export async function joinChannelApi(
   channelId: number
 ): Promise<SingleResourceResponse<Channel>> {

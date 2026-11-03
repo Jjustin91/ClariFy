@@ -4,7 +4,9 @@ namespace App\Http\Controllers\Api\V1;
 
 use App\Events\RealtimeStateUpdated;
 use App\Http\Resources\ChannelResource;
+use App\Models\Announcement;
 use App\Models\Channel;
+use App\Models\Message;
 use App\Models\User;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -87,28 +89,13 @@ class ChannelController
             'created_by' => $user->id,
         ]);
 
-        $syncPayload = [
+        // Only enroll the creator automatically; other users join via Browse Course Hubs
+        $channel->members()->syncWithoutDetaching([
             $user->id => [
                 'can_publish' => $user->canPublishOrManage(),
                 'joined_at' => now(),
             ],
-        ];
-
-        $sectionUsers = User::where('verification_status', 'approved')
-            ->where('role', '!=', 'it_admin')
-            ->whereHas('academicProfile', function ($q) use ($scopeSection) {
-                $q->whereRaw('LOWER(TRIM(section)) = LOWER(TRIM(?))', [$scopeSection]);
-            })
-            ->get();
-
-        foreach ($sectionUsers as $secUser) {
-            $syncPayload[$secUser->id] = [
-                'can_publish' => $secUser->canPublishOrManage(),
-                'joined_at' => now(),
-            ];
-        }
-
-        $channel->members()->syncWithoutDetaching($syncPayload);
+        ]);
 
         RealtimeStateUpdated::safeDispatch('channel.created', (int) $channel->id, (int) $user->id);
 
@@ -119,42 +106,123 @@ class ChannelController
     }
 
     /**
-     * POST /api/v1/channels/{id}/join
+     * PATCH /api/v1/channels/{id} — Edit Course Hub or Sub-Channel (Students & Faculty)
      */
-    public function join(Request $request, int $id): JsonResponse
+    public function update(Request $request, int $id): JsonResponse
     {
-        $channel = Channel::find($id) ?? Channel::firstOrFail();
         $user = $request->user();
 
-        $syncPayload = [
-            $user->id => [
-                'can_publish' => $user->canPublishOrManage(),
-                'joined_at' => now(),
-            ],
-        ];
-
-        if ($channel->scope_section) {
-            $sectionUsers = User::where('verification_status', 'approved')
-                ->where('role', '!=', 'it_admin')
-                ->whereHas('academicProfile', function ($q) use ($channel) {
-                    $q->whereRaw('LOWER(TRIM(section)) = LOWER(TRIM(?))', [$channel->scope_section]);
-                })
-                ->get();
-
-            foreach ($sectionUsers as $secUser) {
-                $syncPayload[$secUser->id] = [
-                    'can_publish' => $secUser->canPublishOrManage(),
-                    'joined_at' => now(),
-                ];
-            }
+        if ($user->role === 'it_admin') {
+            return response()->json([
+                'status' => 403,
+                'message' => 'HTTP 403 Forbidden: IT Administrator accounts are restricted to the IT Admin Console.',
+            ], 403);
         }
 
-        $channel->members()->syncWithoutDetaching($syncPayload);
+        $channel = Channel::findOrFail($id);
+
+        $validated = $request->validate([
+            'course_code' => ['required', 'string', 'max:32'],
+            'name' => ['required', 'string', 'max:150'],
+            'description' => ['nullable', 'string'],
+            'scope_college' => ['nullable', 'string'],
+            'scope_department' => ['nullable', 'string'],
+            'scope_section' => ['nullable', 'string'],
+        ], [
+            'course_code.required' => 'The course code field is required.',
+            'name.required' => 'The Course Hub name field is required.',
+        ]);
+
+        $formattedName = str_starts_with(trim($validated['name']), '#')
+            ? trim($validated['name'])
+            : '# ' . trim($validated['name']);
+
+        $scopeSection = $validated['scope_section'] ?? $channel->scope_section ?? 'IT3R2';
+        $scopeDepartment = $validated['scope_department'] ?? $channel->scope_department ?? 'CITC';
+        $scopeCollege = $validated['scope_college'] ?? $scopeDepartment;
+
+        $channel->update([
+            'course_code' => strtoupper(trim($validated['course_code'])),
+            'name' => $formattedName,
+            'description' => $validated['description'] ?? $channel->description,
+            'scope_college' => $scopeCollege,
+            'scope_department' => $scopeDepartment,
+            'scope_section' => $scopeSection,
+        ]);
+
+        // Also update scope metadata on any child sub-channels of this Course Hub
+        Channel::where('description', 'like', "[HUB:{$channel->id}]%")
+            ->update([
+                'course_code' => strtoupper(trim($validated['course_code'])),
+                'scope_college' => $scopeCollege,
+                'scope_department' => $scopeDepartment,
+                'scope_section' => $scopeSection,
+            ]);
 
         RealtimeStateUpdated::safeDispatch('channel.updated', (int) $channel->id, (int) $user->id);
 
         return response()->json([
-            'message' => "Enrolled in {$channel->name} roster.",
+            'message' => 'Course Hub updated successfully.',
+            'data' => new ChannelResource($channel->fresh('members.academicProfile')),
+        ]);
+    }
+
+    /**
+     * DELETE /api/v1/channels/{id} — Delete Course Hub or Sub-Channel (Students & Faculty)
+     */
+    public function destroy(Request $request, int $id): JsonResponse
+    {
+        $user = $request->user();
+
+        if ($user->role === 'it_admin') {
+            return response()->json([
+                'status' => 403,
+                'message' => 'HTTP 403 Forbidden: IT Administrator accounts are restricted to the IT Admin Console.',
+            ], 403);
+        }
+
+        $channel = Channel::findOrFail($id);
+        $channelName = $channel->name;
+
+        // Find any sub-channels belonging to this Course Hub
+        $subChannelIds = Channel::where('description', 'like', "[HUB:{$channel->id}]%")
+            ->pluck('id')
+            ->all();
+
+        $allTargetIds = array_values(array_unique(array_merge([$channel->id], $subChannelIds)));
+
+        Message::whereIn('channel_id', $allTargetIds)->delete();
+        Announcement::whereIn('channel_id', $allTargetIds)->delete();
+        \Illuminate\Support\Facades\DB::table('channel_user')->whereIn('channel_id', $allTargetIds)->delete();
+        Channel::whereIn('id', $allTargetIds)->delete();
+
+        RealtimeStateUpdated::safeDispatch('channel.updated', (int) $id, (int) $user->id);
+
+        return response()->json([
+            'message' => "Deleted {$channelName} successfully.",
+        ]);
+    }
+
+    /**
+     * POST /api/v1/channels/{id}/join
+     */
+    public function join(Request $request, int $id): JsonResponse
+    {
+        $channel = Channel::findOrFail($id);
+        $user = $request->user();
+
+        // Enroll only the current user into the selected Course Hub
+        $channel->members()->syncWithoutDetaching([
+            $user->id => [
+                'can_publish' => $user->canPublishOrManage(),
+                'joined_at' => now(),
+            ],
+        ]);
+
+        RealtimeStateUpdated::safeDispatch('channel.updated', (int) $channel->id, (int) $user->id);
+
+        return response()->json([
+            'message' => "Joined {$channel->name} successfully.",
             'data' => new ChannelResource($channel->load('members.academicProfile')),
         ]);
     }
@@ -179,7 +247,7 @@ class ChannelController
             'action' => ['required', 'in:add,remove'],
         ]);
 
-        $channel = Channel::find($id) ?? Channel::firstOrFail();
+        $channel = Channel::findOrFail($id);
         $targetUser = User::where('institutional_id', $validated['institutional_id'])->first();
 
         if ($validated['action'] === 'add') {

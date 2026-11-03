@@ -39,6 +39,7 @@ import { useClarify } from '@/src/context/ClarifyContext';
 import {
   convertThreadToFaqApi,
   createThreadApi,
+  deleteChannelApi,
   deleteThreadApi,
   getAnnouncementsApi,
   getChannelThreadsApi,
@@ -55,6 +56,7 @@ import {
   canStudentModifyOwnInquiry,
   formatCourseHubName,
   formatSubChannelDisplayName,
+  getChannelParentHubId,
   getFieldValidationError,
   getSubChannelsForHub,
   isThreadVisibleToUser,
@@ -81,6 +83,8 @@ export default function CourseHubPage() {
     openAnnouncementModal,
     openCourseHubModal,
     openAddSubChannelModal,
+    openEditCourseHubModal,
+    refreshChannels,
     subscribeRealtimeEvents,
     showToast,
   } = useClarify();
@@ -91,11 +95,15 @@ export default function CourseHubPage() {
     activeSubChannel,
     parentHubId,
     channelId,
-  } = resolveCourseHubSelection(channels, requestedChannelId);
+  } = resolveCourseHubSelection(channels, requestedChannelId, user);
 
   const [channelSearch, setChannelSearch] = useState('');
   const [activeTab, setActiveTab] = useState<CourseHubTab>('messenger');
   const [collapsedHubIds, setCollapsedHubIds] = useState<number[]>([]);
+  const [confirmDeleteHubId, setConfirmDeleteHubId] = useState<number | null>(
+    null
+  );
+  const [isDeletingHubId, setIsDeletingHubId] = useState<number | null>(null);
   const [isMobileChannelsOpen, setIsMobileChannelsOpen] = useState(false);
   const [isMobileFaqOpen, setIsMobileFaqOpen] = useState(false);
 
@@ -112,6 +120,45 @@ export default function CourseHubPage() {
         ? prev.filter((id) => id !== hubId)
         : [...prev, hubId]
     );
+  };
+
+  const handleDeleteCourseHubOrChannel = async (
+    targetId: number,
+    isParentHub: boolean
+  ) => {
+    setIsDeletingHubId(targetId);
+    try {
+      const res = await deleteChannelApi(targetId);
+      await refreshChannels();
+      setConfirmDeleteHubId(null);
+      showToast(
+        res.message ||
+          (isParentHub ? 'Course Hub deleted.' : 'Channel deleted.'),
+        'info'
+      );
+      if (isParentHub && activeChannel?.id === targetId) {
+        const remainingChannels = channels.filter(
+          (c) => c.id !== targetId && getChannelParentHubId(c) !== targetId
+        );
+        const nextSelection = resolveCourseHubSelection(
+          remainingChannels,
+          0,
+          user
+        );
+        if (nextSelection.activeChannel) {
+          router.push(`/channels/${nextSelection.activeChannel.id}`);
+        } else {
+          router.push('/');
+        }
+      } else if (!isParentHub && activeSubChannel?.id === targetId && activeChannel) {
+        router.push(`/channels/${activeChannel.id}`);
+      }
+    } catch (err) {
+      const apiErr = err as LaravelValidationError;
+      showToast(apiErr.message || 'Could not delete Course Hub.', 'error');
+    } finally {
+      setIsDeletingHubId(null);
+    }
   };
 
   // Data states
@@ -516,222 +563,339 @@ export default function CourseHubPage() {
               />
             </div>
 
-            {/* Top Action Button: + Add Course Hub */}
-            <button
-              type="button"
-              onClick={() => {
-                setIsMobileChannelsOpen(false);
-                openCourseHubModal('create_hub');
-              }}
-              className="w-full flex items-center justify-between px-3 py-2 text-xs font-extrabold bg-ustp-gold hover:opacity-95 text-ustp-navy rounded-md shadow-xs cursor-pointer"
-            >
-              <span>+ Add Course Hub</span>
-              <Plus className="w-3.5 h-3.5 stroke-[2.5]" />
-            </button>
+            {/* Top Action Buttons: + Add Course Hub & Browse Course Hubs */}
+            <div className="space-y-1.5">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsMobileChannelsOpen(false);
+                  openCourseHubModal('create_hub');
+                }}
+                className="w-full flex items-center justify-between px-3 py-2 text-xs font-extrabold bg-ustp-gold hover:opacity-95 text-ustp-navy rounded-md shadow-xs cursor-pointer"
+              >
+                <span>+ Add Course Hub</span>
+                <Plus className="w-3.5 h-3.5 stroke-[2.5]" />
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setIsMobileChannelsOpen(false);
+                  openCourseHubModal('browse');
+                }}
+                className="w-full flex items-center justify-between px-3 py-1.5 text-xs font-bold bg-white/10 hover:bg-white/15 text-white border border-white/15 rounded-md cursor-pointer"
+              >
+                <span>Browse Course Hubs</span>
+                <Search className="w-3.5 h-3.5 text-ustp-gold" />
+              </button>
+            </div>
 
             {/* Discord-Style Expandable Course Hub Tree */}
             <nav aria-label="Course Hubs Hierarchy" className="space-y-2.5 pt-1">
-              {filteredCourseHubs.map((hub) => {
-                const isCurrentHub = hub.id === activeChannel?.id;
-                const isExpanded =
-                  !collapsedHubIds.includes(hub.id) || Boolean(searchQuery);
-                const hubSubChannels = getSubChannelsForHub(channels, hub.id);
-
-                return (
-                  <div
-                    key={hub.id}
-                    className={`rounded-lg border transition-colors ${
-                      isCurrentHub
-                        ? 'bg-white/10 border-ustp-gold/50'
-                        : 'bg-white/[0.04] border-white/10 hover:border-white/20'
-                    }`}
+              {filteredCourseHubs.length === 0 ? (
+                <div className="p-3 rounded-lg bg-white/[0.04] border border-white/10 text-center space-y-2">
+                  <p className="text-[11px] font-bold text-slate-300">
+                    {courseHubs.length === 0
+                      ? 'You have not joined any Course Hubs yet.'
+                      : 'No matching Course Hubs found.'}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsMobileChannelsOpen(false);
+                      openCourseHubModal('browse');
+                    }}
+                    className="w-full px-2.5 py-1.5 text-[11px] font-extrabold bg-ustp-gold text-ustp-navy rounded cursor-pointer"
                   >
-                    {/* Course Hub Category Header Row */}
-                    <div className="flex items-center justify-between gap-1 px-2.5 py-2">
-                      <button
-                        type="button"
-                        onClick={() => toggleHubExpanded(hub.id)}
-                        aria-expanded={isExpanded}
-                        className="flex items-center gap-1.5 min-w-0 flex-1 text-left cursor-pointer group"
-                      >
-                        {isExpanded ? (
-                          <ChevronDown className="w-3.5 h-3.5 text-ustp-gold shrink-0" />
-                        ) : (
-                          <ChevronRight className="w-3.5 h-3.5 text-slate-400 group-hover:text-white shrink-0" />
-                        )}
-                        <span
-                          className={`text-xs font-extrabold truncate ${
-                            isCurrentHub ? 'text-ustp-gold' : 'text-white'
-                          }`}
-                        >
-                          {formatCourseHubName(hub)}
-                        </span>
-                      </button>
+                    Browse &amp; Join Course Hubs
+                  </button>
+                </div>
+              ) : (
+                filteredCourseHubs.map((hub) => {
+                  const isCurrentHub = hub.id === activeChannel?.id;
+                  const isExpanded =
+                    !collapsedHubIds.includes(hub.id) || Boolean(searchQuery);
+                  const hubSubChannels = getSubChannelsForHub(channels, hub.id);
 
-                      <div className="flex items-center gap-1 shrink-0">
-                        {hub.unread_count !== undefined &&
-                          hub.unread_count > 0 && (
-                            <span
-                              title={`${hub.unread_count} open Q&A inquiries`}
-                              className="px-1.5 py-0.5 text-[10px] font-mono font-extrabold bg-ustp-orange text-ustp-navy rounded-full tabular-nums"
-                            >
-                              {hub.unread_count}
-                            </span>
-                          )}
+                  return (
+                    <div
+                      key={hub.id}
+                      className={`rounded-lg border transition-colors ${
+                        isCurrentHub
+                          ? 'bg-white/10 border-ustp-gold/50'
+                          : 'bg-white/[0.04] border-white/10 hover:border-white/20'
+                      }`}
+                    >
+                      {/* Course Hub Category Header Row */}
+                      <div className="flex items-center justify-between gap-1 px-2.5 py-2">
                         <button
                           type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setIsMobileChannelsOpen(false);
-                            openAddSubChannelModal(hub.id);
-                          }}
-                          title={`Add channel inside ${formatCourseHubName(hub)}`}
-                          aria-label={`Add channel inside ${formatCourseHubName(
-                            hub
-                          )}`}
-                          className="p-1 rounded hover:bg-white/15 text-slate-300 hover:text-ustp-gold cursor-pointer"
+                          onClick={() => toggleHubExpanded(hub.id)}
+                          aria-expanded={isExpanded}
+                          className="flex items-center gap-1.5 min-w-0 flex-1 text-left cursor-pointer group"
                         >
-                          <Plus className="w-3.5 h-3.5" />
+                          {isExpanded ? (
+                            <ChevronDown className="w-3.5 h-3.5 text-ustp-gold shrink-0" />
+                          ) : (
+                            <ChevronRight className="w-3.5 h-3.5 text-slate-400 group-hover:text-white shrink-0" />
+                          )}
+                          <span
+                            className={`text-xs font-extrabold truncate ${
+                              isCurrentHub ? 'text-ustp-gold' : 'text-white'
+                            }`}
+                          >
+                            {formatCourseHubName(hub)}
+                          </span>
                         </button>
-                      </div>
-                    </div>
 
-                    {/* Expanded Course Hub Contents: Given Views + Inner Chat Channels */}
-                    {isExpanded && (
-                      <div className="px-2 pb-2.5 pt-0.5 space-y-2 border-t border-white/10">
-                        {/* 1. Given / Built-in Spaces: Noticeboard Feed & Isolated Q&A Threads */}
-                        <div className="space-y-0.5 pt-1">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setIsMobileChannelsOpen(false);
-                              setActiveTab('feed');
-                              if (!isCurrentHub || activeSubChannel) {
-                                router.push(`/channels/${hub.id}`);
-                              }
-                            }}
-                            className={`w-full flex items-center gap-2 px-2.5 py-1.5 rounded text-[11px] font-bold transition-colors cursor-pointer ${
-                              isCurrentHub && activeTab === 'feed'
-                                ? 'bg-ustp-gold text-ustp-navy font-extrabold'
-                                : 'text-slate-300 hover:bg-white/10 hover:text-white'
-                            }`}
-                          >
-                            <Megaphone className="w-3.5 h-3.5 shrink-0" />
-                            <span className="truncate">Noticeboard Feed</span>
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setIsMobileChannelsOpen(false);
-                              setActiveTab('threads');
-                              if (!isCurrentHub || activeSubChannel) {
-                                router.push(`/channels/${hub.id}`);
-                              }
-                            }}
-                            className={`w-full flex items-center justify-between gap-2 px-2.5 py-1.5 rounded text-[11px] font-bold transition-colors cursor-pointer ${
-                              isCurrentHub &&
-                              (activeTab === 'threads' ||
-                                activeTab === 'send_inquiry')
-                                ? 'bg-ustp-gold text-ustp-navy font-extrabold'
-                                : 'text-slate-300 hover:bg-white/10 hover:text-white'
-                            }`}
-                          >
-                            <span className="flex items-center gap-2 min-w-0">
-                              <MessageSquare className="w-3.5 h-3.5 shrink-0" />
-                              <span className="truncate">
-                                Isolated Q&amp;A Threads
+                        <div className="flex items-center gap-0.5 shrink-0">
+                          {hub.unread_count !== undefined &&
+                            hub.unread_count > 0 && (
+                              <span
+                                title={`${hub.unread_count} open Q&A inquiries`}
+                                className="px-1.5 py-0.5 mr-0.5 text-[10px] font-mono font-extrabold bg-ustp-orange text-ustp-navy rounded-full tabular-nums"
+                              >
+                                {hub.unread_count}
                               </span>
-                            </span>
-                            {hub.unread_count !== undefined &&
-                              hub.unread_count > 0 && (
-                                <span
-                                  className={`px-1.5 py-0.2 rounded-full text-[10px] font-mono font-extrabold tabular-nums ${
-                                    isCurrentHub &&
-                                    (activeTab === 'threads' ||
-                                      activeTab === 'send_inquiry')
-                                      ? 'bg-ustp-navy text-ustp-gold'
-                                      : 'bg-white/15 text-ustp-gold'
-                                  }`}
-                                >
-                                  {hub.unread_count}
-                                </span>
-                              )}
+                            )}
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setIsMobileChannelsOpen(false);
+                              openEditCourseHubModal(hub.id);
+                            }}
+                            title={`Edit ${formatCourseHubName(hub)}`}
+                            aria-label={`Edit ${formatCourseHubName(hub)}`}
+                            className="p-1 rounded hover:bg-white/15 text-slate-300 hover:text-ustp-gold cursor-pointer"
+                          >
+                            <Edit3 className="w-3 h-3" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setConfirmDeleteHubId((prev) =>
+                                prev === hub.id ? null : hub.id
+                              );
+                            }}
+                            title={`Delete ${formatCourseHubName(hub)}`}
+                            aria-label={`Delete ${formatCourseHubName(hub)}`}
+                            className="p-1 rounded hover:bg-red-500/20 text-slate-300 hover:text-red-400 cursor-pointer"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setIsMobileChannelsOpen(false);
+                              openAddSubChannelModal(hub.id);
+                            }}
+                            title={`Add channel inside ${formatCourseHubName(
+                              hub
+                            )}`}
+                            aria-label={`Add channel inside ${formatCourseHubName(
+                              hub
+                            )}`}
+                            className="p-1 rounded hover:bg-white/15 text-slate-300 hover:text-ustp-gold cursor-pointer"
+                          >
+                            <Plus className="w-3.5 h-3.5" />
                           </button>
                         </div>
+                      </div>
 
-                        {/* 2. Inner Channels inside Course Hub (# general + custom sub-channels + Add Channel) */}
-                        <div className="space-y-0.5 pt-1 border-t border-white/10">
-                          <div className="flex items-center justify-between px-2 py-1">
-                            <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400">
-                              Channels
-                            </span>
+                      {/* Inline Delete Confirmation Banner for Course Hub */}
+                      {confirmDeleteHubId === hub.id && (
+                        <div className="mx-2 mb-2 p-2 rounded bg-red-950/90 border border-red-400/50 text-[11px] space-y-1.5">
+                          <p className="font-bold text-red-100">
+                            Delete {formatCourseHubName(hub)}?
+                          </p>
+                          <div className="flex items-center justify-end gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => setConfirmDeleteHubId(null)}
+                              className="px-2 py-0.5 rounded bg-white/10 text-slate-200 hover:bg-white/20 font-semibold cursor-pointer"
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              type="button"
+                              disabled={isDeletingHubId === hub.id}
+                              onClick={() =>
+                                void handleDeleteCourseHubOrChannel(
+                                  hub.id,
+                                  true
+                                )
+                              }
+                              className="px-2 py-0.5 rounded bg-red-600 hover:bg-red-500 text-white font-extrabold disabled:opacity-50 cursor-pointer"
+                            >
+                              {isDeletingHubId === hub.id
+                                ? 'Deleting...'
+                                : 'Confirm Delete'}
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Expanded Course Hub Contents: Given Views + Inner Chat Channels */}
+                      {isExpanded && (
+                        <div className="px-2 pb-2.5 pt-0.5 space-y-2 border-t border-white/10">
+                          {/* 1. Given / Built-in Spaces: Noticeboard Feed & Isolated Q&A Threads */}
+                          <div className="space-y-0.5 pt-1">
                             <button
                               type="button"
                               onClick={() => {
                                 setIsMobileChannelsOpen(false);
-                                openAddSubChannelModal(hub.id);
+                                setActiveTab('feed');
+                                if (!isCurrentHub || activeSubChannel) {
+                                  router.push(`/channels/${hub.id}`);
+                                }
                               }}
-                              className="inline-flex items-center gap-0.5 text-[10px] font-extrabold text-ustp-gold hover:underline cursor-pointer"
+                              className={`w-full flex items-center gap-2 px-2.5 py-1.5 rounded text-[11px] font-bold transition-colors cursor-pointer ${
+                                isCurrentHub && activeTab === 'feed'
+                                  ? 'bg-ustp-gold text-ustp-navy font-extrabold'
+                                  : 'text-slate-300 hover:bg-white/10 hover:text-white'
+                              }`}
                             >
-                              <Plus className="w-3 h-3" />
-                              <span>Add Channel</span>
+                              <Megaphone className="w-3.5 h-3.5 shrink-0" />
+                              <span className="truncate">Noticeboard Feed</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setIsMobileChannelsOpen(false);
+                                setActiveTab('threads');
+                                if (!isCurrentHub || activeSubChannel) {
+                                  router.push(`/channels/${hub.id}`);
+                                }
+                              }}
+                              className={`w-full flex items-center justify-between gap-2 px-2.5 py-1.5 rounded text-[11px] font-bold transition-colors cursor-pointer ${
+                                isCurrentHub &&
+                                (activeTab === 'threads' ||
+                                  activeTab === 'send_inquiry')
+                                  ? 'bg-ustp-gold text-ustp-navy font-extrabold'
+                                  : 'text-slate-300 hover:bg-white/10 hover:text-white'
+                              }`}
+                            >
+                              <span className="flex items-center gap-2 min-w-0">
+                                <MessageSquare className="w-3.5 h-3.5 shrink-0" />
+                                <span className="truncate">
+                                  Isolated Q&amp;A Threads
+                                </span>
+                              </span>
+                              {hub.unread_count !== undefined &&
+                                hub.unread_count > 0 && (
+                                  <span
+                                    className={`px-1.5 py-0.2 rounded-full text-[10px] font-mono font-extrabold tabular-nums ${
+                                      isCurrentHub &&
+                                      (activeTab === 'threads' ||
+                                        activeTab === 'send_inquiry')
+                                        ? 'bg-ustp-navy text-ustp-gold'
+                                        : 'bg-white/15 text-ustp-gold'
+                                    }`}
+                                  >
+                                    {hub.unread_count}
+                                  </span>
+                                )}
                             </button>
                           </div>
 
-                          {/* Built-in default # general chat channel */}
-                          <Link
-                            href={`/channels/${hub.id}`}
-                            onClick={() => {
-                              setIsMobileChannelsOpen(false);
-                              setActiveTab('messenger');
-                            }}
-                            className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded text-xs font-mono font-bold transition-colors ${
-                              isCurrentHub &&
-                              !activeSubChannel &&
-                              activeTab === 'messenger'
-                                ? 'bg-white/20 text-white border-l-2 border-ustp-gold'
-                                : 'text-slate-300 hover:bg-white/10 hover:text-white'
-                            }`}
-                          >
-                            <Hash className="w-3.5 h-3.5 text-ustp-gold shrink-0" />
-                            <span className="truncate">general</span>
-                          </Link>
-
-                          {/* User-created sub-channels inside this Course Hub */}
-                          {hubSubChannels.map((sub) => {
-                            const isSubActive =
-                              activeSubChannel?.id === sub.id &&
-                              activeTab === 'messenger';
-                            const cleanSubName = sub.name
-                              .replace(/^#\s*/, '')
-                              .trim();
-
-                            return (
-                              <Link
-                                key={sub.id}
-                                href={`/channels/${sub.id}`}
+                          {/* 2. Inner Channels inside Course Hub (# general + custom sub-channels + Add Channel) */}
+                          <div className="space-y-0.5 pt-1 border-t border-white/10">
+                            <div className="flex items-center justify-between px-2 py-1">
+                              <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400">
+                                Channels
+                              </span>
+                              <button
+                                type="button"
                                 onClick={() => {
                                   setIsMobileChannelsOpen(false);
-                                  setActiveTab('messenger');
+                                  openAddSubChannelModal(hub.id);
                                 }}
-                                className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded text-xs font-mono font-bold transition-colors ${
-                                  isSubActive
-                                    ? 'bg-white/20 text-white border-l-2 border-ustp-gold'
-                                    : 'text-slate-300 hover:bg-white/10 hover:text-white'
-                                }`}
+                                className="inline-flex items-center gap-0.5 text-[10px] font-extrabold text-ustp-gold hover:underline cursor-pointer"
                               >
-                                <Hash className="w-3.5 h-3.5 text-ustp-gold shrink-0" />
-                                <span className="truncate">{cleanSubName}</span>
-                              </Link>
-                            );
-                          })}
+                                <Plus className="w-3 h-3" />
+                                <span>Add Channel</span>
+                              </button>
+                            </div>
+
+                            {/* Built-in default # general chat channel */}
+                            <Link
+                              href={`/channels/${hub.id}`}
+                              onClick={() => {
+                                setIsMobileChannelsOpen(false);
+                                setActiveTab('messenger');
+                              }}
+                              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded text-xs font-mono font-bold transition-colors ${
+                                isCurrentHub &&
+                                !activeSubChannel &&
+                                activeTab === 'messenger'
+                                  ? 'bg-white/20 text-white border-l-2 border-ustp-gold'
+                                  : 'text-slate-300 hover:bg-white/10 hover:text-white'
+                              }`}
+                            >
+                              <Hash className="w-3.5 h-3.5 text-ustp-gold shrink-0" />
+                              <span className="truncate">general</span>
+                            </Link>
+
+                            {/* User-created sub-channels inside this Course Hub */}
+                            {hubSubChannels.map((sub) => {
+                              const isSubActive =
+                                activeSubChannel?.id === sub.id &&
+                                activeTab === 'messenger';
+                              const cleanSubName = sub.name
+                                .replace(/^#\s*/, '')
+                                .trim();
+
+                              return (
+                                <div
+                                  key={sub.id}
+                                  className={`group flex items-center justify-between gap-1 px-2.5 py-1.5 rounded text-xs font-mono font-bold transition-colors ${
+                                    isSubActive
+                                      ? 'bg-white/20 text-white border-l-2 border-ustp-gold'
+                                      : 'text-slate-300 hover:bg-white/10 hover:text-white'
+                                  }`}
+                                >
+                                  <Link
+                                    href={`/channels/${sub.id}`}
+                                    onClick={() => {
+                                      setIsMobileChannelsOpen(false);
+                                      setActiveTab('messenger');
+                                    }}
+                                    className="flex items-center gap-1.5 min-w-0 flex-1"
+                                  >
+                                    <Hash className="w-3.5 h-3.5 text-ustp-gold shrink-0" />
+                                    <span className="truncate">
+                                      {cleanSubName}
+                                    </span>
+                                  </Link>
+                                  <button
+                                    type="button"
+                                    disabled={isDeletingHubId === sub.id}
+                                    onClick={() =>
+                                      void handleDeleteCourseHubOrChannel(
+                                        sub.id,
+                                        false
+                                      )
+                                    }
+                                    title={`Delete #${cleanSubName}`}
+                                    aria-label={`Delete #${cleanSubName}`}
+                                    className="opacity-70 group-hover:opacity-100 p-0.5 rounded hover:bg-red-500/20 text-slate-400 hover:text-red-400 cursor-pointer"
+                                  >
+                                    <Trash2 className="w-3 h-3" />
+                                  </button>
+                                </div>
+                              );
+                            })}
+                          </div>
                         </div>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
+                      )}
+                    </div>
+                  );
+                })
+              )}
             </nav>
           </div>
 

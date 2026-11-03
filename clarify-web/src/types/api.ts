@@ -35,6 +35,7 @@ export interface ChannelMember {
 export interface Channel {
   id: number;
   parent_hub_id?: number | null;
+  created_by?: number | null;
   course_code: string | null;
   name: string;
   description: string | null;
@@ -43,6 +44,7 @@ export interface Channel {
   scope_department: string | null;
   scope_section: string | null;
   unread_count?: number;
+  chat_messages_count?: number;
   members_count?: number;
   latest_activity_preview?: string;
   latest_activity_at?: string;
