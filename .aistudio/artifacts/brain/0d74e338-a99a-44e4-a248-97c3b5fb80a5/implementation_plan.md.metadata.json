@@ -1,6 +1,6 @@
 {
-  "summary": "Implementation plan for adding the ClariFy browser tab favicon, preventing unenrolled users from viewing Course Hub content, restricting member roster additions to Course Admins, adding join approval workflow for Browse Course Hubs, displaying the publisher's department under announcement titles, and separating Dept Head Campus-Wide announcements from Instructor Course Hub Noticeboard announcements.",
-  "updatedAt": "2026-11-03T15:04:08.719958321Z",
+  "summary": "Implementation plan to fix SQLSTATE[42703] Undefined column channel_user.approval_status when creating or querying Course Hubs on Supabase/Render PostgreSQL. Adds a dedicated Laravel migration for channel_user.approval_status, a self-healing schema check inside Channel::members() and ChannelController, and a graceful fallback in the frontend API client.",
+  "updatedAt": "2026-11-03T15:44:07.309706252Z",
   "requestFeedback": true,
   "userFacing": true
 }

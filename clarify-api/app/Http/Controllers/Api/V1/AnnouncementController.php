@@ -33,10 +33,13 @@ class AnnouncementController
         if ($channelId = $request->query('channel_id')) {
             $query->where('channel_id', (int) $channelId);
         } elseif ($user) {
-            $enrolledIds = \Illuminate\Support\Facades\DB::table('channel_user')
-                ->where('user_id', $user->id)
-                ->pluck('channel_id')
-                ->all();
+            $hasApprovalCol = Channel::ensureApprovalStatusColumn();
+            $enrolledQuery = \Illuminate\Support\Facades\DB::table('channel_user')
+                ->where('user_id', $user->id);
+            if ($hasApprovalCol) {
+                $enrolledQuery->where('approval_status', 'approved');
+            }
+            $enrolledIds = $enrolledQuery->pluck('channel_id')->all();
 
             $query->where(function ($q) use ($enrolledIds, $user) {
                 $q->whereHas('channel', fn ($cq) => $cq->where('channel_type', '!=', 'course_hub'))

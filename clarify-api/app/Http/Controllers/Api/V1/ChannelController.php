@@ -18,6 +18,7 @@ class ChannelController
      */
     public function index(Request $request): JsonResponse
     {
+        Channel::ensureApprovalStatusColumn();
         $query = Channel::with(['members.academicProfile', 'announcements.publisher']);
 
         $likeOp = \Illuminate\Support\Facades\DB::getDriverName() === 'pgsql' ? 'ilike' : 'like';
@@ -93,12 +94,19 @@ class ChannelController
             'created_by' => $user->id,
         ]);
 
+        $hasApprovalCol = Channel::ensureApprovalStatusColumn();
+
         // Only enroll the creator automatically; other users join via Browse Course Hubs
+        $pivotData = [
+            'can_publish' => $user->canPublishOrManage(),
+            'joined_at' => now(),
+        ];
+        if ($hasApprovalCol) {
+            $pivotData['approval_status'] = 'approved';
+        }
+
         $channel->members()->syncWithoutDetaching([
-            $user->id => [
-                'can_publish' => $user->canPublishOrManage(),
-                'joined_at' => now(),
-            ],
+            $user->id => $pivotData,
         ]);
 
         RealtimeStateUpdated::safeDispatch('channel.created', (int) $channel->id, (int) $user->id);
@@ -248,16 +256,9 @@ class ChannelController
      */
     public function join(Request $request, int $id): JsonResponse
     {
+        $hasApprovalCol = Channel::ensureApprovalStatusColumn();
         $channel = Channel::findOrFail($id);
         $user = $request->user();
-
-        if (\Illuminate\Support\Facades\Schema::hasTable('channel_user') && ! \Illuminate\Support\Facades\Schema::hasColumn('channel_user', 'approval_status')) {
-            try {
-                \Illuminate\Support\Facades\DB::statement("ALTER TABLE channel_user ADD COLUMN approval_status VARCHAR(24) NOT NULL DEFAULT 'approved'");
-            } catch (\Throwable $e) {
-                // Ignore if already exists
-            }
-        }
 
         $isAdmin = $this->isCourseAdmin($user, $channel);
         $targetStatus = $isAdmin ? 'approved' : 'pending';
@@ -269,18 +270,25 @@ class ChannelController
 
         if ($existingPivot) {
             if ($isAdmin && ($existingPivot->approval_status ?? 'approved') !== 'approved') {
+                $updatePayload = ['can_publish' => true];
+                if ($hasApprovalCol) {
+                    $updatePayload['approval_status'] = 'approved';
+                }
                 \Illuminate\Support\Facades\DB::table('channel_user')
                     ->where('channel_id', $channel->id)
                     ->where('user_id', $user->id)
-                    ->update(['approval_status' => 'approved', 'can_publish' => true]);
+                    ->update($updatePayload);
             }
         } else {
+            $pivotPayload = [
+                'can_publish' => $user->canPublishOrManage(),
+                'joined_at' => now(),
+            ];
+            if ($hasApprovalCol) {
+                $pivotPayload['approval_status'] = $targetStatus;
+            }
             $channel->members()->syncWithoutDetaching([
-                $user->id => [
-                    'can_publish' => $user->canPublishOrManage(),
-                    'approval_status' => $targetStatus,
-                    'joined_at' => now(),
-                ],
+                $user->id => $pivotPayload,
             ]);
         }
 
@@ -336,6 +344,7 @@ class ChannelController
             ], 403);
         }
 
+        $hasApprovalCol = Channel::ensureApprovalStatusColumn();
         $channel = Channel::findOrFail($id);
 
         if (! $this->isCourseAdmin($user, $channel)) {
@@ -367,22 +376,32 @@ class ChannelController
                 $targetUser->save();
             }
 
+            $addPivot = [
+                'can_publish' => $targetUser->canPublishOrManage(),
+                'joined_at' => now(),
+            ];
+            if ($hasApprovalCol) {
+                $addPivot['approval_status'] = 'approved';
+            }
+
             $channel->members()->syncWithoutDetaching([
-                $targetUser->id => [
-                    'can_publish' => $targetUser->canPublishOrManage(),
-                    'approval_status' => 'approved',
-                    'joined_at' => now(),
-                ],
+                $targetUser->id => $addPivot,
             ]);
-            \Illuminate\Support\Facades\DB::table('channel_user')
-                ->where('channel_id', $channel->id)
-                ->where('user_id', $targetUser->id)
-                ->update(['approval_status' => 'approved']);
+            if ($hasApprovalCol) {
+                \Illuminate\Support\Facades\DB::table('channel_user')
+                    ->where('channel_id', $channel->id)
+                    ->where('user_id', $targetUser->id)
+                    ->update(['approval_status' => 'approved']);
+            }
         } elseif ($validated['action'] === 'approve' && $targetUser) {
+            $approveUpdate = ['joined_at' => now()];
+            if ($hasApprovalCol) {
+                $approveUpdate['approval_status'] = 'approved';
+            }
             \Illuminate\Support\Facades\DB::table('channel_user')
                 ->where('channel_id', $channel->id)
                 ->where('user_id', $targetUser->id)
-                ->update(['approval_status' => 'approved', 'joined_at' => now()]);
+                ->update($approveUpdate);
         } elseif ($targetUser) {
             $channel->members()->detach($targetUser->id);
         }

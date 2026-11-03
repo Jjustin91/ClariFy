@@ -27,6 +27,7 @@ return new class extends Migration
             $table->foreignId('channel_id')->constrained('channels')->cascadeOnDelete();
             $table->foreignId('user_id')->constrained('users')->cascadeOnDelete();
             $table->boolean('can_publish')->default(false);
+            $table->string('approval_status', 24)->default('approved');
             $table->timestamp('joined_at')->useCurrent();
             $table->unique(['channel_id', 'user_id']);
         });
