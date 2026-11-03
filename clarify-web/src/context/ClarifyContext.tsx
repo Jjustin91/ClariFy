@@ -58,6 +58,10 @@ interface ClarifyContextValue {
   openAddSubChannelModal: (hubId: number) => void;
   openEditCourseHubModal: (hubId: number) => void;
   channelModalDefaultTab: 'browse' | 'create_hub' | 'create_channel' | 'edit_hub';
+  activeHubTab: 'messenger' | 'feed' | 'threads' | 'send_inquiry';
+  setActiveHubTab: React.Dispatch<
+    React.SetStateAction<'messenger' | 'feed' | 'threads' | 'send_inquiry'>
+  >;
   announcementModalState: {
     isOpen: boolean;
     editingAnnouncement: Announcement | null;
@@ -119,6 +123,9 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
   const [channelModalDefaultTab, setChannelModalDefaultTab] = useState<
     'browse' | 'create_hub' | 'create_channel' | 'edit_hub'
   >('create_hub');
+  const [activeHubTab, setActiveHubTab] = useState<
+    'messenger' | 'feed' | 'threads' | 'send_inquiry'
+  >('messenger');
 
   const openCourseHubModal = useCallback(
     (defaultTab: 'browse' | 'create_hub' = 'create_hub') => {
@@ -596,6 +603,8 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
         openAddSubChannelModal,
         openEditCourseHubModal,
         channelModalDefaultTab,
+        activeHubTab,
+        setActiveHubTab,
         announcementModalState,
         openAnnouncementModal,
         closeAnnouncementModal,

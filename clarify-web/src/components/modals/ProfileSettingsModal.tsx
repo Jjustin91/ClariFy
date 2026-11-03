@@ -1,11 +1,56 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
-import { Camera, Phone, ShieldCheck, X } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { Camera, Phone, ShieldCheck, Trash2, X } from 'lucide-react';
 import { useClarify } from '../../context/ClarifyContext';
 import { updateProfileApi } from '../../lib/api-client';
 import { getFieldValidationError } from '../../lib/domain-logic';
 import type { LaravelValidationError } from '../../types/api';
+
+async function compressAvatarFileToDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('Failed to read image file.'));
+    reader.onload = () => {
+      const result = typeof reader.result === 'string' ? reader.result : '';
+      if (!result) {
+        reject(new Error('Empty image data.'));
+        return;
+      }
+      const img = new window.Image();
+      img.onerror = () => resolve(result);
+      img.onload = () => {
+        const targetSize = 256;
+        const canvas = document.createElement('canvas');
+        canvas.width = targetSize;
+        canvas.height = targetSize;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          resolve(result);
+          return;
+        }
+        // Center-crop square for crisp circular PFP
+        const minSide = Math.min(img.width, img.height);
+        const sx = Math.max(0, (img.width - minSide) / 2);
+        const sy = Math.max(0, (img.height - minSide) / 2);
+        ctx.drawImage(
+          img,
+          sx,
+          sy,
+          minSide,
+          minSide,
+          0,
+          0,
+          targetSize,
+          targetSize
+        );
+        resolve(canvas.toDataURL('image/jpeg', 0.85));
+      };
+      img.src = result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
 
 export function ProfileSettingsModal() {
   const {
@@ -22,16 +67,45 @@ export function ProfileSettingsModal() {
   );
   const [isSaving, setIsSaving] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string[]>>({});
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const wasOpenRef = useRef(false);
 
   useEffect(() => {
-    if (isSettingsModalOpen) {
+    if (isSettingsModalOpen && !wasOpenRef.current) {
+      wasOpenRef.current = true;
       setContactNumber(user.contact_number || '+63 917 842 2020');
       setAvatarPreview(user.avatar_url || null);
       setFieldErrors({});
+    } else if (!isSettingsModalOpen) {
+      wasOpenRef.current = false;
     }
-  }, [isSettingsModalOpen, user]);
+  }, [isSettingsModalOpen, user.contact_number, user.avatar_url]);
 
   if (!isSettingsModalOpen) return null;
+
+  const handleAvatarFileChange = async (
+    e: React.ChangeEvent<HTMLInputElement>
+  ) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+
+    if (!file.type.startsWith('image/')) {
+      showToast('Please select a valid image file (PNG, JPG, WebP).', 'error');
+      return;
+    }
+
+    try {
+      const dataUrl = await compressAvatarFileToDataUrl(file);
+      setAvatarPreview(dataUrl);
+      showToast(
+        'Profile photo ready! Click Save Profile to apply.',
+        'info'
+      );
+    } catch {
+      showToast('Failed to process selected image.', 'error');
+    }
+  };
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -41,9 +115,7 @@ export function ProfileSettingsModal() {
     try {
       const formData = new FormData();
       formData.set('contact_number', contactNumber);
-      if (avatarPreview) {
-        formData.set('avatar_preview_url', avatarPreview);
-      }
+      formData.set('avatar_preview_url', avatarPreview || '');
       const res = await updateProfileApi(formData);
       setUser(res.data);
       showToast(
@@ -64,6 +136,7 @@ export function ProfileSettingsModal() {
   };
 
   const contactError = getFieldValidationError(fieldErrors, 'contact_number');
+  const avatarInitial = user.name ? user.name.charAt(0).toUpperCase() : 'U';
 
   return (
     <div
@@ -79,7 +152,7 @@ export function ProfileSettingsModal() {
               Profile &amp; SMS Fallback Settings
             </h2>
             <p className="text-xs text-slate-300 mt-0.5">
-              RA 10173 Encrypted Contact & Avatar Configuration
+              RA 10173 Encrypted Contact &amp; Avatar Configuration
             </p>
           </div>
           <button
@@ -93,27 +166,63 @@ export function ProfileSettingsModal() {
         </div>
 
         <form onSubmit={handleSave} className="p-6 space-y-5">
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            onChange={handleAvatarFileChange}
+            className="hidden"
+            aria-label="Choose profile avatar image"
+          />
+
           {/* Avatar Section */}
           <div className="flex items-center gap-4">
-            <div className="w-16 h-16 rounded-full bg-ustp-cream border-2 border-ustp-gold flex items-center justify-center text-xl font-extrabold text-ustp-navy shrink-0">
-              {user.name.charAt(0)}
-            </div>
-            <div>
-              <p className="text-sm font-bold text-ustp-text">{user.name}</p>
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              title="Click to upload profile picture"
+              className="w-16 h-16 rounded-full bg-ustp-cream border-2 border-ustp-gold flex items-center justify-center text-xl font-extrabold text-ustp-navy shrink-0 overflow-hidden relative group cursor-pointer"
+            >
+              {avatarPreview ? (
+                <img
+                  src={avatarPreview}
+                  alt={user.name}
+                  className="w-full h-full object-cover"
+                />
+              ) : (
+                <span>{avatarInitial}</span>
+              )}
+              <span className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white">
+                <Camera className="w-4 h-4" />
+              </span>
+            </button>
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-bold text-ustp-text truncate">
+                {user.name}
+              </p>
               <p className="text-xs text-slate-600 font-mono tabular-nums">
                 ID: {user.institutional_id} • {user.role.toUpperCase()}
               </p>
-              <button
-                type="button"
-                onClick={() => {
-                  setAvatarPreview('/avatars/updated-ustp-profile.png');
-                  showToast('New profile photo staged for multipart upload.', 'info');
-                }}
-                className="mt-2 inline-flex items-center gap-1.5 px-3 py-1 text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-ustp-navy rounded border border-slate-300 cursor-pointer"
-              >
-                <Camera className="w-3.5 h-3.5" />
-                <span>Upload Avatar (FormData)</span>
-              </button>
+              <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-ustp-navy rounded border border-slate-300 cursor-pointer"
+                >
+                  <Camera className="w-3.5 h-3.5" />
+                  <span>Upload Avatar</span>
+                </button>
+                {avatarPreview && (
+                  <button
+                    type="button"
+                    onClick={() => setAvatarPreview(null)}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-red-600 hover:bg-red-50 rounded border border-red-200 cursor-pointer"
+                  >
+                    <Trash2 className="w-3 h-3" />
+                    <span>Remove</span>
+                  </button>
+                )}
+              </div>
             </div>
           </div>
 
@@ -133,7 +242,7 @@ export function ProfileSettingsModal() {
                 value={contactNumber}
                 onChange={(e) => setContactNumber(e.target.value)}
                 placeholder="+63 917 842 2020"
-                className="w-full pl-9 pr-3 py-2 text-sm font-mono tabular-nums text-ustp-text border border-slate-300 rounded focus:outline-none focus:border-ustp-navy"
+                className="w-full pl-9 pr-3 py-2 text-sm font-mono tabular-nums bg-white text-ustp-text border border-slate-300 rounded focus:outline-none focus:border-ustp-navy"
               />
             </div>
             {contactError && (

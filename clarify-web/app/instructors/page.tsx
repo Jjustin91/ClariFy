@@ -277,8 +277,16 @@ export default function InstructorsPage() {
                   className="bg-white border border-slate-200/90 hover:border-ustp-navy rounded-xl p-3.5 shadow-xs hover:shadow-md transition-all flex flex-col justify-between text-left cursor-pointer group"
                 >
                   {/* Centered Circular Instructor Avatar */}
-                  <div className="w-20 h-20 mx-auto my-2 rounded-full bg-ustp-navy text-ustp-gold border-2 border-ustp-gold flex items-center justify-center text-lg font-extrabold tracking-tight group-hover:scale-105 transition-transform">
-                    {initials}
+                  <div className="w-20 h-20 mx-auto my-2 rounded-full bg-ustp-navy text-ustp-gold border-2 border-ustp-gold flex items-center justify-center text-lg font-extrabold tracking-tight group-hover:scale-105 transition-transform overflow-hidden">
+                    {inst.avatar_url ? (
+                      <img
+                        src={inst.avatar_url}
+                        alt={inst.name}
+                        className="w-full h-full object-cover"
+                      />
+                    ) : (
+                      initials
+                    )}
                   </div>
 
                   {/* Bottom-Left Uppercase NAME + Two Pill Badges underneath (Gold CDO Campus + Dept Badge) */}

@@ -1,17 +1,20 @@
 'use client';
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import {
   ArrowRight,
   Download,
   Edit3,
   FileText,
   Image as ImageIcon,
+  LogOut,
   MessageCircle,
   Mic,
   Plus,
   Search,
   Settings,
+  ShieldCheck,
   Square,
   Trash2,
   UserPlus,
@@ -24,16 +27,20 @@ import { useClarify } from '../../context/ClarifyContext';
 import {
   getChannelChatMessagesApi,
   joinChannelApi,
+  leaveChannelApi,
   manageChannelMemberApi,
   sendChannelChatMessageApi,
 } from '../../lib/api-client';
 import {
   type ChatMediaAttachment,
   encodeChatMessageWithAttachment,
+  formatCourseHubName,
   formatSubChannelDisplayName,
   getCleanChannelDescription,
   getFieldValidationError,
+  getJoinedCourseHubs,
   isSubChannel,
+  isUserCourseAdmin,
   parseChatMessageContent,
 } from '../../lib/domain-logic';
 import {
@@ -220,9 +227,11 @@ export function MessengerChatBox({
   onMessageSentToast,
   childrenWhenNotMessenger,
 }: MessengerChatBoxProps) {
+  const router = useRouter();
   const {
     isAuthenticated,
     isAuthReady,
+    channels,
     announcementVersion,
     triggerAnnouncementRefresh,
     refreshChannels,
@@ -232,6 +241,7 @@ export function MessengerChatBox({
     showToast,
   } = useClarify();
   const hubKey = channel?.id || 0;
+  const isCurrentUserCourseAdmin = isUserCourseAdmin(channel, currentUser);
   const activeChatTarget = chatChannel || channel;
   const channelKey = activeChatTarget?.id || hubKey;
   const activeChatChannelLabel =
@@ -727,6 +737,33 @@ export function MessengerChatBox({
     }
   };
 
+  const handleLeaveCourseHub = async () => {
+    if (!channel) return;
+    setIsManagingRoster(true);
+    try {
+      const res = await leaveChannelApi(channel.id);
+      await refreshChannels();
+      setShowSettingsMenu(false);
+      showToast(
+        res.message || `Left ${formatCourseHubName(channel)}.`,
+        'info'
+      );
+      const remainingJoined = getJoinedCourseHubs(channels, currentUser).filter(
+        (h) => h.id !== channel.id
+      );
+      if (remainingJoined.length > 0) {
+        router.push(`/channels/${remainingJoined[0].id}`);
+      } else {
+        router.push('/');
+      }
+    } catch (err) {
+      const apiErr = err as LaravelValidationError;
+      showToast(apiErr.message || 'Unable to leave Course Hub.', 'error');
+    } finally {
+      setIsManagingRoster(false);
+    }
+  };
+
   const handleAddMemberToRoster = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!channelKey) return;
@@ -845,15 +882,17 @@ export function MessengerChatBox({
           </div>
 
           <div className="flex items-center gap-1 shrink-0">
-            <button
-              type="button"
-              onClick={() => openEditCourseHubModal(channel.id)}
-              aria-label="Edit Course Hub"
-              title="Edit Course Hub"
-              className="p-2 rounded-full text-ustp-navy hover:bg-slate-300/70 transition-colors cursor-pointer"
-            >
-              <Edit3 className="w-4 h-4 stroke-[2.2]" />
-            </button>
+            {isCurrentUserCourseAdmin && (
+              <button
+                type="button"
+                onClick={() => openEditCourseHubModal(channel.id)}
+                aria-label="Edit Course Hub"
+                title="Edit Course Hub"
+                className="p-2 rounded-full text-ustp-navy hover:bg-slate-300/70 transition-colors cursor-pointer"
+              >
+                <Edit3 className="w-4 h-4 stroke-[2.2]" />
+              </button>
+            )}
             <button
               type="button"
               onClick={() => setShowSettingsMenu((prev) => !prev)}
@@ -907,24 +946,46 @@ export function MessengerChatBox({
                   {currentFacultyLabel}
                 </span>
               </p>
-              <div className="flex items-center justify-between gap-2 pt-1">
-                <p className="text-[11px] text-slate-600">
-                  Active Session:{' '}
-                  <span className="font-bold text-ustp-navy uppercase">
-                    {currentUser.role.replace('_', ' ')} ({currentUser.name})
-                  </span>
-                </p>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowSettingsMenu(false);
-                    openEditCourseHubModal(channel.id);
-                  }}
-                  className="inline-flex items-center gap-1 px-2 py-1 rounded bg-ustp-navy text-white text-[10px] font-bold hover:opacity-95 cursor-pointer"
-                >
-                  <Edit3 className="w-3 h-3 text-ustp-gold" />
-                  <span>Edit Hub</span>
-                </button>
+              <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <p className="text-[11px] text-slate-600">
+                    Active Session:{' '}
+                    <span className="font-bold text-ustp-navy uppercase">
+                      {currentUser.role.replace('_', ' ')} ({currentUser.name})
+                    </span>
+                  </p>
+                  {isCurrentUserCourseAdmin && (
+                    <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-ustp-navy text-ustp-gold text-[9px] font-mono font-extrabold">
+                      <ShieldCheck className="w-2.5 h-2.5" />
+                      <span>COURSE ADMIN</span>
+                    </span>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-1.5">
+                  {isCurrentUserCourseAdmin && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowSettingsMenu(false);
+                        openEditCourseHubModal(channel.id);
+                      }}
+                      className="inline-flex items-center gap-1 px-2 py-1 rounded bg-ustp-navy text-white text-[10px] font-bold hover:opacity-95 cursor-pointer"
+                    >
+                      <Edit3 className="w-3 h-3 text-ustp-gold" />
+                      <span>Edit Hub</span>
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    disabled={isManagingRoster}
+                    onClick={handleLeaveCourseHub}
+                    className="inline-flex items-center gap-1 px-2 py-1 rounded border border-red-300 bg-red-50 text-red-700 hover:bg-red-100 text-[10px] font-extrabold disabled:opacity-50 cursor-pointer"
+                  >
+                    <LogOut className="w-3 h-3" />
+                    <span>Leave Course Hub</span>
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -1087,6 +1148,9 @@ export function MessengerChatBox({
                   : isFacultySender
                   ? 'F'
                   : 'S';
+                const authorAvatarUrl = isCurrentUser
+                  ? currentUser.avatar_url || msg.author.avatar_url
+                  : msg.author.avatar_url;
 
                 return (
                   <React.Fragment key={msg.id}>
@@ -1124,14 +1188,22 @@ export function MessengerChatBox({
                         <div className="flex items-end gap-2.5 min-w-0 max-w-[85%] sm:max-w-[72%]">
                           {/* Bottom-Left Circular Respondent Avatar */}
                           <div
-                            className={`w-8 h-8 sm:w-9 sm:h-9 rounded-full shrink-0 flex items-center justify-center font-extrabold text-xs border shadow-2xs select-none ${
+                            className={`w-8 h-8 sm:w-9 sm:h-9 rounded-full shrink-0 flex items-center justify-center font-extrabold text-xs border shadow-2xs select-none overflow-hidden ${
                               isFacultySender
                                 ? 'bg-ustp-navy text-ustp-gold border-ustp-gold'
                                 : 'bg-amber-100 text-ustp-navy border-ustp-orange'
                             }`}
                             title={`${msg.author.name} (${roleLabel})`}
                           >
-                            {initial}
+                            {authorAvatarUrl ? (
+                              <img
+                                src={authorAvatarUrl}
+                                alt={msg.author.name}
+                                className="w-full h-full object-cover"
+                              />
+                            ) : (
+                              initial
+                            )}
                           </div>
 
                           {/* Respondent Name + Role Header above USTP Cream Bubble */}
@@ -1163,14 +1235,22 @@ export function MessengerChatBox({
                         {/* Small right-side read indicator avatar on last respondent message */}
                         {isLastMessage && (
                           <div
-                            className={`w-4 h-4 rounded-full shrink-0 flex items-center justify-center text-[8px] font-extrabold select-none mb-1 ${
+                            className={`w-4 h-4 rounded-full shrink-0 flex items-center justify-center text-[8px] font-extrabold select-none mb-1 overflow-hidden ${
                               isFacultySender
                                 ? 'bg-ustp-navy text-ustp-gold'
                                 : 'bg-amber-200 text-ustp-navy'
                             }`}
                             title={`Seen • ${displayTime}`}
                           >
-                            {initial}
+                            {authorAvatarUrl ? (
+                              <img
+                                src={authorAvatarUrl}
+                                alt={msg.author.name}
+                                className="w-full h-full object-cover"
+                              />
+                            ) : (
+                              initial
+                            )}
                           </div>
                         )}
                       </div>

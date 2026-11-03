@@ -45,6 +45,7 @@ Route::prefix('v1')->group(function () {
         Route::match(['post', 'patch', 'put'], '/channels/{id}', [ChannelController::class, 'update']);
         Route::delete('/channels/{id}', [ChannelController::class, 'destroy']);
         Route::post('/channels/{id}/join', [ChannelController::class, 'join']);
+        Route::post('/channels/{id}/leave', [ChannelController::class, 'leave']);
         Route::post('/channels/{id}/members', [ChannelController::class, 'manageMembers']);
 
         // Course Hub Messenger Chat

@@ -251,8 +251,16 @@ export function AppShell({
 
             {/* Top Profile Header: Circular Avatar with gold/red ring, Name, Institutional ID, Scope */}
             <div className="px-4 pb-5 pt-1 text-center border-b border-amber-700/30">
-              <div className="w-20 h-20 mx-auto rounded-full bg-white border-4 border-red-600 ring-2 ring-ustp-gold flex items-center justify-center text-2xl font-extrabold text-ustp-navy select-none">
-                {avatarInitial}
+              <div className="w-20 h-20 mx-auto rounded-full bg-white border-4 border-red-600 ring-2 ring-ustp-gold flex items-center justify-center text-2xl font-extrabold text-ustp-navy select-none overflow-hidden">
+                {user.avatar_url ? (
+                  <img
+                    src={user.avatar_url}
+                    alt={user.name}
+                    className="w-full h-full object-cover"
+                  />
+                ) : (
+                  avatarInitial
+                )}
               </div>
               <h2 className="mt-2.5 text-base font-extrabold text-ustp-text leading-snug">
                 {user.name}

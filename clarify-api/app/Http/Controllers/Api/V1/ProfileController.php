@@ -25,9 +25,19 @@ class ProfileController
 
         $user = $request->user();
 
+        try {
+            if (\Illuminate\Support\Facades\DB::getDriverName() === 'pgsql') {
+                \Illuminate\Support\Facades\DB::statement('ALTER TABLE users ALTER COLUMN avatar_url TYPE TEXT');
+            }
+        } catch (\Throwable $e) {
+            // Column is already TEXT or SQLite
+        }
+
         if ($request->hasFile('avatar')) {
-            $path = $request->file('avatar')->store('avatars', 'public');
-            $user->avatar_url = Storage::url($path);
+            $file = $request->file('avatar');
+            $mime = $file->getMimeType() ?: 'image/jpeg';
+            $base64 = base64_encode(file_get_contents($file->getRealPath()));
+            $user->avatar_url = "data:{$mime};base64,{$base64}";
         } elseif (! empty($validated['avatar_preview_url'])) {
             $user->avatar_url = $validated['avatar_preview_url'];
         }
@@ -41,7 +51,7 @@ class ProfileController
         $user->save();
 
         return response()->json([
-            'message' => 'Profile settings and SMS fallback number updated.',
+            'message' => 'Profile settings and avatar updated.',
             'data' => new UserResource($user->load('academicProfile')),
         ]);
     }

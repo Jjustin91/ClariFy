@@ -106,7 +106,19 @@ class ChannelController
     }
 
     /**
-     * PATCH /api/v1/channels/{id} — Edit Course Hub or Sub-Channel (Students & Faculty)
+     * Checks if user is a Course Admin for the given channel (all Faculty/Dept Heads or the channel creator).
+     */
+    private function isCourseAdmin(User $user, Channel $channel): bool
+    {
+        if (in_array($user->role, ['faculty', 'dept_head'], true)) {
+            return true;
+        }
+
+        return $channel->created_by !== null && (int) $channel->created_by === (int) $user->id;
+    }
+
+    /**
+     * PATCH /api/v1/channels/{id} — Edit Course Hub (Course Admins only: Creator or Faculty)
      */
     public function update(Request $request, int $id): JsonResponse
     {
@@ -120,6 +132,13 @@ class ChannelController
         }
 
         $channel = Channel::findOrFail($id);
+
+        if (! $this->isCourseAdmin($user, $channel)) {
+            return response()->json([
+                'status' => 403,
+                'message' => 'HTTP 403 Forbidden: Only Course Admins (the Course Hub creator or Faculty) can edit this Course Hub.',
+            ], 403);
+        }
 
         $validated = $request->validate([
             'course_code' => ['required', 'string', 'max:32'],
@@ -168,7 +187,7 @@ class ChannelController
     }
 
     /**
-     * DELETE /api/v1/channels/{id} — Delete Course Hub or Sub-Channel (Students & Faculty)
+     * DELETE /api/v1/channels/{id} — Delete Course Hub or Sub-Channel (Course Admins only)
      */
     public function destroy(Request $request, int $id): JsonResponse
     {
@@ -182,6 +201,23 @@ class ChannelController
         }
 
         $channel = Channel::findOrFail($id);
+
+        // If deleting a sub-channel, check parent Course Hub admin status as well
+        $isAllowed = $this->isCourseAdmin($user, $channel);
+        if (! $isAllowed && preg_match('/^\[HUB:(\d+)\]/', (string) $channel->description, $m)) {
+            $parentHub = Channel::find((int) $m[1]);
+            if ($parentHub && $this->isCourseAdmin($user, $parentHub)) {
+                $isAllowed = true;
+            }
+        }
+
+        if (! $isAllowed) {
+            return response()->json([
+                'status' => 403,
+                'message' => 'HTTP 403 Forbidden: Only Course Admins (the Course Hub creator or Faculty) can delete this Course Hub.',
+            ], 403);
+        }
+
         $channelName = $channel->name;
 
         // Find any sub-channels belonging to this Course Hub
@@ -224,6 +260,32 @@ class ChannelController
         return response()->json([
             'message' => "Joined {$channel->name} successfully.",
             'data' => new ChannelResource($channel->load('members.academicProfile')),
+        ]);
+    }
+
+    /**
+     * POST /api/v1/channels/{id}/leave
+     */
+    public function leave(Request $request, int $id): JsonResponse
+    {
+        $channel = Channel::findOrFail($id);
+        $user = $request->user();
+
+        $subChannelIds = Channel::where('description', 'like', "[HUB:{$channel->id}]%")
+            ->pluck('id')
+            ->all();
+        $allTargetIds = array_values(array_unique(array_merge([$channel->id], $subChannelIds)));
+
+        \Illuminate\Support\Facades\DB::table('channel_user')
+            ->whereIn('channel_id', $allTargetIds)
+            ->where('user_id', $user->id)
+            ->delete();
+
+        RealtimeStateUpdated::safeDispatch('channel.updated', (int) $channel->id, (int) $user->id);
+
+        return response()->json([
+            'message' => "You have left {$channel->name}.",
+            'data' => new ChannelResource($channel->fresh('members.academicProfile')),
         ]);
     }
 

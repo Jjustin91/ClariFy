@@ -236,7 +236,7 @@ async function ensurePostgresSchema(pool: Pool): Promise<void> {
         email VARCHAR(255) UNIQUE NOT NULL,
         password VARCHAR(255) NOT NULL DEFAULT 'ustp2026',
         contact_number TEXT NULL,
-        avatar_url VARCHAR(255) NULL,
+        avatar_url TEXT NULL,
         role VARCHAR(32) NOT NULL DEFAULT 'student',
         verification_status VARCHAR(32) NOT NULL DEFAULT 'pending',
         verified_at TIMESTAMP NULL,
@@ -246,6 +246,10 @@ async function ensurePostgresSchema(pool: Pool): Promise<void> {
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `);
+
+    await client.query(`
+      ALTER TABLE users ALTER COLUMN avatar_url TYPE TEXT;
+    `).catch(() => {});
 
     await client.query(`
       CREATE TABLE IF NOT EXISTS academic_profiles (
@@ -1669,6 +1673,35 @@ export async function handlePostgresApiRequest(
         };
       }
       const targetId = Number(channelIdMatch[1]);
+      const existingCh = await pool.query(
+        'SELECT id, created_by, description FROM channels WHERE id = $1 LIMIT 1',
+        [targetId]
+      );
+      if (!existingCh.rowCount || existingCh.rowCount === 0) {
+        return {
+          status: 404,
+          body: { status: 404, message: 'Course Hub not found.' },
+        };
+      }
+      const chRow = existingCh.rows[0];
+      const isCourseAdmin =
+        activeUser.role === 'faculty' ||
+        activeUser.role === 'dept_head' ||
+        (chRow.created_by !== null &&
+          chRow.created_by !== undefined &&
+          Number(chRow.created_by) === Number(activeUser.id));
+
+      if (!isCourseAdmin) {
+        return {
+          status: 403,
+          body: {
+            status: 403,
+            message:
+              'HTTP 403 Forbidden: Only Course Admins (the Course Hub creator or Faculty) can edit this Course Hub.',
+          },
+        };
+      }
+
       const courseCode = String(body.course_code || '').trim();
       const name = String(body.name || '').trim();
       const description =
@@ -1759,7 +1792,7 @@ export async function handlePostgresApiRequest(
       }
       const targetId = Number(channelIdMatch[1]);
       const existingCh = await pool.query(
-        'SELECT id, name FROM channels WHERE id = $1 LIMIT 1',
+        'SELECT id, name, created_by, description FROM channels WHERE id = $1 LIMIT 1',
         [targetId]
       );
       if (!existingCh.rowCount || existingCh.rowCount === 0) {
@@ -1768,7 +1801,46 @@ export async function handlePostgresApiRequest(
           body: { status: 404, message: 'Course Hub not found.' },
         };
       }
-      const chName = String(existingCh.rows[0].name);
+      const chRow = existingCh.rows[0];
+      let isCourseAdmin =
+        activeUser.role === 'faculty' ||
+        activeUser.role === 'dept_head' ||
+        (chRow.created_by !== null &&
+          chRow.created_by !== undefined &&
+          Number(chRow.created_by) === Number(activeUser.id));
+
+      if (!isCourseAdmin && typeof chRow.description === 'string') {
+        const subMatch = chRow.description.match(/^\[HUB:(\d+)\]/);
+        if (subMatch) {
+          const parentRes = await pool.query(
+            'SELECT created_by FROM channels WHERE id = $1 LIMIT 1',
+            [Number(subMatch[1])]
+          );
+          if (parentRes.rowCount && parentRes.rowCount > 0) {
+            const parentCreator = parentRes.rows[0].created_by;
+            if (
+              parentCreator !== null &&
+              parentCreator !== undefined &&
+              Number(parentCreator) === Number(activeUser.id)
+            ) {
+              isCourseAdmin = true;
+            }
+          }
+        }
+      }
+
+      if (!isCourseAdmin) {
+        return {
+          status: 403,
+          body: {
+            status: 403,
+            message:
+              'HTTP 403 Forbidden: Only Course Admins (the Course Hub creator or Faculty) can delete this Course Hub.',
+          },
+        };
+      }
+
+      const chName = String(chRow.name);
 
       const subRes = await pool.query(
         'SELECT id FROM channels WHERE description LIKE $1',
@@ -1821,6 +1893,38 @@ export async function handlePostgresApiRequest(
         status: 200,
         body: {
           message: `Joined ${updated.name} successfully.`,
+          data: updated,
+        },
+      };
+    }
+
+    const leaveMatch = cleanPath.match(/^\/channels\/(\d+)\/leave$/);
+    if (method === 'POST' && leaveMatch) {
+      const targetId = Number(leaveMatch[1]);
+      const subRes = await pool.query(
+        'SELECT id FROM channels WHERE description LIKE $1',
+        [`[HUB:${targetId}]%`]
+      );
+      const allIds = [
+        targetId,
+        ...subRes.rows.map((r) => Number(r.id)),
+      ];
+
+      await pool.query(
+        `DELETE FROM channel_user
+         WHERE channel_id = ANY($1::bigint[])
+           AND user_id = $2`,
+        [allIds, activeUser.id]
+      );
+
+      const allChannels = await fetchChannelsFromPg(pool);
+      const updated =
+        allChannels.find((c) => c.id === targetId) || allChannels[0];
+
+      return {
+        status: 200,
+        body: {
+          message: `You have left ${updated ? updated.name : 'the Course Hub'}.`,
           data: updated,
         },
       };

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   ArrowRight,
@@ -11,6 +11,7 @@ import {
   Hash,
   Plus,
   Search,
+  ShieldCheck,
   Trash2,
   X,
 } from 'lucide-react';
@@ -29,6 +30,7 @@ import {
   getJoinedCourseHubs,
   getSubChannelsForHub,
   getTopLevelCourseHubs,
+  isUserCourseAdmin,
   isUserEnrolledInCourseHub,
 } from '../../lib/domain-logic';
 import type { Channel, LaravelValidationError } from '../../types/api';
@@ -72,7 +74,7 @@ export function ChannelRosterModal() {
   const [subChannelName, setSubChannelName] = useState('');
   const [subChannelTopic, setSubChannelTopic] = useState('');
 
-  // Browse Course Hubs search & delete confirmation
+  // Browse Course Hubs search & Edit Hub delete confirmation
   const [browseSearch, setBrowseSearch] = useState('');
   const [confirmDeleteHubId, setConfirmDeleteHubId] = useState<number | null>(
     null
@@ -82,6 +84,9 @@ export function ChannelRosterModal() {
 
   const [fieldErrors, setFieldErrors] = useState<Record<string, string[]>>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Guard ref so form inputs are ONLY initialized when the modal opens or switches target tab/hub, never on keystrokes or background polls
+  const lastInitKeyRef = useRef<string>('');
 
   const populateEditFields = (hub: Channel) => {
     setEditingHubId(hub.id);
@@ -99,45 +104,65 @@ export function ChannelRosterModal() {
   };
 
   useEffect(() => {
-    if (isChannelModalOpen) {
-      setFieldErrors({});
-      setConfirmDeleteHubId(null);
-      const nextTab = channelModalDefaultTab || 'create_hub';
-      setActiveTab(nextTab);
+    if (!isChannelModalOpen) {
+      lastInitKeyRef.current = '';
+      return;
+    }
 
-      const fallbackHubId =
-        channelModalTargetHubId &&
-        courseHubs.some((h) => h.id === channelModalTargetHubId)
-          ? channelModalTargetHubId
-          : courseHubs[0]?.id || 1;
-      setSelectedParentHubId(fallbackHubId);
+    const initKey = `${channelModalDefaultTab || 'create_hub'}:${
+      channelModalTargetHubId ?? 'none'
+    }`;
+    if (lastInitKeyRef.current === initKey) {
+      return;
+    }
+    lastInitKeyRef.current = initKey;
 
-      if (nextTab === 'edit_hub') {
-        const targetHub =
-          courseHubs.find((h) => h.id === channelModalTargetHubId) ||
-          courseHubs[0];
-        if (targetHub) {
-          populateEditFields(targetHub);
-        }
-      } else if (nextTab === 'create_hub') {
-        setEditingHubId(null);
-        setCourseCode('');
-        setHubName('');
-        setDescription('');
-        setScopeDepartment(user?.academic_profile?.department || 'CITC');
-        setScopeSection(user?.academic_profile?.section || 'IT3R2');
+    const currentHubs = getTopLevelCourseHubs(channels);
+    setFieldErrors({});
+    setConfirmDeleteHubId(null);
+    const nextTab = channelModalDefaultTab || 'create_hub';
+    setActiveTab(nextTab);
+
+    const fallbackHubId =
+      channelModalTargetHubId &&
+      currentHubs.some((h) => h.id === channelModalTargetHubId)
+        ? channelModalTargetHubId
+        : currentHubs[0]?.id || 1;
+    setSelectedParentHubId(fallbackHubId);
+
+    if (nextTab === 'edit_hub') {
+      const targetHub =
+        currentHubs.find((h) => h.id === channelModalTargetHubId) ||
+        currentHubs[0];
+      if (targetHub) {
+        populateEditFields(targetHub);
       }
+    } else if (nextTab === 'create_hub') {
+      setEditingHubId(null);
+      setCourseCode('');
+      setHubName('');
+      setDescription('');
+      setScopeDepartment(user?.academic_profile?.department || 'CITC');
+      setScopeSection(user?.academic_profile?.section || 'IT3R2');
+    } else if (nextTab === 'create_channel') {
+      setSubChannelName('');
+      setSubChannelTopic('');
     }
   }, [
     isChannelModalOpen,
     channelModalDefaultTab,
     channelModalTargetHubId,
-    courseHubs,
+    channels,
     user?.academic_profile?.department,
     user?.academic_profile?.section,
   ]);
 
   if (!isChannelModalOpen) return null;
+
+  const editingHub =
+    courseHubs.find((h) => h.id === editingHubId) ||
+    courseHubs.find((h) => h.id === channelModalTargetHubId);
+  const canAdminEditCurrentHub = isUserCourseAdmin(editingHub, user);
 
   const handleJoinChannel = async (
     channelId: number,
@@ -166,6 +191,7 @@ export function ChannelRosterModal() {
       const res = await deleteChannelApi(hub.id);
       await refreshChannels();
       setConfirmDeleteHubId(null);
+      setIsChannelModalOpen(false);
       showToast(
         res.message || `Deleted ${formatCourseHubName(hub)}.`,
         'info'
@@ -173,6 +199,8 @@ export function ChannelRosterModal() {
       const remainingJoined = joinedCourseHubs.filter((h) => h.id !== hub.id);
       if (remainingJoined.length > 0) {
         router.push(`/channels/${remainingJoined[0].id}`);
+      } else {
+        router.push('/');
       }
     } catch (err) {
       const apiErr = err as LaravelValidationError;
@@ -426,6 +454,23 @@ export function ChannelRosterModal() {
                 </div>
               )}
 
+              {activeTab === 'edit_hub' && editingHub && (
+                <div className="p-3 bg-ustp-cream border border-amber-200/80 rounded-md text-xs text-ustp-text flex items-center justify-between gap-2 flex-wrap">
+                  <div className="flex items-center gap-1.5 font-extrabold text-ustp-navy">
+                    <ShieldCheck className="w-4 h-4 text-ustp-orange shrink-0" />
+                    <span>
+                      Course Admin Role:{' '}
+                      {user.role === 'faculty' || user.role === 'dept_head'
+                        ? 'Faculty Course Admin'
+                        : 'Course Hub Creator (Course Admin)'}
+                    </span>
+                  </div>
+                  <span className="px-2 py-0.5 rounded bg-ustp-navy text-ustp-gold font-mono font-bold text-[10px]">
+                    COURSE ADMIN
+                  </span>
+                </div>
+              )}
+
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label
@@ -440,7 +485,7 @@ export function ChannelRosterModal() {
                     value={courseCode}
                     onChange={(e) => setCourseCode(e.target.value)}
                     placeholder="e.g., IT315"
-                    className="w-full px-3 py-2 text-xs font-mono border border-slate-300 rounded focus:outline-none focus:border-ustp-navy"
+                    className="w-full px-3 py-2 text-xs font-mono bg-white text-ustp-text border border-slate-300 rounded focus:outline-none focus:border-ustp-navy"
                   />
                   {codeError && (
                     <p className="text-xs font-semibold text-red-600 mt-1">
@@ -462,7 +507,7 @@ export function ChannelRosterModal() {
                     value={hubName}
                     onChange={(e) => setHubName(e.target.value)}
                     placeholder="e.g., Capstone 1 or Information Assurance"
-                    className="w-full px-3 py-2 text-xs border border-slate-300 rounded focus:outline-none focus:border-ustp-navy"
+                    className="w-full px-3 py-2 text-xs bg-white text-ustp-text border border-slate-300 rounded focus:outline-none focus:border-ustp-navy"
                   />
                   {nameError && (
                     <p className="text-xs font-semibold text-red-600 mt-1">
@@ -484,7 +529,7 @@ export function ChannelRosterModal() {
                     id="new-hub-dept"
                     value={scopeDepartment}
                     onChange={(e) => setScopeDepartment(e.target.value)}
-                    className="w-full px-3 py-2 text-xs font-semibold border border-slate-300 rounded bg-white"
+                    className="w-full px-3 py-2 text-xs font-semibold border border-slate-300 rounded bg-white text-ustp-text"
                   >
                     <option value="CITC">CITC — Information Tech &amp; Computing</option>
                     <option value="CEA">CEA — Engineering &amp; Architecture</option>
@@ -506,7 +551,7 @@ export function ChannelRosterModal() {
                     value={scopeSection}
                     onChange={(e) => setScopeSection(e.target.value)}
                     placeholder="e.g., IT3R2"
-                    className="w-full px-3 py-2 text-xs font-mono border border-slate-300 rounded focus:outline-none focus:border-ustp-navy"
+                    className="w-full px-3 py-2 text-xs font-mono bg-white text-ustp-text border border-slate-300 rounded focus:outline-none focus:border-ustp-navy"
                   />
                 </div>
               </div>
@@ -524,41 +569,88 @@ export function ChannelRosterModal() {
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
                   placeholder="Describe the course hub scope, consultation schedule, and Q&A guidelines..."
-                  className="w-full px-3 py-2 text-xs border border-slate-300 rounded focus:outline-none focus:border-ustp-navy"
+                  className="w-full px-3 py-2 text-xs bg-white text-ustp-text border border-slate-300 rounded focus:outline-none focus:border-ustp-navy"
                 />
               </div>
 
-              <div className="flex justify-end gap-2 pt-1">
-                <button
-                  type="button"
-                  onClick={() => setIsChannelModalOpen(false)}
-                  className="px-4 py-2 text-xs font-semibold text-slate-600 hover:text-slate-900 cursor-pointer"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={isSubmitting}
-                  className="inline-flex items-center gap-1.5 px-5 py-2 text-xs font-extrabold bg-ustp-navy text-ustp-gold rounded hover:opacity-95 disabled:opacity-50 cursor-pointer"
-                >
-                  {activeTab === 'edit_hub' ? (
-                    <>
-                      <Edit3 className="w-3.5 h-3.5" />
-                      <span>
-                        {isSubmitting ? 'Saving Changes...' : 'Save Changes'}
-                      </span>
-                    </>
-                  ) : (
-                    <>
-                      <Plus className="w-3.5 h-3.5" />
-                      <span>
-                        {isSubmitting
-                          ? 'Creating Course Hub...'
-                          : 'Create Course Hub'}
-                      </span>
-                    </>
-                  )}
-                </button>
+              <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-200">
+                <div>
+                  {activeTab === 'edit_hub' &&
+                    editingHub &&
+                    canAdminEditCurrentHub && (
+                      <>
+                        {confirmDeleteHubId === editingHub.id ? (
+                          <div className="inline-flex items-center gap-2 bg-red-50 border border-red-200 rounded px-3 py-1.5">
+                            <span className="text-[11px] font-bold text-red-800">
+                              Delete {formatCourseHubName(editingHub)}?
+                            </span>
+                            <button
+                              type="button"
+                              disabled={isDeletingId === editingHub.id}
+                              onClick={() => handleDeleteHub(editingHub)}
+                              className="px-2.5 py-1 rounded bg-red-600 hover:bg-red-700 text-white text-[11px] font-extrabold disabled:opacity-50 cursor-pointer"
+                            >
+                              {isDeletingId === editingHub.id
+                                ? 'Deleting...'
+                                : 'Confirm Delete'}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setConfirmDeleteHubId(null)}
+                              className="text-[11px] font-semibold text-slate-600 hover:text-slate-900 cursor-pointer"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setConfirmDeleteHubId(editingHub.id)}
+                            className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-extrabold border border-red-300 bg-red-50 text-red-700 hover:bg-red-100 rounded cursor-pointer"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            <span>Delete Course Hub</span>
+                          </button>
+                        )}
+                      </>
+                    )}
+                </div>
+
+                <div className="flex items-center gap-2 ml-auto">
+                  <button
+                    type="button"
+                    onClick={() => setIsChannelModalOpen(false)}
+                    className="px-4 py-2 text-xs font-semibold text-slate-600 hover:text-slate-900 cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={
+                      isSubmitting ||
+                      (activeTab === 'edit_hub' && !canAdminEditCurrentHub)
+                    }
+                    className="inline-flex items-center gap-1.5 px-5 py-2 text-xs font-extrabold bg-ustp-navy text-ustp-gold rounded hover:opacity-95 disabled:opacity-50 cursor-pointer"
+                  >
+                    {activeTab === 'edit_hub' ? (
+                      <>
+                        <Edit3 className="w-3.5 h-3.5" />
+                        <span>
+                          {isSubmitting ? 'Saving Changes...' : 'Save Changes'}
+                        </span>
+                      </>
+                    ) : (
+                      <>
+                        <Plus className="w-3.5 h-3.5" />
+                        <span>
+                          {isSubmitting
+                            ? 'Creating Course Hub...'
+                            : 'Create Course Hub'}
+                        </span>
+                      </>
+                    )}
+                  </button>
+                </div>
               </div>
             </form>
           )}
@@ -604,7 +696,7 @@ export function ChannelRosterModal() {
                     value={subChannelName}
                     onChange={(e) => setSubChannelName(e.target.value)}
                     placeholder="e.g., project-groups, lecture-notes, lab-help"
-                    className="w-full pl-7 pr-3 py-2 text-xs font-mono border border-slate-300 rounded focus:outline-none focus:border-ustp-navy"
+                    className="w-full pl-7 pr-3 py-2 text-xs font-mono bg-white text-ustp-text border border-slate-300 rounded focus:outline-none focus:border-ustp-navy"
                   />
                 </div>
                 {nameError && (
@@ -627,7 +719,7 @@ export function ChannelRosterModal() {
                   value={subChannelTopic}
                   onChange={(e) => setSubChannelTopic(e.target.value)}
                   placeholder="Coordinate group deliverables, share reviewers, or discuss lab exercises..."
-                  className="w-full px-3 py-2 text-xs border border-slate-300 rounded focus:outline-none focus:border-ustp-navy"
+                  className="w-full px-3 py-2 text-xs bg-white text-ustp-text border border-slate-300 rounded focus:outline-none focus:border-ustp-navy"
                 />
               </div>
 
@@ -664,7 +756,7 @@ export function ChannelRosterModal() {
                     value={browseSearch}
                     onChange={(e) => setBrowseSearch(e.target.value)}
                     placeholder="Search Course Hubs by code, name, section, or college..."
-                    className="w-full pl-8 pr-3 py-2 text-xs border border-slate-300 rounded focus:outline-none focus:border-ustp-navy"
+                    className="w-full pl-8 pr-3 py-2 text-xs bg-white text-ustp-text border border-slate-300 rounded focus:outline-none focus:border-ustp-navy"
                   />
                 </div>
               </div>
@@ -686,6 +778,7 @@ export function ChannelRosterModal() {
                       : hub.members_count ?? 0;
                   const hubSubChannels = getSubChannelsForHub(channels, hub.id);
                   const isJoined = isUserEnrolledInCourseHub(hub, user);
+                  const isHubCourseAdmin = isUserCourseAdmin(hub, user);
 
                   return (
                     <div
@@ -751,48 +844,19 @@ export function ChannelRosterModal() {
                             </button>
                           )}
 
-                          <button
-                            type="button"
-                            onClick={() => {
-                              populateEditFields(hub);
-                              setActiveTab('edit_hub');
-                            }}
-                            title={`Edit ${formatCourseHubName(hub)}`}
-                            className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-bold border border-slate-300 bg-white text-slate-700 hover:text-ustp-navy hover:border-ustp-navy rounded cursor-pointer"
-                          >
-                            <Edit3 className="w-3.5 h-3.5" />
-                            <span>Edit</span>
-                          </button>
-
-                          {confirmDeleteHubId === hub.id ? (
-                            <div className="inline-flex items-center gap-1 bg-red-50 border border-red-200 rounded px-2 py-1">
-                              <button
-                                type="button"
-                                disabled={isDeletingId === hub.id}
-                                onClick={() => handleDeleteHub(hub)}
-                                className="text-[11px] font-extrabold text-red-700 hover:underline cursor-pointer"
-                              >
-                                {isDeletingId === hub.id
-                                  ? 'Deleting...'
-                                  : 'Confirm Delete'}
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => setConfirmDeleteHubId(null)}
-                                className="text-[11px] font-semibold text-slate-500 hover:text-slate-800 ml-1 cursor-pointer"
-                              >
-                                Cancel
-                              </button>
-                            </div>
-                          ) : (
+                          {isHubCourseAdmin && (
                             <button
                               type="button"
-                              onClick={() => setConfirmDeleteHubId(hub.id)}
-                              title={`Delete ${formatCourseHubName(hub)}`}
-                              className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-bold border border-red-200 bg-white text-red-600 hover:bg-red-50 rounded cursor-pointer"
+                              onClick={() => {
+                                populateEditFields(hub);
+                                setConfirmDeleteHubId(null);
+                                setActiveTab('edit_hub');
+                              }}
+                              title={`Edit ${formatCourseHubName(hub)}`}
+                              className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-bold border border-slate-300 bg-white text-slate-700 hover:text-ustp-navy hover:border-ustp-navy rounded cursor-pointer"
                             >
-                              <Trash2 className="w-3.5 h-3.5" />
-                              <span>Delete</span>
+                              <Edit3 className="w-3.5 h-3.5" />
+                              <span>Edit</span>
                             </button>
                           )}
                         </div>

@@ -42,16 +42,28 @@ export function getTopLevelCourseHubs(channels: Channel[]): Channel[] {
 }
 
 /**
- * Checks whether the given user is enrolled in or created a Course Hub.
+ * Checks whether the given user is a Course Admin for the Course Hub.
+ * All Faculty/Dept Heads automatically have the Course Admin role, as well as the creator of the Course Hub.
+ */
+export function isUserCourseAdmin(
+  hub: Channel | undefined,
+  user: User | undefined
+): boolean {
+  if (!hub || !user || !user.id) return false;
+  if (user.role === 'faculty' || user.role === 'dept_head') {
+    return true;
+  }
+  return Boolean(hub.created_by && Number(hub.created_by) === Number(user.id));
+}
+
+/**
+ * Checks whether the given user is currently enrolled in a Course Hub's roster.
  */
 export function isUserEnrolledInCourseHub(
   hub: Channel | undefined,
   user: User | undefined
 ): boolean {
   if (!hub || !user || !user.id) return false;
-  if (hub.created_by && Number(hub.created_by) === Number(user.id)) {
-    return true;
-  }
   const roster = hub.roster || [];
   return roster.some(
     (m) =>

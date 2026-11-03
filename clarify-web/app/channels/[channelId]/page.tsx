@@ -56,10 +56,10 @@ import {
   canStudentModifyOwnInquiry,
   formatCourseHubName,
   formatSubChannelDisplayName,
-  getChannelParentHubId,
   getFieldValidationError,
   getSubChannelsForHub,
   isThreadVisibleToUser,
+  isUserCourseAdmin,
   resolveCourseHubSelection,
 } from '@/src/lib/domain-logic';
 import type {
@@ -84,6 +84,8 @@ export default function CourseHubPage() {
     openCourseHubModal,
     openAddSubChannelModal,
     openEditCourseHubModal,
+    activeHubTab: activeTab,
+    setActiveHubTab: setActiveTab,
     refreshChannels,
     subscribeRealtimeEvents,
     showToast,
@@ -98,21 +100,30 @@ export default function CourseHubPage() {
   } = resolveCourseHubSelection(channels, requestedChannelId, user);
 
   const [channelSearch, setChannelSearch] = useState('');
-  const [activeTab, setActiveTab] = useState<CourseHubTab>('messenger');
   const [collapsedHubIds, setCollapsedHubIds] = useState<number[]>([]);
-  const [confirmDeleteHubId, setConfirmDeleteHubId] = useState<number | null>(
-    null
-  );
   const [isDeletingHubId, setIsDeletingHubId] = useState<number | null>(null);
   const [isMobileChannelsOpen, setIsMobileChannelsOpen] = useState(false);
   const [isMobileFaqOpen, setIsMobileFaqOpen] = useState(false);
 
-  // Switch back to messenger view automatically when user navigates to a sub-channel URL
+  // Sync activeTab with ?tab= query parameter or switch back to messenger only when navigating to a sub-channel URL
   useEffect(() => {
     if (parentHubId !== null) {
       setActiveTab('messenger');
+      return;
     }
-  }, [requestedChannelId, parentHubId]);
+    if (typeof window !== 'undefined') {
+      const searchParams = new URLSearchParams(window.location.search);
+      const tabParam = searchParams.get('tab');
+      if (
+        tabParam === 'feed' ||
+        tabParam === 'threads' ||
+        tabParam === 'messenger' ||
+        tabParam === 'send_inquiry'
+      ) {
+        setActiveTab(tabParam);
+      }
+    }
+  }, [requestedChannelId, parentHubId, setActiveTab]);
 
   const toggleHubExpanded = (hubId: number) => {
     setCollapsedHubIds((prev) =>
@@ -122,40 +133,18 @@ export default function CourseHubPage() {
     );
   };
 
-  const handleDeleteCourseHubOrChannel = async (
-    targetId: number,
-    isParentHub: boolean
-  ) => {
-    setIsDeletingHubId(targetId);
+  const handleDeleteSubChannel = async (targetSubId: number) => {
+    setIsDeletingHubId(targetSubId);
     try {
-      const res = await deleteChannelApi(targetId);
+      const res = await deleteChannelApi(targetSubId);
       await refreshChannels();
-      setConfirmDeleteHubId(null);
-      showToast(
-        res.message ||
-          (isParentHub ? 'Course Hub deleted.' : 'Channel deleted.'),
-        'info'
-      );
-      if (isParentHub && activeChannel?.id === targetId) {
-        const remainingChannels = channels.filter(
-          (c) => c.id !== targetId && getChannelParentHubId(c) !== targetId
-        );
-        const nextSelection = resolveCourseHubSelection(
-          remainingChannels,
-          0,
-          user
-        );
-        if (nextSelection.activeChannel) {
-          router.push(`/channels/${nextSelection.activeChannel.id}`);
-        } else {
-          router.push('/');
-        }
-      } else if (!isParentHub && activeSubChannel?.id === targetId && activeChannel) {
+      showToast(res.message || 'Channel deleted.', 'info');
+      if (activeSubChannel?.id === targetSubId && activeChannel) {
         router.push(`/channels/${activeChannel.id}`);
       }
     } catch (err) {
       const apiErr = err as LaravelValidationError;
-      showToast(apiErr.message || 'Could not delete Course Hub.', 'error');
+      showToast(apiErr.message || 'Could not delete channel.', 'error');
     } finally {
       setIsDeletingHubId(null);
     }
@@ -616,6 +605,7 @@ export default function CourseHubPage() {
                   const isExpanded =
                     !collapsedHubIds.includes(hub.id) || Boolean(searchQuery);
                   const hubSubChannels = getSubChannelsForHub(channels, hub.id);
+                  const isHubCourseAdmin = isUserCourseAdmin(hub, user);
 
                   return (
                     <div
@@ -658,33 +648,21 @@ export default function CourseHubPage() {
                                 {hub.unread_count}
                               </span>
                             )}
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setIsMobileChannelsOpen(false);
-                              openEditCourseHubModal(hub.id);
-                            }}
-                            title={`Edit ${formatCourseHubName(hub)}`}
-                            aria-label={`Edit ${formatCourseHubName(hub)}`}
-                            className="p-1 rounded hover:bg-white/15 text-slate-300 hover:text-ustp-gold cursor-pointer"
-                          >
-                            <Edit3 className="w-3 h-3" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setConfirmDeleteHubId((prev) =>
-                                prev === hub.id ? null : hub.id
-                              );
-                            }}
-                            title={`Delete ${formatCourseHubName(hub)}`}
-                            aria-label={`Delete ${formatCourseHubName(hub)}`}
-                            className="p-1 rounded hover:bg-red-500/20 text-slate-300 hover:text-red-400 cursor-pointer"
-                          >
-                            <Trash2 className="w-3 h-3" />
-                          </button>
+                          {isHubCourseAdmin && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setIsMobileChannelsOpen(false);
+                                openEditCourseHubModal(hub.id);
+                              }}
+                              title={`Edit ${formatCourseHubName(hub)}`}
+                              aria-label={`Edit ${formatCourseHubName(hub)}`}
+                              className="p-1 rounded hover:bg-white/15 text-slate-300 hover:text-ustp-gold cursor-pointer"
+                            >
+                              <Edit3 className="w-3 h-3" />
+                            </button>
+                          )}
                           <button
                             type="button"
                             onClick={(e) => {
@@ -705,39 +683,6 @@ export default function CourseHubPage() {
                         </div>
                       </div>
 
-                      {/* Inline Delete Confirmation Banner for Course Hub */}
-                      {confirmDeleteHubId === hub.id && (
-                        <div className="mx-2 mb-2 p-2 rounded bg-red-950/90 border border-red-400/50 text-[11px] space-y-1.5">
-                          <p className="font-bold text-red-100">
-                            Delete {formatCourseHubName(hub)}?
-                          </p>
-                          <div className="flex items-center justify-end gap-1.5">
-                            <button
-                              type="button"
-                              onClick={() => setConfirmDeleteHubId(null)}
-                              className="px-2 py-0.5 rounded bg-white/10 text-slate-200 hover:bg-white/20 font-semibold cursor-pointer"
-                            >
-                              Cancel
-                            </button>
-                            <button
-                              type="button"
-                              disabled={isDeletingHubId === hub.id}
-                              onClick={() =>
-                                void handleDeleteCourseHubOrChannel(
-                                  hub.id,
-                                  true
-                                )
-                              }
-                              className="px-2 py-0.5 rounded bg-red-600 hover:bg-red-500 text-white font-extrabold disabled:opacity-50 cursor-pointer"
-                            >
-                              {isDeletingHubId === hub.id
-                                ? 'Deleting...'
-                                : 'Confirm Delete'}
-                            </button>
-                          </div>
-                        </div>
-                      )}
-
                       {/* Expanded Course Hub Contents: Given Views + Inner Chat Channels */}
                       {isExpanded && (
                         <div className="px-2 pb-2.5 pt-0.5 space-y-2 border-t border-white/10">
@@ -749,7 +694,7 @@ export default function CourseHubPage() {
                                 setIsMobileChannelsOpen(false);
                                 setActiveTab('feed');
                                 if (!isCurrentHub || activeSubChannel) {
-                                  router.push(`/channels/${hub.id}`);
+                                  router.push(`/channels/${hub.id}?tab=feed`);
                                 }
                               }}
                               className={`w-full flex items-center gap-2 px-2.5 py-1.5 rounded text-[11px] font-bold transition-colors cursor-pointer ${
@@ -768,7 +713,7 @@ export default function CourseHubPage() {
                                 setIsMobileChannelsOpen(false);
                                 setActiveTab('threads');
                                 if (!isCurrentHub || activeSubChannel) {
-                                  router.push(`/channels/${hub.id}`);
+                                  router.push(`/channels/${hub.id}?tab=threads`);
                                 }
                               }}
                               className={`w-full flex items-center justify-between gap-2 px-2.5 py-1.5 rounded text-[11px] font-bold transition-colors cursor-pointer ${
@@ -871,21 +816,20 @@ export default function CourseHubPage() {
                                       {cleanSubName}
                                     </span>
                                   </Link>
-                                  <button
-                                    type="button"
-                                    disabled={isDeletingHubId === sub.id}
-                                    onClick={() =>
-                                      void handleDeleteCourseHubOrChannel(
-                                        sub.id,
-                                        false
-                                      )
-                                    }
-                                    title={`Delete #${cleanSubName}`}
-                                    aria-label={`Delete #${cleanSubName}`}
-                                    className="opacity-70 group-hover:opacity-100 p-0.5 rounded hover:bg-red-500/20 text-slate-400 hover:text-red-400 cursor-pointer"
-                                  >
-                                    <Trash2 className="w-3 h-3" />
-                                  </button>
+                                  {isHubCourseAdmin && (
+                                    <button
+                                      type="button"
+                                      disabled={isDeletingHubId === sub.id}
+                                      onClick={() =>
+                                        void handleDeleteSubChannel(sub.id)
+                                      }
+                                      title={`Delete #${cleanSubName}`}
+                                      aria-label={`Delete #${cleanSubName}`}
+                                      className="opacity-70 group-hover:opacity-100 p-0.5 rounded hover:bg-red-500/20 text-slate-400 hover:text-red-400 cursor-pointer"
+                                    >
+                                      <Trash2 className="w-3 h-3" />
+                                    </button>
+                                  )}
                                 </div>
                               );
                             })}

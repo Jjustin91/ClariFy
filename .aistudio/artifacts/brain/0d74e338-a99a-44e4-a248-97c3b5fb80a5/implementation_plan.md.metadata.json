@@ -1,6 +1,6 @@
 {
-  "summary": "Implementation plan to isolate the Add Course Hub, Browse Course Hubs, and Edit Course Hub modal views by removing cross-tab navigation headers and the + Add Course Hub button inside Browse Course Hubs.",
-  "updatedAt": "2026-11-03T08:41:04.379826318Z",
+  "summary": "Implementation plan for fixing Add/Edit Course Hub inputs, adding the Course Admin role with Delete moved inside Edit Course Hub, adding Leave Course Hub in the header settings menu, enabling real image upload for user avatars, and fixing first-click navigation to Noticeboard Feed and Isolated Q&A Threads.",
+  "updatedAt": "2026-11-03T13:14:09.583384810Z",
   "requestFeedback": true,
   "userFacing": true
 }

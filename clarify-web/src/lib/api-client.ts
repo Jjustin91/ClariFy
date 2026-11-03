@@ -334,6 +334,15 @@ export async function joinChannelApi(
   );
 }
 
+export async function leaveChannelApi(
+  channelId: number
+): Promise<SingleResourceResponse<Channel>> {
+  return requestLaravel<SingleResourceResponse<Channel>>(
+    `/channels/${channelId}/leave`,
+    { method: 'POST' }
+  );
+}
+
 export async function manageChannelMemberApi(
   channelId: number,
   payload: {
