@@ -12,7 +12,7 @@ import {
 } from '@/src/components/ui/StateViews';
 import { useClarify } from '@/src/context/ClarifyContext';
 import { getAnnouncementsApi } from '@/src/lib/api-client';
-import { canPublishOrManageAnnouncements } from '@/src/lib/domain-logic';
+import { canPublishCampusWideAnnouncements } from '@/src/lib/domain-logic';
 import type {
   Announcement,
   LaravelValidationError,
@@ -120,7 +120,7 @@ export default function AnnouncementsPage() {
     return null;
   }
 
-  const canPublish = canPublishOrManageAnnouncements(user.role);
+  const canPublishCampusWide = canPublishCampusWideAnnouncements(user.role);
 
   return (
     <AppShell title="Announcements">
@@ -197,16 +197,16 @@ export default function AnnouncementsPage() {
           })}
         </div>
 
-        {/* Faculty Quick-Create Trigger Bar (Strictly hidden for Students — Wireframe Page 5) */}
-        {canPublish && (
+        {/* Department Head Quick-Create Trigger Bar for Campus-Wide Announcements */}
+        {canPublishCampusWide && (
           <div className="max-w-md">
             <button
               type="button"
-              onClick={() => openAnnouncementModal()}
+              onClick={() => openAnnouncementModal({ mode: 'campus_wide' })}
               className="w-full flex items-center justify-between px-4 py-2.5 bg-white hover:bg-slate-50 border border-slate-300 rounded-xl shadow-xs text-left transition-colors cursor-pointer"
             >
               <span className="text-xs sm:text-sm text-slate-500 font-medium">
-                Create Announcement
+                Create Campus-Wide Announcement
               </span>
               <span className="flex items-center gap-2 text-ustp-text">
                 <FileText className="w-4 h-4" />

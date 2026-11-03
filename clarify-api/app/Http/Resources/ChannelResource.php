@@ -12,7 +12,9 @@ class ChannelResource extends JsonResource
     public function toArray(Request $request): array
     {
         $rawMembers = $this->relationLoaded('members') ? $this->members : $this->members()->with('academicProfile')->get();
-        $members = $rawMembers->filter(fn ($m) => $m->role !== 'it_admin' && $m->verification_status === 'approved')->values();
+        $validUsers = $rawMembers->filter(fn ($m) => $m->role !== 'it_admin' && $m->verification_status === 'approved')->values();
+        $members = $validUsers->filter(fn ($m) => ($m->pivot?->approval_status ?? 'approved') !== 'pending')->values();
+        $pendingMembers = $validUsers->filter(fn ($m) => ($m->pivot?->approval_status ?? 'approved') === 'pending')->values();
 
         $parentHubId = null;
         if (is_string($this->description) && preg_match('/^\[HUB:(\d+)\]/i', $this->description, $matches)) {
@@ -82,6 +84,14 @@ class ChannelResource extends JsonResource
             'latest_activity_preview' => $latestPreview,
             'latest_activity_at' => $latestAt,
             'roster' => $members->map(fn ($member) => [
+                'id' => $member->id,
+                'institutional_id' => $member->institutional_id,
+                'name' => $member->name,
+                'role' => $member->role,
+                'section' => $member->academicProfile?->section ?? $this->scope_section ?? 'IT3R2',
+                'department' => $member->academicProfile?->department ?? $this->scope_department ?? 'CITC',
+            ])->values()->all(),
+            'pending_requests' => $pendingMembers->map(fn ($member) => [
                 'id' => $member->id,
                 'institutional_id' => $member->institutional_id,
                 'name' => $member->name,

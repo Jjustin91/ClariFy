@@ -1,6 +1,6 @@
 {
-  "summary": "Implementation plan for fixing Add/Edit Course Hub inputs, adding the Course Admin role with Delete moved inside Edit Course Hub, adding Leave Course Hub in the header settings menu, enabling real image upload for user avatars, and fixing first-click navigation to Noticeboard Feed and Isolated Q&A Threads.",
-  "updatedAt": "2026-11-03T13:14:09.583384810Z",
+  "summary": "Implementation plan for adding the ClariFy browser tab favicon, preventing unenrolled users from viewing Course Hub content, restricting member roster additions to Course Admins, adding join approval workflow for Browse Course Hubs, displaying the publisher's department under announcement titles, and separating Dept Head Campus-Wide announcements from Instructor Course Hub Noticeboard announcements.",
+  "updatedAt": "2026-11-03T15:04:08.719958321Z",
   "requestFeedback": true,
   "userFacing": true
 }

@@ -51,10 +51,16 @@ export function AnnouncementCard({
   const [isAckLoading, setIsAckLoading] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
 
-  const canManage = canPublishOrManageAnnouncements(user.role);
+  const isCampusWideMemo = announcement.channel_type === 'university';
+  const canManage = isCampusWideMemo
+    ? user.role === 'dept_head'
+    : canPublishOrManageAnnouncements(user.role);
   const isStudent = user.role === 'student';
   const timeFormatted = formatShortTime(announcement.published_at);
   const editedTimeFormatted = formatShortTime(announcement.updated_at);
+  const departmentSubtitle = `${
+    announcement.publisher.department || 'CITC'
+  } Department`;
 
   const handleAcknowledge = async () => {
     if (announcement.read_reach.has_current_user_acknowledged || isAckLoading) {
@@ -120,6 +126,9 @@ export function AnnouncementCard({
                 </span>
               )}
             </div>
+            <p className="text-xs text-slate-600 font-medium mt-0.5">
+              {departmentSubtitle}
+            </p>
 
             {/* Tag Pills Row */}
             <div className="flex flex-wrap items-center gap-1.5 mt-2">
@@ -133,6 +142,8 @@ export function AnnouncementCard({
               Posted by {announcement.publisher.name} (
               {announcement.publisher.role === 'faculty'
                 ? 'Faculty'
+                : announcement.publisher.role === 'dept_head'
+                ? 'Department Head'
                 : announcement.publisher.role.toUpperCase()}
               ) • {timeFormatted}
             </p>
@@ -144,7 +155,10 @@ export function AnnouncementCard({
               <button
                 type="button"
                 onClick={() =>
-                  openAnnouncementModal({ editingAnnouncement: announcement })
+                  openAnnouncementModal({
+                    editingAnnouncement: announcement,
+                    mode: isCampusWideMemo ? 'campus_wide' : 'course_hub',
+                  })
                 }
                 aria-label={`Edit announcement ${announcement.title}`}
                 className="p-1.5 text-slate-600 hover:text-ustp-navy hover:bg-slate-100 rounded cursor-pointer"
@@ -238,7 +252,7 @@ export function AnnouncementCard({
   return (
     <article className="bg-white border border-slate-200/90 rounded-lg p-5 shadow-xs hover:shadow-md transition-shadow flex flex-col justify-between">
       <div>
-        {/* Top Row: Title + Subtitle on Left, Timestamp + Faculty Actions on Right */}
+        {/* Top Row: Title + Department Subtitle on Left, Timestamp + Faculty Actions on Right */}
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="flex items-center gap-1.5 flex-wrap">
@@ -255,7 +269,7 @@ export function AnnouncementCard({
               )}
             </div>
             <p className="text-xs text-slate-600 font-medium">
-              {announcement.subtitle || 'USTP Digital Transformation'}
+              {departmentSubtitle}
             </p>
           </div>
 
@@ -269,7 +283,10 @@ export function AnnouncementCard({
                 <button
                   type="button"
                   onClick={() =>
-                    openAnnouncementModal({ editingAnnouncement: announcement })
+                    openAnnouncementModal({
+                      editingAnnouncement: announcement,
+                      mode: isCampusWideMemo ? 'campus_wide' : 'course_hub',
+                    })
                   }
                   aria-label={`Edit ${announcement.title}`}
                   className="p-1 text-slate-500 hover:text-ustp-navy rounded cursor-pointer"

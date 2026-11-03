@@ -50,6 +50,7 @@ export interface Channel {
   latest_activity_at?: string;
   instructor_name?: string;
   roster?: ChannelMember[];
+  pending_requests?: ChannelMember[];
 }
 
 export interface ReadReach {
@@ -62,6 +63,7 @@ export interface ReadReach {
 export interface Announcement {
   id: number;
   channel_id: number;
+  channel_type?: Channel['channel_type'];
   title: string;
   content: string;
   subtitle?: string;

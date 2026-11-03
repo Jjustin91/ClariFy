@@ -66,10 +66,12 @@ interface ClarifyContextValue {
     isOpen: boolean;
     editingAnnouncement: Announcement | null;
     defaultChannelId?: number;
+    mode?: 'campus_wide' | 'course_hub';
   };
   openAnnouncementModal: (options?: {
     editingAnnouncement?: Announcement | null;
     defaultChannelId?: number;
+    mode?: 'campus_wide' | 'course_hub';
   }) => void;
   closeAnnouncementModal: () => void;
   urgentPopupAnnouncement: Announcement | null;
@@ -158,10 +160,12 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
     isOpen: boolean;
     editingAnnouncement: Announcement | null;
     defaultChannelId?: number;
+    mode?: 'campus_wide' | 'course_hub';
   }>({
     isOpen: false,
     editingAnnouncement: null,
     defaultChannelId: 1,
+    mode: 'campus_wide',
   });
   const [urgentPopupAnnouncement, setUrgentPopupAnnouncement] =
     useState<Announcement | null>(null);
@@ -559,11 +563,16 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
     (options?: {
       editingAnnouncement?: Announcement | null;
       defaultChannelId?: number;
+      mode?: 'campus_wide' | 'course_hub';
     }) => {
+      const resolvedMode =
+        options?.mode ||
+        (options?.defaultChannelId ? 'course_hub' : 'campus_wide');
       setAnnouncementModalState({
         isOpen: true,
         editingAnnouncement: options?.editingAnnouncement || null,
         defaultChannelId: options?.defaultChannelId || channels[0]?.id || 1,
+        mode: resolvedMode,
       });
     },
     [channels]

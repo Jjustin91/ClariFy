@@ -21,6 +21,11 @@ export const metadata: Metadata = {
   title: 'ClariFy — USTP Unified Campus Noticeboard & Scoped Communication Platform',
   description:
     'Unified Campus Noticeboard, Scoped Course Hubs, Isolated Q&A Threads, 1-Click Anonymized Class FAQs, and PRISMS Admin Console for USTP-CDO (IT314 Group 5).',
+  icons: {
+    icon: '/assets/aistudio/image_07899ab9.png',
+    shortcut: '/assets/aistudio/image_07899ab9.png',
+    apple: '/assets/aistudio/image_07899ab9.png',
+  },
   openGraph: {
     title: 'ClariFy — USTP Unified Campus Noticeboard & Scoped Communication Platform',
     description:

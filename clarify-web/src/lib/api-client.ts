@@ -349,7 +349,7 @@ export async function manageChannelMemberApi(
     institutional_id: string;
     name?: string;
     section?: string;
-    action: 'add' | 'remove';
+    action: 'add' | 'remove' | 'approve' | 'reject';
   }
 ): Promise<SingleResourceResponse<Channel>> {
   return requestLaravel<SingleResourceResponse<Channel>>(

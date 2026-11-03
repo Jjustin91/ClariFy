@@ -34,7 +34,11 @@ class ChannelController
         if ($type = $request->query('type')) {
             if ($type !== 'all') {
                 $query->where('channel_type', $type);
+            } else {
+                $query->where('channel_type', 'course_hub');
             }
+        } else {
+            $query->where('channel_type', 'course_hub');
         }
 
         $channels = $query->orderBy('id')->get();
@@ -247,19 +251,49 @@ class ChannelController
         $channel = Channel::findOrFail($id);
         $user = $request->user();
 
-        // Enroll only the current user into the selected Course Hub
-        $channel->members()->syncWithoutDetaching([
-            $user->id => [
-                'can_publish' => $user->canPublishOrManage(),
-                'joined_at' => now(),
-            ],
-        ]);
+        if (\Illuminate\Support\Facades\Schema::hasTable('channel_user') && ! \Illuminate\Support\Facades\Schema::hasColumn('channel_user', 'approval_status')) {
+            try {
+                \Illuminate\Support\Facades\DB::statement("ALTER TABLE channel_user ADD COLUMN approval_status VARCHAR(24) NOT NULL DEFAULT 'approved'");
+            } catch (\Throwable $e) {
+                // Ignore if already exists
+            }
+        }
+
+        $isAdmin = $this->isCourseAdmin($user, $channel);
+        $targetStatus = $isAdmin ? 'approved' : 'pending';
+
+        $existingPivot = \Illuminate\Support\Facades\DB::table('channel_user')
+            ->where('channel_id', $channel->id)
+            ->where('user_id', $user->id)
+            ->first();
+
+        if ($existingPivot) {
+            if ($isAdmin && ($existingPivot->approval_status ?? 'approved') !== 'approved') {
+                \Illuminate\Support\Facades\DB::table('channel_user')
+                    ->where('channel_id', $channel->id)
+                    ->where('user_id', $user->id)
+                    ->update(['approval_status' => 'approved', 'can_publish' => true]);
+            }
+        } else {
+            $channel->members()->syncWithoutDetaching([
+                $user->id => [
+                    'can_publish' => $user->canPublishOrManage(),
+                    'approval_status' => $targetStatus,
+                    'joined_at' => now(),
+                ],
+            ]);
+        }
 
         RealtimeStateUpdated::safeDispatch('channel.updated', (int) $channel->id, (int) $user->id);
 
+        $fresh = $channel->fresh('members.academicProfile');
+        $isNowApproved = $fresh->members->contains(fn ($m) => (int) $m->id === (int) $user->id && ($m->pivot?->approval_status ?? 'approved') === 'approved');
+
         return response()->json([
-            'message' => "Joined {$channel->name} successfully.",
-            'data' => new ChannelResource($channel->load('members.academicProfile')),
+            'message' => $isNowApproved
+                ? "Joined {$channel->name} successfully."
+                : "Join request sent for {$channel->name}! Waiting for Course Admin approval.",
+            'data' => new ChannelResource($fresh),
         ]);
     }
 
@@ -302,14 +336,22 @@ class ChannelController
             ], 403);
         }
 
+        $channel = Channel::findOrFail($id);
+
+        if (! $this->isCourseAdmin($user, $channel)) {
+            return response()->json([
+                'status' => 403,
+                'message' => 'HTTP 403 Forbidden: Only Course Admins (the Course Hub creator or Faculty) can add, approve, or remove members in this Course Hub.',
+            ], 403);
+        }
+
         $validated = $request->validate([
             'institutional_id' => ['required', 'string'],
             'name' => ['nullable', 'string'],
             'section' => ['nullable', 'string'],
-            'action' => ['required', 'in:add,remove'],
+            'action' => ['required', 'in:add,remove,approve,reject'],
         ]);
 
-        $channel = Channel::findOrFail($id);
         $targetUser = User::where('institutional_id', $validated['institutional_id'])->first();
 
         if ($validated['action'] === 'add') {
@@ -328,20 +370,35 @@ class ChannelController
             $channel->members()->syncWithoutDetaching([
                 $targetUser->id => [
                     'can_publish' => $targetUser->canPublishOrManage(),
+                    'approval_status' => 'approved',
                     'joined_at' => now(),
                 ],
             ]);
+            \Illuminate\Support\Facades\DB::table('channel_user')
+                ->where('channel_id', $channel->id)
+                ->where('user_id', $targetUser->id)
+                ->update(['approval_status' => 'approved']);
+        } elseif ($validated['action'] === 'approve' && $targetUser) {
+            \Illuminate\Support\Facades\DB::table('channel_user')
+                ->where('channel_id', $channel->id)
+                ->where('user_id', $targetUser->id)
+                ->update(['approval_status' => 'approved', 'joined_at' => now()]);
         } elseif ($targetUser) {
             $channel->members()->detach($targetUser->id);
         }
 
         RealtimeStateUpdated::safeDispatch('channel.updated', (int) $channel->id, (int) $user->id);
 
+        $actionMessages = [
+            'add' => 'Member added to channel roster.',
+            'approve' => 'Join request approved! Member added to Course Hub roster.',
+            'reject' => 'Join request declined.',
+            'remove' => 'Member removed from channel roster.',
+        ];
+
         return response()->json([
-            'message' => $validated['action'] === 'add'
-                ? 'Member added to channel roster.'
-                : 'Member removed from channel roster.',
-            'data' => new ChannelResource($channel->load('members.academicProfile')),
+            'message' => $actionMessages[$validated['action']] ?? 'Roster updated.',
+            'data' => new ChannelResource($channel->fresh('members.academicProfile')),
         ]);
     }
 }

@@ -294,10 +294,15 @@ async function ensurePostgresSchema(pool: Pool): Promise<void> {
         channel_id BIGINT NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
         user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         can_publish BOOLEAN NOT NULL DEFAULT FALSE,
+        approval_status VARCHAR(24) NOT NULL DEFAULT 'approved',
         joined_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         UNIQUE(channel_id, user_id)
       );
     `);
+
+    await client.query(`
+      ALTER TABLE channel_user ADD COLUMN IF NOT EXISTS approval_status VARCHAR(24) NOT NULL DEFAULT 'approved';
+    `).catch(() => {});
 
     await client.query(`
       CREATE TABLE IF NOT EXISTS announcements (
@@ -790,6 +795,7 @@ async function fetchAnnouncementsFromPg(
   const res = await pool.query(`
     SELECT
       a.*,
+      c.channel_type AS ch_type,
       u.id AS pub_id,
       u.name AS pub_name,
       u.role AS pub_role,
@@ -797,6 +803,7 @@ async function fetchAnnouncementsFromPg(
       COALESCE(ap.department, 'CITC') AS pub_department
     FROM announcements a
     JOIN users u ON u.id = a.publisher_id
+    LEFT JOIN channels c ON c.id = a.channel_id
     LEFT JOIN academic_profiles ap ON ap.user_id = u.id
     WHERE a.deleted_at IS NULL
     ORDER BY a.is_urgent DESC, a.is_pinned DESC, a.published_at DESC, a.id DESC
@@ -817,7 +824,9 @@ async function fetchAnnouncementsFromPg(
     SELECT cu.channel_id, COUNT(*)::int AS cnt
     FROM channel_user cu
     JOIN users u ON u.id = cu.user_id
-    WHERE u.role != 'it_admin' AND u.verification_status = 'approved'
+    WHERE u.role != 'it_admin'
+      AND u.verification_status = 'approved'
+      AND COALESCE(cu.approval_status, 'approved') = 'approved'
     GROUP BY cu.channel_id
   `);
   const enrolledByChannel: Record<number, number> = {};
@@ -845,11 +854,20 @@ async function fetchAnnouncementsFromPg(
       }
     }
 
+    const pubDept = String(row.pub_department || 'CITC');
+    const rawSubtitle = row.subtitle ? String(row.subtitle) : '';
+    const displaySubtitle =
+      rawSubtitle && rawSubtitle !== 'USTP Digital Transformation'
+        ? rawSubtitle
+        : `${pubDept} Department`;
+
     return {
       id,
       channel_id: Number(row.channel_id),
+      channel_type:
+        (row.ch_type as Channel['channel_type']) || 'course_hub',
       title: String(row.title),
-      subtitle: String(row.subtitle || 'USTP Digital Transformation'),
+      subtitle: displaySubtitle,
       content: String(row.content),
       attachment_url: row.attachment_url ? String(row.attachment_url) : null,
       attachment_name: row.attachment_name ? String(row.attachment_name) : null,
@@ -877,7 +895,7 @@ async function fetchAnnouncementsFromPg(
         id: Number(row.pub_id),
         name: String(row.pub_name),
         role: (row.pub_role as UserRole) || 'faculty',
-        department: String(row.pub_department || 'CITC'),
+        department: pubDept,
         avatar_url: row.pub_avatar ? String(row.pub_avatar) : null,
       },
     };
@@ -902,12 +920,14 @@ async function fetchChannelsFromPg(pool: Pool): Promise<Channel[]> {
   const chRes = await pool.query(`
     SELECT c.*
     FROM channels c
+    WHERE c.channel_type = 'course_hub'
     ORDER BY c.id ASC
   `);
 
   const rosterRes = await pool.query(`
     SELECT
       cu.channel_id,
+      COALESCE(cu.approval_status, 'approved') AS approval_status,
       u.id,
       u.institutional_id,
       u.name,
@@ -963,17 +983,24 @@ async function fetchChannelsFromPg(pool: Pool): Promise<Channel[]> {
   `);
 
   const rosterByChannel: Record<number, ChannelMember[]> = {};
+  const pendingByChannel: Record<number, ChannelMember[]> = {};
   for (const r of rosterRes.rows) {
     const cid = Number(r.channel_id);
-    if (!rosterByChannel[cid]) rosterByChannel[cid] = [];
-    rosterByChannel[cid].push({
+    const memberObj: ChannelMember = {
       id: Number(r.id),
       institutional_id: String(r.institutional_id),
       name: String(r.name),
       role: (r.role as UserRole) || 'student',
       section: r.section ? String(r.section) : 'IT3R2',
       department: String(r.department || 'CITC'),
-    });
+    };
+    if (String(r.approval_status) === 'pending') {
+      if (!pendingByChannel[cid]) pendingByChannel[cid] = [];
+      pendingByChannel[cid].push(memberObj);
+    } else {
+      if (!rosterByChannel[cid]) rosterByChannel[cid] = [];
+      rosterByChannel[cid].push(memberObj);
+    }
   }
 
   const latestAnnByChannel: Record<
@@ -1034,6 +1061,7 @@ async function fetchChannelsFromPg(pool: Pool): Promise<Channel[]> {
   return chRes.rows.map((row) => {
     const cid = Number(row.id);
     const roster = rosterByChannel[cid] || [];
+    const pendingRequests = pendingByChannel[cid] || [];
     const rawDesc = row.description ? String(row.description) : null;
     const hubMatch = rawDesc ? rawDesc.match(/^\[HUB:(\d+)\]/i) : null;
     const parentHubId = hubMatch && hubMatch[1] ? Number(hubMatch[1]) : null;
@@ -1094,6 +1122,7 @@ async function fetchChannelsFromPg(pool: Pool): Promise<Channel[]> {
       latest_activity_at:
         bestTimestamp > 0 ? formatRelativeTimeAgo(bestRawDate) : 'No activity yet',
       roster,
+      pending_requests: pendingRequests,
     };
   });
 }
@@ -1878,21 +1907,68 @@ export async function handlePostgresApiRequest(
     if (method === 'POST' && joinMatch) {
       const resolvedCh = await resolveValidChannel(pool, Number(joinMatch[1]));
       const channelId = resolvedCh.id;
-      await pool.query(
-        `INSERT INTO channel_user (channel_id, user_id, can_publish)
-         VALUES ($1, $2, $3)
-         ON CONFLICT (channel_id, user_id) DO NOTHING`,
-        [channelId, activeUser.id, activeUser.role !== 'student']
+      const chOwnerRes = await pool.query(
+        'SELECT created_by FROM channels WHERE id = $1 LIMIT 1',
+        [channelId]
       );
+      const createdBy =
+        chOwnerRes.rowCount && chOwnerRes.rowCount > 0
+          ? chOwnerRes.rows[0].created_by
+          : null;
+      const isCourseAdmin =
+        activeUser.role === 'faculty' ||
+        activeUser.role === 'dept_head' ||
+        (createdBy !== null &&
+          createdBy !== undefined &&
+          Number(createdBy) === Number(activeUser.id));
+
+      const targetStatus = isCourseAdmin ? 'approved' : 'pending';
+
+      const existingCu = await pool.query(
+        'SELECT approval_status FROM channel_user WHERE channel_id = $1 AND user_id = $2 LIMIT 1',
+        [channelId, activeUser.id]
+      );
+
+      if (existingCu.rowCount && existingCu.rowCount > 0) {
+        const currentStatus = String(
+          existingCu.rows[0].approval_status || 'approved'
+        );
+        if (isCourseAdmin && currentStatus !== 'approved') {
+          await pool.query(
+            `UPDATE channel_user
+             SET approval_status = 'approved', can_publish = TRUE
+             WHERE channel_id = $1 AND user_id = $2`,
+            [channelId, activeUser.id]
+          );
+        }
+      } else {
+        await pool.query(
+          `INSERT INTO channel_user (channel_id, user_id, can_publish, approval_status)
+           VALUES ($1, $2, $3, $4)
+           ON CONFLICT (channel_id, user_id) DO NOTHING`,
+          [
+            channelId,
+            activeUser.id,
+            activeUser.role !== 'student',
+            targetStatus,
+          ]
+        );
+      }
 
       const allChannels = await fetchChannelsFromPg(pool);
       const updated =
         allChannels.find((c) => c.id === channelId) || allChannels[0];
 
+      const isNowApproved = (updated?.roster || []).some(
+        (m) => Number(m.id) === Number(activeUser.id)
+      );
+
       return {
         status: 200,
         body: {
-          message: `Joined ${updated.name} successfully.`,
+          message: isNowApproved
+            ? `Joined ${updated.name} successfully.`
+            : `Join request sent for ${updated.name}! Waiting for Course Admin approval.`,
           data: updated,
         },
       };
@@ -1937,8 +2013,39 @@ export async function handlePostgresApiRequest(
         Number(membersMatch[1])
       );
       const channelId = resolvedCh.id;
+
+      const chOwnerRes = await pool.query(
+        'SELECT created_by FROM channels WHERE id = $1 LIMIT 1',
+        [channelId]
+      );
+      const createdBy =
+        chOwnerRes.rowCount && chOwnerRes.rowCount > 0
+          ? chOwnerRes.rows[0].created_by
+          : null;
+      const isCourseAdmin =
+        activeUser.role === 'faculty' ||
+        activeUser.role === 'dept_head' ||
+        (createdBy !== null &&
+          createdBy !== undefined &&
+          Number(createdBy) === Number(activeUser.id));
+
+      if (!isCourseAdmin) {
+        return {
+          status: 403,
+          body: {
+            status: 403,
+            message:
+              'HTTP 403 Forbidden: Only Course Admins (the Course Hub creator or Faculty) can add, approve, or remove members in this Course Hub.',
+          },
+        };
+      }
+
       const institutionalId = String(body.institutional_id || '').trim();
-      const action = String(body.action || 'add') as 'add' | 'remove';
+      const action = String(body.action || 'add') as
+        | 'add'
+        | 'remove'
+        | 'approve'
+        | 'reject';
 
       if (action === 'add') {
         if (!institutionalId) {
@@ -1957,10 +2064,11 @@ export async function handlePostgresApiRequest(
         }
 
         const targetUserRes = await pool.query(
-          'SELECT id FROM users WHERE institutional_id = $1 LIMIT 1',
+          'SELECT id, role FROM users WHERE institutional_id = $1 LIMIT 1',
           [institutionalId]
         );
         let targetUserId: number;
+        let targetCanPublish = false;
 
         if (!targetUserRes.rowCount || targetUserRes.rowCount === 0) {
           const displayName =
@@ -1985,13 +2093,23 @@ export async function handlePostgresApiRequest(
           );
         } else {
           targetUserId = Number(targetUserRes.rows[0].id);
+          const roleStr = String(targetUserRes.rows[0].role || 'student');
+          targetCanPublish = roleStr === 'faculty' || roleStr === 'dept_head';
         }
 
         await pool.query(
-          `INSERT INTO channel_user (channel_id, user_id, can_publish)
-           VALUES ($1, $2, FALSE)
-           ON CONFLICT (channel_id, user_id) DO NOTHING`,
-          [channelId, targetUserId]
+          `INSERT INTO channel_user (channel_id, user_id, can_publish, approval_status)
+           VALUES ($1, $2, $3, 'approved')
+           ON CONFLICT (channel_id, user_id) DO UPDATE SET approval_status = 'approved'`,
+          [channelId, targetUserId, targetCanPublish]
+        );
+      } else if (action === 'approve') {
+        await pool.query(
+          `UPDATE channel_user
+           SET approval_status = 'approved', joined_at = CURRENT_TIMESTAMP
+           WHERE channel_id = $1
+             AND user_id IN (SELECT id FROM users WHERE institutional_id = $2)`,
+          [channelId, institutionalId]
         );
       } else {
         await pool.query(
@@ -2006,13 +2124,17 @@ export async function handlePostgresApiRequest(
       const updated =
         allChannels.find((c) => c.id === channelId) || allChannels[0];
 
+      const actionMessages: Record<string, string> = {
+        add: 'Member added to channel roster.',
+        approve: 'Join request approved! Member added to Course Hub roster.',
+        reject: 'Join request declined.',
+        remove: 'Member removed from channel roster.',
+      };
+
       return {
         status: 200,
         body: {
-          message:
-            action === 'add'
-              ? 'Member added to channel roster in PostgreSQL.'
-              : 'Member removed from channel roster in PostgreSQL.',
+          message: actionMessages[action] || 'Roster updated.',
           data: updated,
         },
       };
@@ -2035,19 +2157,54 @@ export async function handlePostgresApiRequest(
         };
       }
       const includeDrafts = canPublishOrManageAnnouncements(activeUser.role);
-      let channelId: number | undefined = undefined;
-      if (query.channel_id) {
-        const resolved = await resolveValidChannel(
-          pool,
-          Number(query.channel_id)
-        );
-        channelId = resolved.id;
+      const requestedChannelId = query.channel_id
+        ? Number(query.channel_id)
+        : undefined;
+
+      // Determine which Course Hubs the current user is approved/enrolled in
+      const enrolledRes = await pool.query(
+        `SELECT channel_id FROM channel_user
+         WHERE user_id = $1 AND COALESCE(approval_status, 'approved') = 'approved'`,
+        [activeUser.id]
+      );
+      const enrolledChannelIds = new Set<number>(
+        enrolledRes.rows.map((r) => Number(r.channel_id))
+      );
+
+      // If a specific Course Hub's Noticeboard Feed was requested, verify enrollment
+      if (requestedChannelId && !Number.isNaN(requestedChannelId)) {
+        if (!enrolledChannelIds.has(requestedChannelId)) {
+          return {
+            status: 200,
+            body: {
+              data: [],
+              meta: {
+                current_page: 1,
+                last_page: 1,
+                per_page: Math.max(1, Number(query.per_page || 4)),
+                total: 0,
+              },
+            },
+          };
+        }
       }
 
       const allAnnouncements = await fetchAnnouncementsFromPg(pool, activeUser);
 
-      const sorted = filterAndSortAnnouncements(allAnnouncements, {
-        channelId,
+      // When viewing All Announcements or Dashboard (no channel_id), include:
+      // 1) Campus-Wide announcements (channel_type !== 'course_hub')
+      // 2) Course Hub announcements for Course Hubs the user has joined
+      const scopedAnnouncements = requestedChannelId
+        ? allAnnouncements.filter((a) => a.channel_id === requestedChannelId)
+        : allAnnouncements.filter(
+            (a) =>
+              a.channel_type !== 'course_hub' ||
+              enrolledChannelIds.has(a.channel_id) ||
+              a.publisher.id === activeUser.id
+          );
+
+      const sorted = filterAndSortAnnouncements(scopedAnnouncements, {
+        channelId: requestedChannelId,
         search: query.search,
         department: query.department,
         tag: query.tag,
@@ -2096,7 +2253,7 @@ export async function handlePostgresApiRequest(
 
       const title = String(body.title || '').trim();
       const content = String(body.content || '').trim();
-      const requestedChannelId = body.channel_id ? Number(body.channel_id) : 1;
+      const scopeMode = String(body.scope_mode || '').trim();
       const isUrgent =
         body.is_urgent === true || String(body.is_urgent) === 'true';
       const triggerSms =
@@ -2129,26 +2286,103 @@ export async function handlePostgresApiRequest(
         };
       }
 
-      const targetChannel = await resolveValidChannel(pool, requestedChannelId);
-      const channelId = targetChannel.id;
-      const targetChannelType = targetChannel.channel_type;
+      const isCampusWide =
+        scopeMode === 'campus_wide' ||
+        (!body.channel_id && !body.channel_ids && activeUser.role === 'dept_head');
 
-      if (
-        (targetChannelType === 'university' ||
-          targetChannelType === 'college') &&
-        activeUser.role === 'faculty'
-      ) {
+      if (isCampusWide && activeUser.role !== 'dept_head') {
         return {
           status: 403,
           body: {
             status: 403,
             message:
-              'HTTP 403 Forbidden: University-wide and College-wide memos are restricted to Department Heads, Deans, and IT Administrators.',
+              'HTTP 403 Forbidden: Only Department Heads are authorized to publish Campus-Wide Announcements.',
           },
         };
       }
 
-      let parsedTags: string[] = ['OFFICIAL MEMO', 'CDO CAMPUS', 'CITC'];
+      let targetChannelIds: number[] = [];
+
+      if (isCampusWide) {
+        const uniRes = await pool.query(
+          "SELECT id FROM channels WHERE channel_type = 'university' ORDER BY id ASC LIMIT 1"
+        );
+        if (uniRes.rowCount && uniRes.rowCount > 0) {
+          targetChannelIds = [Number(uniRes.rows[0].id)];
+        } else {
+          const insUni = await pool.query(
+            `INSERT INTO channels (
+               course_code, name, description, channel_type,
+               scope_college, scope_department, scope_section, instructor_name, created_by
+             )
+             VALUES (
+               'CAMPUS', '# USTP Campus-Wide', 'USTP Campus-Wide Official Announcements', 'university',
+               'USTP', $1, NULL, $2, $3
+             )
+             RETURNING id`,
+            [
+              activeUser.academic_profile?.department || 'CITC',
+              activeUser.name,
+              activeUser.id,
+            ]
+          );
+          targetChannelIds = [Number(insUni.rows[0].id)];
+        }
+      } else {
+        let parsedChannelIds: number[] = [];
+        if (Array.isArray(body.channel_ids)) {
+          parsedChannelIds = body.channel_ids
+            .map((id) => Number(id))
+            .filter((id) => !Number.isNaN(id) && id > 0);
+        } else if (typeof body.channel_ids === 'string' && body.channel_ids.trim()) {
+          try {
+            const parsed = JSON.parse(body.channel_ids);
+            if (Array.isArray(parsed)) {
+              parsedChannelIds = parsed
+                .map((id) => Number(id))
+                .filter((id) => !Number.isNaN(id) && id > 0);
+            }
+          } catch {
+            parsedChannelIds = body.channel_ids
+              .split(',')
+              .map((id) => Number(id.trim()))
+              .filter((id) => !Number.isNaN(id) && id > 0);
+          }
+        }
+
+        if (parsedChannelIds.length > 0) {
+          targetChannelIds = Array.from(new Set(parsedChannelIds));
+        } else {
+          const requestedChannelId = body.channel_id
+            ? Number(body.channel_id)
+            : 1;
+          const targetChannel = await resolveValidChannel(
+            pool,
+            requestedChannelId
+          );
+          if (
+            (targetChannel.channel_type === 'university' ||
+              targetChannel.channel_type === 'college') &&
+            activeUser.role !== 'dept_head'
+          ) {
+            return {
+              status: 403,
+              body: {
+                status: 403,
+                message:
+                  'HTTP 403 Forbidden: University-wide and College-wide memos are restricted to Department Heads.',
+              },
+            };
+          }
+          targetChannelIds = [targetChannel.id];
+        }
+      }
+
+      let parsedTags: string[] = [
+        'OFFICIAL MEMO',
+        'CDO CAMPUS',
+        activeUser.academic_profile?.department || 'CITC',
+      ];
       if (Array.isArray(body.tags)) {
         parsedTags = body.tags.map((t) => String(t));
       } else if (typeof body.tags === 'string' && body.tags.trim()) {
@@ -2165,49 +2399,59 @@ export async function handlePostgresApiRequest(
       const attachmentUrl = attachmentName
         ? `/storage/memos/${attachmentName}`
         : null;
+      const publisherDeptSubtitle = `${
+        activeUser.academic_profile?.department || 'CITC'
+      } Department`;
 
-      const insRes = await pool.query(
-        `INSERT INTO announcements (
-           channel_id, publisher_id, title, subtitle, content,
-           attachment_url, attachment_name, attachment_type, tags,
-           is_urgent, is_pinned, trigger_sms_fallback, status, is_edited,
-           published_at, created_at, updated_at
-         )
-         VALUES ($1, $2, $3, 'USTP Digital Transformation', $4, $5, $6, $7, $8::jsonb, $9, $10, $11, $12, FALSE, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-         RETURNING id`,
-        [
-          channelId,
-          activeUser.id,
-          title,
-          content,
-          attachmentUrl,
-          attachmentName,
-          attachmentType || null,
-          JSON.stringify(parsedTags),
-          isUrgent,
-          isUrgent,
-          triggerSms,
-          status === 'draft' ? 'draft' : 'published',
-        ]
-      );
-
-      const newId = Number(insRes.rows[0].id);
-      await pool.query(
-        `INSERT INTO announcement_reads (announcement_id, user_id)
-         VALUES ($1, $2)
-         ON CONFLICT (announcement_id, user_id) DO NOTHING`,
-        [newId, activeUser.id]
-      );
+      let firstCreatedId = 0;
+      for (const cid of targetChannelIds) {
+        const insRes = await pool.query(
+          `INSERT INTO announcements (
+             channel_id, publisher_id, title, subtitle, content,
+             attachment_url, attachment_name, attachment_type, tags,
+             is_urgent, is_pinned, trigger_sms_fallback, status, is_edited,
+             published_at, created_at, updated_at
+           )
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12, $13, FALSE, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+           RETURNING id`,
+          [
+            cid,
+            activeUser.id,
+            title,
+            publisherDeptSubtitle,
+            content,
+            attachmentUrl,
+            attachmentName,
+            attachmentType || null,
+            JSON.stringify(parsedTags),
+            isUrgent,
+            isUrgent,
+            triggerSms,
+            status === 'draft' ? 'draft' : 'published',
+          ]
+        );
+        const newId = Number(insRes.rows[0].id);
+        if (!firstCreatedId) firstCreatedId = newId;
+        await pool.query(
+          `INSERT INTO announcement_reads (announcement_id, user_id)
+           VALUES ($1, $2)
+           ON CONFLICT (announcement_id, user_id) DO NOTHING`,
+          [newId, activeUser.id]
+        );
+      }
 
       const allAnnouncements = await fetchAnnouncementsFromPg(pool, activeUser);
       const created =
-        allAnnouncements.find((a) => a.id === newId) || allAnnouncements[0];
+        allAnnouncements.find((a) => a.id === firstCreatedId) ||
+        allAnnouncements[0];
 
       return {
         status: 201,
         body: {
           message: isUrgent
             ? 'Urgent Announcement saved to PostgreSQL! Push alerts queued (<= 2.0s) and pinned to top.'
+            : targetChannelIds.length > 1
+            ? `Announcement published across ${targetChannelIds.length} handled Course Hubs.`
             : 'Announcement published and saved to PostgreSQL.',
           data: created,
         },

@@ -6,6 +6,7 @@ import {
   ArrowRight,
   BookOpen,
   CheckCircle2,
+  Clock,
   Edit3,
   FolderPlus,
   Hash,
@@ -20,6 +21,7 @@ import {
   createChannelApi,
   deleteChannelApi,
   joinChannelApi,
+  leaveChannelApi,
   updateChannelApi,
 } from '../../lib/api-client';
 import {
@@ -32,6 +34,7 @@ import {
   getTopLevelCourseHubs,
   isUserCourseAdmin,
   isUserEnrolledInCourseHub,
+  isUserPendingInCourseHub,
 } from '../../lib/domain-logic';
 import type { Channel, LaravelValidationError } from '../../types/api';
 
@@ -172,14 +175,35 @@ export function ChannelRosterModal() {
     try {
       const res = await joinChannelApi(channelId);
       await refreshChannels();
-      showToast(res.message || 'Joined Course Hub!', 'success');
-      if (openAfterJoin) {
+      const wasImmediatelyApproved = isUserEnrolledInCourseHub(res.data, user);
+      showToast(
+        res.message ||
+          (wasImmediatelyApproved
+            ? 'Joined Course Hub!'
+            : 'Join request sent! Waiting for Course Admin approval.'),
+        'success'
+      );
+      if (openAfterJoin && wasImmediatelyApproved) {
         setIsChannelModalOpen(false);
         router.push(`/channels/${channelId}`);
       }
     } catch (err) {
       const apiErr = err as LaravelValidationError;
       showToast(apiErr.message || 'Unable to join Course Hub.', 'error');
+    } finally {
+      setJoiningHubId(null);
+    }
+  };
+
+  const handleCancelJoinRequest = async (channelId: number) => {
+    setJoiningHubId(channelId);
+    try {
+      const res = await leaveChannelApi(channelId);
+      await refreshChannels();
+      showToast(res.message || 'Join request cancelled.', 'info');
+    } catch (err) {
+      const apiErr = err as LaravelValidationError;
+      showToast(apiErr.message || 'Unable to cancel join request.', 'error');
     } finally {
       setJoiningHubId(null);
     }
@@ -778,6 +802,7 @@ export function ChannelRosterModal() {
                       : hub.members_count ?? 0;
                   const hubSubChannels = getSubChannelsForHub(channels, hub.id);
                   const isJoined = isUserEnrolledInCourseHub(hub, user);
+                  const isPending = isUserPendingInCourseHub(hub, user);
                   const isHubCourseAdmin = isUserCourseAdmin(hub, user);
 
                   return (
@@ -799,6 +824,12 @@ export function ChannelRosterModal() {
                               <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-700">
                                 <CheckCircle2 className="w-3.5 h-3.5" />
                                 <span>Joined</span>
+                              </span>
+                            )}
+                            {isPending && !isJoined && (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-300 text-[10px] font-extrabold">
+                                <Clock className="w-3 h-3" />
+                                <span>Pending Approval</span>
                               </span>
                             )}
                           </div>
@@ -828,6 +859,20 @@ export function ChannelRosterModal() {
                               <span>Open Hub</span>
                               <ArrowRight className="w-3.5 h-3.5" />
                             </button>
+                          ) : isPending ? (
+                            <button
+                              type="button"
+                              disabled={joiningHubId === hub.id}
+                              onClick={() => handleCancelJoinRequest(hub.id)}
+                              className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-bold border border-amber-300 bg-amber-50 text-amber-900 hover:bg-amber-100 rounded disabled:opacity-50 cursor-pointer"
+                            >
+                              <Clock className="w-3.5 h-3.5" />
+                              <span>
+                                {joiningHubId === hub.id
+                                  ? 'Updating...'
+                                  : 'Pending Approval (Cancel)'}
+                              </span>
+                            </button>
                           ) : (
                             <button
                               type="button"
@@ -838,8 +883,10 @@ export function ChannelRosterModal() {
                               <Plus className="w-3.5 h-3.5" />
                               <span>
                                 {joiningHubId === hub.id
-                                  ? 'Joining...'
-                                  : 'Join Course Hub'}
+                                  ? 'Submitting...'
+                                  : isHubCourseAdmin
+                                  ? 'Join Course Hub'
+                                  : 'Request to Join'}
                               </span>
                             </button>
                           )}

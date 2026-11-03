@@ -20,11 +20,18 @@ class AnnouncementResource extends JsonResource
             ? $this->reads()->where('user_id', $user->id)->exists()
             : false;
 
+        $pubDept = $this->publisher?->academicProfile?->department ?? 'CITC';
+        $rawSubtitle = $this->subtitle ?? '';
+        $displaySubtitle = ($rawSubtitle !== '' && $rawSubtitle !== 'USTP Digital Transformation')
+            ? $rawSubtitle
+            : "{$pubDept} Department";
+
         return [
             'id' => $this->id,
             'channel_id' => $this->channel_id,
+            'channel_type' => $this->channel?->channel_type ?? 'course_hub',
             'title' => $this->title,
-            'subtitle' => $this->subtitle ?? 'USTP Digital Transformation',
+            'subtitle' => $displaySubtitle,
             'content' => $this->content,
             'attachment_url' => $this->attachment_url,
             'attachment_name' => $this->attachment_name,
@@ -47,7 +54,7 @@ class AnnouncementResource extends JsonResource
                 'id' => $this->publisher?->id ?? $this->publisher_id,
                 'name' => $this->publisher?->name ?? 'Aki Hayakawa',
                 'role' => $this->publisher?->role ?? 'faculty',
-                'department' => $this->publisher?->academicProfile?->department ?? 'CITC',
+                'department' => $pubDept,
                 'avatar_url' => $this->publisher?->avatar_url,
             ],
         ];

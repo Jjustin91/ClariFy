@@ -35,10 +35,14 @@ export function isSubChannel(channel: Channel | undefined): boolean {
 }
 
 /**
- * Returns only top-level Course Hubs (excluding inner sub-channels).
+ * Returns only top-level Course Hubs (excluding inner sub-channels and university-wide containers).
  */
 export function getTopLevelCourseHubs(channels: Channel[]): Channel[] {
-  return channels.filter((ch) => !isSubChannel(ch));
+  return channels.filter(
+    (ch) =>
+      (!ch.channel_type || ch.channel_type === 'course_hub') &&
+      !isSubChannel(ch)
+  );
 }
 
 /**
@@ -57,7 +61,7 @@ export function isUserCourseAdmin(
 }
 
 /**
- * Checks whether the given user is currently enrolled in a Course Hub's roster.
+ * Checks whether the given user is currently enrolled (approved) in a Course Hub's roster.
  */
 export function isUserEnrolledInCourseHub(
   hub: Channel | undefined,
@@ -75,7 +79,25 @@ export function isUserEnrolledInCourseHub(
 }
 
 /**
- * Returns only the top-level Course Hubs that the user has joined or created.
+ * Checks whether the given user has a pending join request for a Course Hub.
+ */
+export function isUserPendingInCourseHub(
+  hub: Channel | undefined,
+  user: User | undefined
+): boolean {
+  if (!hub || !user || !user.id) return false;
+  const pending = hub.pending_requests || [];
+  return pending.some(
+    (m) =>
+      Number(m.id) === Number(user.id) ||
+      (user.institutional_id &&
+        m.institutional_id.trim().toLowerCase() ===
+          user.institutional_id.trim().toLowerCase())
+  );
+}
+
+/**
+ * Returns only the top-level Course Hubs that the user has joined (and been approved into) or created.
  */
 export function getJoinedCourseHubs(
   channels: Channel[],
@@ -126,6 +148,7 @@ export function formatSubChannelDisplayName(channel: Channel | undefined): strin
 /**
  * Resolves the active parent Course Hub, optional active custom sub-channel,
  * and effective Course Hub ID for a given route channelId parameter.
+ * Strictly prevents unenrolled users from viewing any Course Hub they have not joined.
  */
 export function resolveCourseHubSelection(
   channels: Channel[],
@@ -144,23 +167,60 @@ export function resolveCourseHubSelection(
     ? getJoinedCourseHubs(channels, user)
     : allCourseHubs;
 
-  const requestedChannel =
-    channels.find((c) => c.id === requestedChannelId) ||
-    courseHubs[0] ||
-    allCourseHubs[0] ||
-    channels[0];
+  // When a user is provided and has not joined any Course Hubs yet, never expose any hub
+  if (user && courseHubs.length === 0) {
+    return {
+      courseHubs: [],
+      allCourseHubs,
+      activeChannel: undefined,
+      activeSubChannel: undefined,
+      parentHubId: null,
+      channelId: 0,
+    };
+  }
 
+  const rawRequested = channels.find((c) => c.id === requestedChannelId);
+  const rawParentHubId = getChannelParentHubId(rawRequested);
+
+  if (user) {
+    // Check if the requested channel is a sub-channel of a joined Course Hub
+    if (rawRequested && rawParentHubId !== null) {
+      const joinedParent = courseHubs.find((h) => h.id === rawParentHubId);
+      if (joinedParent) {
+        return {
+          courseHubs,
+          allCourseHubs,
+          activeChannel: joinedParent,
+          activeSubChannel: isSubChannel(rawRequested)
+            ? rawRequested
+            : undefined,
+          parentHubId: rawParentHubId,
+          channelId: joinedParent.id,
+        };
+      }
+    }
+
+    // Check if the requested channel is a joined top-level Course Hub
+    const joinedHub = courseHubs.find((h) => h.id === requestedChannelId);
+    const activeChannel = joinedHub || courseHubs[0];
+    return {
+      courseHubs,
+      allCourseHubs,
+      activeChannel,
+      activeSubChannel: undefined,
+      parentHubId: null,
+      channelId: activeChannel ? activeChannel.id : 0,
+    };
+  }
+
+  const requestedChannel =
+    rawRequested || courseHubs[0] || allCourseHubs[0] || channels[0];
   const parentHubId = getChannelParentHubId(requestedChannel);
   const activeChannel =
     parentHubId !== null
       ? allCourseHubs.find((h) => h.id === parentHubId) ||
         courseHubs[0] ||
         requestedChannel
-      : courseHubs.length > 0 &&
-        requestedChannel &&
-        !isUserEnrolledInCourseHub(requestedChannel, user) &&
-        requestedChannelId === 1
-      ? courseHubs[0]
       : requestedChannel;
 
   const activeSubChannel =
@@ -298,6 +358,14 @@ export function formatSubjectHashtag(rawInput: string): string {
  */
 export function canPublishOrManageAnnouncements(role: UserRole): boolean {
   return role === 'faculty' || role === 'dept_head';
+}
+
+/**
+ * Only Department Heads can publish Campus-Wide Announcements on All Announcements / Dashboard.
+ * Instructors/Faculty publish course-specific announcements inside their handled Course Hubs.
+ */
+export function canPublishCampusWideAnnouncements(role: UserRole): boolean {
+  return role === 'dept_head';
 }
 
 /**

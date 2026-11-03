@@ -1,71 +1,108 @@
-# Course Admin Role, Leave Course Hub, Real Avatar Upload & Navigation Fixes
+# ClariFy — Favicon, Strict Course Hub Enrollment & Join Approval, Course Admin Roster Control, and Scoped Announcement Separation
 
-Fix input typing in the **+ Add Course Hub** and **Edit Course Hub** modals, introduce the **Course Admin** role (granted automatically to all Faculty and to the creator of a Course Hub) with **Delete Course Hub** moved inside **Edit Course Hub**, add a **Leave Course Hub** action inside the Course Hub top header settings menu, enable real image file uploads for user profile avatars, and fix first-click navigation to **Noticeboard Feed** and **Isolated Q&A Threads**.
+This update adds the official ClariFy logo to the browser tab favicon, prevents unenrolled users from viewing Course Hub chats/FAQs until they join and are approved, restricts adding members and approving join requests to Course Admins, displays the publisher's department directly under announcement titles, and separates Department Head campus-wide announcements from Instructor course-specific Noticeboard Feed announcements.
 
 ## User Review & Critical Decisions
 
 > [!IMPORTANT]
-> Summary of confirmed product decisions:
-> - **Course Admin Role**: All Faculty automatically hold the **Course Admin** role, and any Student who creates a Course Hub is the **Course Admin** for that Course Hub. Only Course Admins can **Edit** and **Delete** a Course Hub.
-> - **Delete Inside Edit Course Hub**: The standalone Delete buttons on the sidebar and Browse modal are removed; **Delete Course Hub** (with inline confirmation) lives inside the **Edit Course Hub** modal.
-> - **Leave Course Hub Placement**: Placed inside the Course Hub top header settings menu (`Course Hub Settings & Channel Roster`).
+> The following product and access-control decisions incorporate your prompt instructions and confirmed preferences:
+
+- **Confirmed Decision 1 (Course Admin Member Management)**: Only **Course Admins** (the Course Hub creator and any Faculty / Department Head) can manually add or remove members in the Course Hub roster and approve or decline incoming join requests.
+- **Confirmed Decision 2 (All Announcements vs. Course Hub Noticeboard Feed)**:
+  - **All Announcements** (and Dashboard Latest Announcements) displays both Campus-Wide announcements and notices from the user's joined Course Hubs, while **only Department Heads (`dept_head`)** can publish Campus-Wide announcements across multiple departments without a class section selector.
+  - **Course Hub Noticeboard Feed** displays only announcements posted specifically to that Course Hub, and **Instructors / Faculty** can publish multiple course-specific announcements fixed to their handled Course Hub.
+- **Confirmed Decision 3 (Course Hub Join Approval & Strict Enrollment Gate)**:
+  - Newly created or unenrolled accounts cannot view any Course Hub's chat stream, Noticeboard Feed, Q&A Threads, or Class FAQs—even if they visit `/channels/1` directly. Instead, they see the `"You Haven't Joined a Course Hub Yet"` screen.
+  - Clicking **Join Course Hub** in **Browse Course Hubs** submits a **Pending Join Request** (unless the user is already a Course Admin / Faculty), which a **Course Admin** can approve or decline inside the Course Hub's settings and roster panel.
+
+---
 
 ## 1. Overview & Core Concept
 
 - **What It Does**:
-  1. **Fixes Unresponsive Inputs in Add/Edit Course Hub**: Prevents `useEffect` in `ChannelRosterModal` from re-running on every keystroke by removing the unstable `courseHubs` array reference from its dependency list.
-  2. **Course Admin Permissions & Delete Relocation**: Restricts editing and deleting a Course Hub to **Course Admins** (`user.role === 'faculty' | 'dept_head'` or `hub.created_by === user.id`) and moves the **Delete Course Hub** action inside the **Edit Course Hub** modal.
-  3. **Leave Course Hub**: Adds a **Leave Course Hub** button inside the Course Hub top header settings menu so any member can leave a joined Course Hub.
-  4. **Real Profile Picture (PFP) Upload**: Replaces the placeholder avatar button with a real image file picker that resizes/encodes the selected photo and displays the uploaded avatar across the profile drawer, settings modal, and chat messages.
-  5. **Direct First-Click Navigation to Noticeboard Feed & Q&A Threads**: Syncs the active Course Hub tab with the `?tab=` URL query parameter (`?tab=feed`, `?tab=threads`) so clicking **Noticeboard Feed** or **Isolated Q&A Threads** from any Course Hub or sub-channel opens that view immediately on the first click.
+  1. **Browser Tab Favicon (1st Image)**: Configures the ClariFy icon in the application metadata so the browser tab displays the ClariFy logo instead of a generic globe icon.
+  2. **Strict Course Hub Access for Unenrolled Accounts (2nd Image)**: Ensures `resolveCourseHubSelection` only selects from the user's **joined and approved** Course Hubs. If a user has not joined any Course Hub (or navigates to a hub ID they are not enrolled in), no Course Hub chat, Q&A threads, or Class FAQs are loaded or displayed.
+  3. **Course Hub Join Approval & Course Admin Roster Controls**:
+     - When a student requests to join a Course Hub from **Browse Course Hubs**, their membership is recorded as **Pending Approval** (`pending_requests` on the Course Hub).
+     - In **Browse Course Hubs**, the card shows a **Pending Approval** badge for that student until approved.
+     - Inside the Course Hub's **Course Hub Settings & Channel Roster** menu (and header badge), **Course Admins** see a **Pending Join Requests** list with **Approve** and **Decline** buttons, and only **Course Admins** can use the **+ Add Member** form or remove roster members.
+  4. **Publisher Department Subtitle on Announcement Cards (3rd Image)**: Displays the publisher's department (e.g., `CITC Department` or the multi-department scope) directly beneath the announcement title on every Announcement Card.
+  5. **Campus-Wide (Dept Head) vs. Course Hub (Instructor) Announcements**:
+     - **Campus-Wide Mode (`All Announcements` & `Dashboard`)**: The **Create Announcement** button on `All Announcements` and `Dashboard` is available exclusively to **Department Heads (`dept_head`)**. Opening the modal from these pages launches **Campus-Wide Announcement Mode**, which removes the course/section scope dropdown and lets the Department Head target one or more departments (`CITC`, `CEA`, `COT`, `CSM`, `CDO CAMPUS`).
+     - **Course Hub Noticeboard Mode (`Course Hub -> Noticeboard Feed`)**: Inside a Course Hub's `Noticeboard Feed`, **Instructors / Faculty** (and Course Admins) can click **+ Create Announcement** to publish multiple announcements scoped directly to that Course Hub (`channel_id` locked to the current Course Hub, with optional multi-select across the instructor's handled Course Hubs).
+
+---
 
 ## 2. User Experience & Visual Design
 
 - **Key User Flows**:
-  1. **Adding & Editing a Course Hub**:
-     - Modal form fields initialize only once when the modal opens, allowing uninterrupted typing across Course Code, Course Hub Name, Target Class Section, and Description.
-  2. **Course Admin Controls & Deleting a Course Hub**:
-     - Course Admins see the **Edit** pencil icon on the Course Hub and a `Course Admin` badge in the Course Hub settings.
-     - Inside **Edit Course Hub**, a **Delete Course Hub** button on the bottom-left opens an inline confirmation prompt before deleting the hub.
-  3. **Leaving a Course Hub**:
-     - Opening the gear icon (`Course Hub Settings & Channel Roster`) in the top header displays a **Leave Course Hub** button that removes the user from the hub's roster and redirects to their next joined hub or Dashboard.
-  4. **Uploading a Profile Avatar**:
-     - In **Settings -> Profile & SMS Fallback Settings**, clicking **Upload Avatar** opens the device file picker (`accept="image/*"`), previews the cropped/compressed photo immediately, and persists it to the database on **Save Profile**.
-  5. **Switching to Noticeboard Feed or Isolated Q&A Threads**:
-     - Clicking **Noticeboard Feed** or **Isolated Q&A Threads** under any Course Hub in the left sidebar navigates to `/channels/{hubId}?tab=feed` or `/channels/{hubId}?tab=threads` so the view opens on the first click without landing on `# general` first.
+  - **Unenrolled User Flow**: A newly registered student opens **View Messages** (`/channels/1`) and sees `"You Haven't Joined a Course Hub Yet"` in the main workspace and an empty Class FAQs panel—never another class's messages or FAQs.
+  - **Requesting & Approving Course Hub Membership**:
+    1. Student opens **Browse Course Hubs** and clicks **Request to Join** on a Course Hub.
+    2. The button updates to **Pending Approval (Cancel Request)**.
+    3. A **Course Admin** opens the Course Hub, sees a notification badge on the top-right Settings gear icon, opens **Course Hub Settings & Channel Roster**, and clicks **Approve** next to the student's request.
+    4. The student is immediately added to the active roster and the Course Hub appears in their left sidebar.
+  - **Department Head Campus-Wide Announcement Flow**:
+    1. A Department Head clicks **Create Announcement** on **All Announcements** or **Dashboard**.
+    2. The modal opens in **Campus-Wide Announcement** mode without any class section selector, allowing selection of multiple department tags (`CITC`, `CEA`, `COT`, `CSM`, `CDO CAMPUS`).
+    3. Once published, the announcement card displays the posting department right under the title.
+  - **Instructor Course Hub Noticeboard Flow**:
+    1. An Instructor opens a handled Course Hub, switches to **Noticeboard Feed**, and clicks **+ Create Announcement**.
+    2. The modal opens locked to that Course Hub (with an option to also post to other Course Hubs handled by that instructor) and publishes directly to the course's Noticeboard Feed.
+
+---
 
 ## 3. Key Product Decisions & Trade-Offs
 
-- **Decision 1: URL Query Parameter (`?tab=`) for Course Hub Views**
-  - *Chosen Approach*: Read and update `?tab=feed` and `?tab=threads` in `CourseHubPage`.
-  - *Why*: Previously, navigating from a sub-channel or another Course Hub triggered `router.push('/channels/' + hub.id)` which mounted the new route with the default `'messenger'` (`# general`) state, requiring a second click.
-- **Decision 2: Roster-Based Enrollment + Creator-Based Course Admin**
-  - *Chosen Approach*: Check `hub.roster` for whether a user is currently joined in a Course Hub, and check `user.role === 'faculty' || user.role === 'dept_head' || Number(hub.created_by) === Number(user.id)` for **Course Admin** privileges.
-  - *Why*: Allows even a Course Hub creator or faculty member to leave a Course Hub and re-join later via Browse Course Hubs while preserving Course Admin permissions.
+- **Decision 1: Strict Enrollment Gate in `resolveCourseHubSelection` and `CourseHubPage`**
+  - *Chosen Approach*: Never fall back to `allCourseHubs[0]` or `channels[0]` when `user` is provided. If the requested `channelId` is not in the user's joined `courseHubs`, fall back to `courseHubs[0]` if the user has joined another hub, or `undefined` if they have joined none. Also skip fetching announcements/threads when `activeChannel` is `undefined`.
+  - *Why*: Eliminates any data leakage of chat messages, announcements, or Class FAQs to unenrolled accounts.
+- **Decision 2: Self-Contained Join Approval State in PostgreSQL & Laravel**
+  - *Chosen Approach*: Add an `approval_status` column (`'approved' | 'pending'`) on `channel_user` (auto-migrated via `ALTER TABLE channel_user ADD COLUMN IF NOT EXISTS approval_status VARCHAR(24) NOT NULL DEFAULT 'approved'`). Existing members and Course Admins default to `'approved'`, while students joining via **Browse Course Hubs** insert with `approval_status = 'pending'` until approved by a Course Admin.
+  - *Why*: Persists join requests across refreshes and sessions in PostgreSQL while keeping active roster queries (`approval_status = 'approved'`) fast and accurate.
+- **Decision 3: Context-Aware Announcement Modal (`campus_wide` vs. `course_hub`)**
+  - *Chosen Approach*: Open the announcement modal in `'campus_wide'` mode when triggered from **Dashboard** or **All Announcements** (restricted to `dept_head`), and in `'course_hub'` mode when triggered from a Course Hub's **Noticeboard Feed** (available to Faculty/Instructors).
+  - *Why*: Enforces the organizational boundary between university/department-wide memos and course-level instructor updates.
+
+---
 
 ## 4. Technical Architecture & Data Strategy *(Technical Reference)*
 
 ```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                     Course Hub & Profile Architecture                   │
-├─────────────────────────────────────────────────────────────────────────┤
-│ 1. Course Admin & Leave Flow                                            │
-│    ├─ isUserCourseAdmin(hub, user):                                     │
-│    │    true if user.role in ['faculty', 'dept_head']                   │
-│    │         or Number(hub.created_by) === Number(user.id)              │
-│    ├─ Edit Course Hub Modal (Course Admins only):                       │
-│    │    ├─ PATCH /api/v1/channels/{id} (Save Changes)                   │
-│    │    └─ DELETE /api/v1/channels/{id} (Delete Course Hub)             │
-│    └─ Top Header Settings Menu:                                         │
-│         └─ POST /api/v1/channels/{id}/leave -> removes user from roster │
-├─────────────────────────────────────────────────────────────────────────┤
-│ 2. First-Click Sidebar Navigation                                       │
-│    ├─ Click "Noticeboard Feed"     -> /channels/{hub.id}?tab=feed       │
-│    ├─ Click "Isolated Q&A Threads" -> /channels/{hub.id}?tab=threads    │
-│    └─ Click "# general"            -> /channels/{hub.id}                │
-├─────────────────────────────────────────────────────────────────────────┤
-│ 3. Real Avatar Upload (PFP)                                             │
-│    └─ File Input -> 256x256 Canvas Data URL -> POST /api/v1/profile     │
-│       -> Rendered in AppShell Drawer, ProfileModal, & MessengerChatBox  │
-└─────────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                        Browser Tab & App Metadata                            │
+│  • Favicon / Apple Touch Icon -> /assets/aistudio/image_07899ab9.png         │
+└──────────────────────────────────────────────────────────────────────────────┘
+                                       │
+         ┌─────────────────────────────┴─────────────────────────────┐
+         ▼                                                           ▼
+┌─────────────────────────────────────────┐   ┌─────────────────────────────────────────┐
+│     Scoped Course Hub & Join Gate       │   │   Dual-Scope Announcement Architecture  │
+│                                         │   │                                         │
+│ 1. Unenrolled Guard:                    │   │ 1. All Announcements / Dashboard:       │
+│    • Active channel resolves ONLY from  │   │    • Only Dept Head can create          │
+│      approved joined hubs (`roster`)    │   │    • No section scope selector          │
+│    • Hides chat, feed & Class FAQs      │   │    • Multi-department tag selection     │
+│      when `activeChannel === undefined` │   │    • Shows Campus-Wide + Joined Course  │
+│                                         │   │      announcements                      │
+│ 2. Browse Course Hubs Join Request:     │   │                                         │
+│    • Student clicks "Request to Join"   │   │ 2. Course Hub Noticeboard Feed:         │
+│    • Stored in `channel_user` with      │   │    • Instructors / Faculty can create   │
+│      `approval_status = 'pending'`      │   │      multiple announcements for their   │
+│                                         │   │      handled Course Hub(s)              │
+│ 3. Course Admin Roster & Approval:      │   │    • Feed shows ONLY announcements      │
+│    • Only Course Admins see "+ Add      │   │      for that specific Course Hub       │
+│      Member" & "Pending Join Requests"  │   │                                         │
+│    • Approve -> `approval_status =      │   │ 3. Announcement Card Header:            │
+│      'approved'`                        │   │    • Subtitle under Title displays      │
+│    • Decline -> removes pending row     │   │      publisher's Department             │
+└─────────────────────────────────────────┘   └─────────────────────────────────────────┘
 ```
+
+- **Data Model & State**:
+  - `Channel`: Includes `roster: ChannelMember[]` (approved members) and `pending_requests?: ChannelMember[]` (users awaiting Course Admin approval).
+  - `Announcement`: `channel_id` is `0` / campus-level (or flagged with `CAMPUS_WIDE` metadata) for Department Head campus-wide notices, and set to the specific Course Hub `id` for instructor course notices. Under the card's title, the subtitle displays the publisher's department (e.g., `CITC Department` or `CEA Department`).
+- **Interactive Component & State Mapping**:
+  - **Browse Course Hubs Modal**: Displays `Request to Join` for unenrolled students, `Pending Approval` when a request is awaiting Course Admin action, and `Joined / Open Hub` once approved (Course Admins who click Join are approved immediately).
+  - **Course Hub Settings & Roster Popover**: Hides the `+ Add Member` form and member removal buttons for non-admins; displays a **Pending Join Requests** section for Course Admins with **Approve** and **Decline** buttons.
+  - **Announcement Form Modal**: Adapts between Campus-Wide mode (no section selector, multi-department tags, `dept_head` only) and Course Hub mode (locked to the current Course Hub or multi-select across the instructor's handled Course Hubs).

@@ -184,6 +184,13 @@ export default function CourseHubPage() {
       if (!isAuthReady || !isAuthenticated || user.role === 'it_admin') {
         return;
       }
+      if (!targetChannelId) {
+        setAnnouncements([]);
+        setThreads([]);
+        setOpenFaqIds([]);
+        setIsLoading(false);
+        return;
+      }
       if (!hasLoadedOnceRef.current) {
         setIsLoading(true);
       }
@@ -224,6 +231,13 @@ export default function CourseHubPage() {
       router.replace('/admin');
       return;
     }
+    if (!channelId) {
+      setAnnouncements([]);
+      setThreads([]);
+      setOpenFaqIds([]);
+      setIsLoading(false);
+      return;
+    }
     void loadHubData(channelId);
   }, [
     loadHubData,
@@ -237,7 +251,13 @@ export default function CourseHubPage() {
 
   // Subscribe to Laravel Reverb channel & SSE/BroadcastChannel for real-time Discussion Threads & Q&A and Noticeboard Feed updates
   useEffect(() => {
-    if (!isAuthReady || !isAuthenticated || user.role === 'it_admin') {
+    if (
+      !isAuthReady ||
+      !isAuthenticated ||
+      user.role === 'it_admin' ||
+      !channelId ||
+      !activeChannel
+    ) {
       return;
     }
 
@@ -298,6 +318,7 @@ export default function CourseHubPage() {
     };
   }, [
     channelId,
+    activeChannel,
     isAuthReady,
     isAuthenticated,
     user.role,
@@ -452,7 +473,7 @@ export default function CourseHubPage() {
           ? 'Isolated Q&A Threads'
           : activeSubLabel
       })`
-    : 'IT3R2 — Software Engineering Hub';
+    : 'Course Hubs';
 
   if (!isAuthReady || !isAuthenticated || user.role === 'it_admin') {
     return null;
@@ -845,50 +866,61 @@ export default function CourseHubPage() {
 
           {/* Bottom Course Hub Scope Metadata: Current Faculty & Total Enrolled Count */}
           <div className="pt-4 mt-4 border-t border-white/10 text-[11px] text-slate-300 space-y-1.5">
-            <p className="font-bold text-ustp-gold">
-              {activeChannel?.scope_college || 'CITC'} •{' '}
-              {activeChannel?.scope_section || 'IT3R2'}
-            </p>
-            {(() => {
-              const members = activeChannel?.roster || [];
-              const enrolledCount =
-                activeChannel?.roster !== undefined
-                  ? activeChannel.roster.length
-                  : activeChannel?.members_count ?? 0;
-              const facultyMembers = members.filter(
-                (m) => m.role === 'faculty' || m.role === 'dept_head'
-              );
-              const instructorFallback =
-                activeChannel?.instructor_name &&
-                !members.some(
-                  (m) =>
-                    m.name === activeChannel.instructor_name &&
-                    m.role === 'student'
-                )
-                  ? activeChannel.instructor_name
-                  : null;
-              const currentFacultyLabel =
-                facultyMembers.length > 0
-                  ? facultyMembers.map((f) => f.name).join(', ')
-                  : instructorFallback || 'No Faculty Assigned Yet';
+            {activeChannel ? (
+              <>
+                <p className="font-bold text-ustp-gold">
+                  {activeChannel.scope_college || 'CITC'} •{' '}
+                  {activeChannel.scope_section || 'IT3R2'}
+                </p>
+                {(() => {
+                  const members = activeChannel.roster || [];
+                  const enrolledCount =
+                    activeChannel.roster !== undefined
+                      ? activeChannel.roster.length
+                      : activeChannel.members_count ?? 0;
+                  const facultyMembers = members.filter(
+                    (m) => m.role === 'faculty' || m.role === 'dept_head'
+                  );
+                  const instructorFallback =
+                    activeChannel.instructor_name &&
+                    !members.some(
+                      (m) =>
+                        m.name === activeChannel.instructor_name &&
+                        m.role === 'student'
+                    )
+                      ? activeChannel.instructor_name
+                      : null;
+                  const currentFacultyLabel =
+                    facultyMembers.length > 0
+                      ? facultyMembers.map((f) => f.name).join(', ')
+                      : instructorFallback || 'No Faculty Assigned Yet';
 
-              return (
-                <>
-                  <p className="text-slate-200 truncate" title={currentFacultyLabel}>
-                    <span className="font-semibold text-slate-400">
-                      Faculty:{' '}
-                    </span>
-                    <span className="font-bold text-white">
-                      {currentFacultyLabel}
-                    </span>
-                  </p>
-                  <p className="font-mono tabular-nums text-slate-400">
-                    Enrolled Roster: {enrolledCount}{' '}
-                    {enrolledCount === 1 ? 'member' : 'members'}
-                  </p>
-                </>
-              );
-            })()}
+                  return (
+                    <>
+                      <p
+                        className="text-slate-200 truncate"
+                        title={currentFacultyLabel}
+                      >
+                        <span className="font-semibold text-slate-400">
+                          Faculty:{' '}
+                        </span>
+                        <span className="font-bold text-white">
+                          {currentFacultyLabel}
+                        </span>
+                      </p>
+                      <p className="font-mono tabular-nums text-slate-400">
+                        Enrolled Roster: {enrolledCount}{' '}
+                        {enrolledCount === 1 ? 'member' : 'members'}
+                      </p>
+                    </>
+                  );
+                })()}
+              </>
+            ) : (
+              <p className="font-semibold text-slate-400">
+                No Course Hub selected
+              </p>
+            )}
           </div>
         </aside>
 
@@ -1032,12 +1064,15 @@ export default function CourseHubPage() {
                       <button
                         type="button"
                         onClick={() =>
-                          openAnnouncementModal({ defaultChannelId: channelId })
+                          openAnnouncementModal({
+                            defaultChannelId: channelId,
+                            mode: 'course_hub',
+                          })
                         }
                         className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-extrabold bg-ustp-navy text-white hover:opacity-95 whitespace-nowrap shrink-0 cursor-pointer"
                       >
                         <Plus className="w-3.5 h-3.5 text-ustp-gold" />
-                        <span>+ Create Announcement</span>
+                        <span>+ Create Course Announcement</span>
                       </button>
                     )}
                   </div>
@@ -1049,13 +1084,16 @@ export default function CourseHubPage() {
                       }`}
                       description="Official course memos and room reassignments will appear here chronologically with urgent notices pinned on top."
                       actionLabel={
-                        canPublish ? '+ Create First Announcement' : undefined
+                        canPublish
+                          ? '+ Create First Course Announcement'
+                          : undefined
                       }
                       onAction={
                         canPublish
                           ? () =>
                               openAnnouncementModal({
                                 defaultChannelId: channelId,
+                                mode: 'course_hub',
                               })
                           : undefined
                       }
@@ -1420,9 +1458,13 @@ export default function CourseHubPage() {
                 </div>
               </div>
 
-              {publishedFaqs.length === 0 ? (
+              {!activeChannel ? (
                 <p className="text-xs text-slate-500 py-4 text-center">
-                  No Class FAQs published for {activeChannel?.name} yet.
+                  Join a Course Hub to view Class FAQs.
+                </p>
+              ) : publishedFaqs.length === 0 ? (
+                <p className="text-xs text-slate-500 py-4 text-center">
+                  No Class FAQs published for {activeChannel.name} yet.
                 </p>
               ) : (
                 <div className="space-y-2.5">

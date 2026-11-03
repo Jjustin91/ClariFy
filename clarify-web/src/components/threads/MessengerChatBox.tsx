@@ -4,6 +4,8 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   ArrowRight,
+  Check,
+  Clock,
   Download,
   Edit3,
   FileText,
@@ -810,6 +812,44 @@ export function MessengerChatBox({
     }
   };
 
+  const handleApprovePendingMember = async (institutionalId: string) => {
+    if (!channelKey) return;
+    setIsManagingRoster(true);
+    try {
+      const res = await manageChannelMemberApi(channelKey, {
+        institutional_id: institutionalId,
+        action: 'approve',
+      });
+      await refreshChannels();
+      showToast(res.message || 'Join request approved!', 'success');
+    } catch (err) {
+      const apiErr = err as LaravelValidationError;
+      showToast(apiErr.message || 'Failed to approve join request.', 'error');
+    } finally {
+      setIsManagingRoster(false);
+    }
+  };
+
+  const handleRejectPendingMember = async (institutionalId: string) => {
+    if (!channelKey) return;
+    setIsManagingRoster(true);
+    try {
+      const res = await manageChannelMemberApi(channelKey, {
+        institutional_id: institutionalId,
+        action: 'reject',
+      });
+      await refreshChannels();
+      showToast(res.message || 'Join request declined.', 'info');
+    } catch (err) {
+      const apiErr = err as LaravelValidationError;
+      showToast(apiErr.message || 'Failed to decline join request.', 'error');
+    } finally {
+      setIsManagingRoster(false);
+    }
+  };
+
+  const pendingJoinRequests = channel?.pending_requests || [];
+
   const memberIdError = getFieldValidationError(
     rosterFieldErrors,
     'institutional_id'
@@ -898,9 +938,14 @@ export function MessengerChatBox({
               onClick={() => setShowSettingsMenu((prev) => !prev)}
               aria-label="Conversation options and settings"
               aria-expanded={showSettingsMenu}
-              className="p-2 rounded-full text-ustp-navy hover:bg-slate-300/70 transition-colors cursor-pointer"
+              className="relative p-2 rounded-full text-ustp-navy hover:bg-slate-300/70 transition-colors cursor-pointer"
             >
               <Settings className="w-5 h-5 stroke-[2.2]" />
+              {isCurrentUserCourseAdmin && pendingJoinRequests.length > 0 && (
+                <span className="absolute -top-0.5 -right-0.5 min-w-[16px] h-4 px-1 rounded-full bg-ustp-orange text-ustp-navy text-[10px] font-mono font-extrabold flex items-center justify-center">
+                  {pendingJoinRequests.length}
+                </span>
+              )}
             </button>
           </div>
         </div>
@@ -998,64 +1043,133 @@ export function MessengerChatBox({
                     Channel Roster ({enrolledCount})
                   </span>
                 </div>
-                <button
-                  type="button"
-                  disabled={isManagingRoster}
-                  onClick={handleSyncRosterAccess}
-                  className="px-2.5 py-1 text-[11px] font-bold bg-ustp-gold text-ustp-navy rounded hover:opacity-95 disabled:opacity-50 cursor-pointer"
-                >
-                  Join / Sync My Access
-                </button>
+                {isCurrentUserCourseAdmin && (
+                  <button
+                    type="button"
+                    disabled={isManagingRoster}
+                    onClick={handleSyncRosterAccess}
+                    className="px-2.5 py-1 text-[11px] font-bold bg-ustp-gold text-ustp-navy rounded hover:opacity-95 disabled:opacity-50 cursor-pointer"
+                  >
+                    Sync Admin Access
+                  </button>
+                )}
               </div>
 
-              {/* Add Student / Faculty Form */}
-              <form
-                onSubmit={handleAddMemberToRoster}
-                className="p-2.5 bg-slate-50 border border-slate-200 rounded-md space-y-2"
-              >
-                <p className="text-[11px] font-bold text-ustp-navy flex items-center gap-1">
-                  <UserPlus className="w-3.5 h-3.5" />
-                  <span>Add Student or Faculty to Roster</span>
-                </p>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-1.5">
-                  <input
-                    type="text"
-                    value={newMemberId}
-                    onChange={(e) => setNewMemberId(e.target.value)}
-                    placeholder="ID e.g. 2020201199"
-                    className="px-2.5 py-1.5 text-xs font-mono border border-slate-300 rounded bg-white text-ustp-text"
-                  />
-                  <input
-                    type="text"
-                    value={newMemberName}
-                    onChange={(e) => setNewMemberName(e.target.value)}
-                    placeholder="Full Name (optional)"
-                    className="px-2.5 py-1.5 text-xs border border-slate-300 rounded bg-white text-ustp-text"
-                  />
-                  <button
-                    type="submit"
-                    disabled={isManagingRoster}
-                    className="px-2.5 py-1.5 text-xs font-bold bg-ustp-navy text-white rounded hover:opacity-95 disabled:opacity-50 cursor-pointer"
-                  >
-                    + Add Member
-                  </button>
+              {/* Pending Join Requests (Course Admin Approval Queue) */}
+              {isCurrentUserCourseAdmin && pendingJoinRequests.length > 0 && (
+                <div className="p-2.5 bg-amber-50 border border-amber-300 rounded-md space-y-2">
+                  <div className="flex items-center justify-between">
+                    <p className="text-[11px] font-extrabold text-amber-950 flex items-center gap-1.5">
+                      <Clock className="w-3.5 h-3.5 text-amber-700" />
+                      <span>
+                        Pending Join Requests ({pendingJoinRequests.length})
+                      </span>
+                    </p>
+                    <span className="text-[10px] font-bold text-amber-800">
+                      Requires Approval
+                    </span>
+                  </div>
+                  <div className="divide-y divide-amber-200/80 max-h-36 overflow-y-auto bg-white rounded border border-amber-200">
+                    {pendingJoinRequests.map((reqMember) => (
+                      <div
+                        key={reqMember.institutional_id}
+                        className="flex items-center justify-between gap-2 px-2.5 py-2 text-xs"
+                      >
+                        <div className="min-w-0">
+                          <p className="font-bold text-ustp-text truncate">
+                            {reqMember.name}{' '}
+                            <span className="text-slate-500 font-mono font-normal text-[10px]">
+                              ({reqMember.institutional_id})
+                            </span>
+                          </p>
+                          <p className="text-[10px] font-semibold text-slate-500 uppercase">
+                            {reqMember.role.replace('_', ' ')} •{' '}
+                            {reqMember.section}
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-1 shrink-0">
+                          <button
+                            type="button"
+                            disabled={isManagingRoster}
+                            onClick={() =>
+                              handleApprovePendingMember(
+                                reqMember.institutional_id
+                              )
+                            }
+                            className="inline-flex items-center gap-1 px-2 py-1 rounded bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-extrabold disabled:opacity-50 cursor-pointer"
+                          >
+                            <Check className="w-3 h-3" />
+                            <span>Approve</span>
+                          </button>
+                          <button
+                            type="button"
+                            disabled={isManagingRoster}
+                            onClick={() =>
+                              handleRejectPendingMember(
+                                reqMember.institutional_id
+                              )
+                            }
+                            className="inline-flex items-center gap-1 px-2 py-1 rounded border border-red-300 bg-red-50 hover:bg-red-100 text-red-700 text-[10px] font-bold disabled:opacity-50 cursor-pointer"
+                          >
+                            <X className="w-3 h-3" />
+                            <span>Decline</span>
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
-                {memberIdError && (
-                  <p className="text-[11px] font-semibold text-red-600" role="alert">
-                    {memberIdError}
+              )}
+
+              {/* Add Student / Faculty Form — Restricted to Course Admins Only */}
+              {isCurrentUserCourseAdmin && (
+                <form
+                  onSubmit={handleAddMemberToRoster}
+                  className="p-2.5 bg-slate-50 border border-slate-200 rounded-md space-y-2"
+                >
+                  <p className="text-[11px] font-bold text-ustp-navy flex items-center gap-1">
+                    <UserPlus className="w-3.5 h-3.5" />
+                    <span>Add Student or Faculty to Roster (Course Admin)</span>
                   </p>
-                )}
-              </form>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-1.5">
+                    <input
+                      type="text"
+                      value={newMemberId}
+                      onChange={(e) => setNewMemberId(e.target.value)}
+                      placeholder="ID e.g. 2020201199"
+                      className="px-2.5 py-1.5 text-xs font-mono border border-slate-300 rounded bg-white text-ustp-text"
+                    />
+                    <input
+                      type="text"
+                      value={newMemberName}
+                      onChange={(e) => setNewMemberName(e.target.value)}
+                      placeholder="Full Name (optional)"
+                      className="px-2.5 py-1.5 text-xs border border-slate-300 rounded bg-white text-ustp-text"
+                    />
+                    <button
+                      type="submit"
+                      disabled={isManagingRoster}
+                      className="px-2.5 py-1.5 text-xs font-bold bg-ustp-navy text-white rounded hover:opacity-95 disabled:opacity-50 cursor-pointer"
+                    >
+                      + Add Member
+                    </button>
+                  </div>
+                  {memberIdError && (
+                    <p
+                      className="text-[11px] font-semibold text-red-600"
+                      role="alert"
+                    >
+                      {memberIdError}
+                    </p>
+                  )}
+                </form>
+              )}
 
               {/* Enrolled Roster Member List */}
               <div className="border border-slate-200 rounded-md divide-y divide-slate-100 max-h-52 overflow-y-auto bg-white">
                 {channelRoster.length === 0 ? (
                   <div className="px-3 py-4 text-center text-[11px] text-slate-500">
-                    No members enrolled yet. Click{' '}
-                    <span className="font-bold text-ustp-navy">
-                      Join / Sync My Access
-                    </span>{' '}
-                    or add a member above.
+                    No members enrolled yet.
                   </div>
                 ) : (
                   channelRoster.map((member) => (
@@ -1074,18 +1188,22 @@ export function MessengerChatBox({
                           {member.role.replace('_', ' ')} • {member.section}
                         </p>
                       </div>
-                      <button
-                        type="button"
-                        disabled={isManagingRoster}
-                        onClick={() =>
-                          handleRemoveMemberFromRoster(member.institutional_id)
-                        }
-                        aria-label={`Remove ${member.name} from roster`}
-                        title={`Remove ${member.name} from roster`}
-                        className="p-1 text-red-600 hover:text-red-800 hover:bg-red-50 rounded shrink-0 cursor-pointer"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
+                      {isCurrentUserCourseAdmin && (
+                        <button
+                          type="button"
+                          disabled={isManagingRoster}
+                          onClick={() =>
+                            handleRemoveMemberFromRoster(
+                              member.institutional_id
+                            )
+                          }
+                          aria-label={`Remove ${member.name} from roster`}
+                          title={`Remove ${member.name} from roster`}
+                          className="p-1 text-red-600 hover:text-red-800 hover:bg-red-50 rounded shrink-0 cursor-pointer"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
                     </div>
                   ))
                 )}

@@ -27,7 +27,7 @@ class Channel extends Model
     public function members(): BelongsToMany
     {
         return $this->belongsToMany(User::class, 'channel_user')
-            ->withPivot(['can_publish', 'joined_at']);
+            ->withPivot(['can_publish', 'approval_status', 'joined_at']);
     }
 
     public function announcements(): HasMany

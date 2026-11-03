@@ -31,10 +31,18 @@ class AnnouncementController
         }
 
         if ($channelId = $request->query('channel_id')) {
-            $resolvedChannel = Channel::find((int) $channelId) ?? Channel::first();
-            if ($resolvedChannel) {
-                $query->where('channel_id', $resolvedChannel->id);
-            }
+            $query->where('channel_id', (int) $channelId);
+        } elseif ($user) {
+            $enrolledIds = \Illuminate\Support\Facades\DB::table('channel_user')
+                ->where('user_id', $user->id)
+                ->pluck('channel_id')
+                ->all();
+
+            $query->where(function ($q) use ($enrolledIds, $user) {
+                $q->whereHas('channel', fn ($cq) => $cq->where('channel_type', '!=', 'course_hub'))
+                    ->orWhereIn('channel_id', $enrolledIds)
+                    ->orWhere('publisher_id', $user->id);
+            });
         }
 
         if ($tag = $request->query('tag')) {
@@ -100,11 +108,57 @@ class AnnouncementController
     public function store(Request $request): JsonResponse
     {
         $user = $request->user();
-        $channel = Channel::find($request->input('channel_id', 7)) ?? Channel::first();
-        if ($channel) {
-            $request->merge(['channel_id' => $channel->id]);
+        $scopeMode = trim((string) $request->input('scope_mode', ''));
+        $isCampusWide = $scopeMode === 'campus_wide' || (! $request->filled('channel_id') && ! $request->filled('channel_ids') && $user?->role === 'dept_head');
+
+        if ($isCampusWide && $user?->role !== 'dept_head') {
+            return response()->json([
+                'status' => 403,
+                'message' => 'HTTP 403 Forbidden: Only Department Heads are authorized to publish Campus-Wide Announcements.',
+            ], 403);
         }
 
+        $targetChannelIds = [];
+        if ($isCampusWide) {
+            $uniChannel = Channel::firstOrCreate(
+                ['channel_type' => 'university', 'course_code' => 'CAMPUS'],
+                [
+                    'name' => '# USTP Campus-Wide',
+                    'description' => 'USTP Campus-Wide Official Announcements',
+                    'scope_college' => 'USTP',
+                    'scope_department' => $user?->academicProfile?->department ?? 'CITC',
+                    'scope_section' => null,
+                    'instructor_name' => $user?->name ?? 'Department Head',
+                    'created_by' => $user?->id,
+                ]
+            );
+            $targetChannelIds = [$uniChannel->id];
+            $request->merge(['channel_id' => $uniChannel->id]);
+        } else {
+            $rawIds = $request->input('channel_ids');
+            if (is_array($rawIds)) {
+                $targetChannelIds = array_values(array_filter(array_map('intval', $rawIds)));
+            } elseif (is_string($rawIds) && trim($rawIds) !== '') {
+                $decoded = json_decode($rawIds, true);
+                if (is_array($decoded)) {
+                    $targetChannelIds = array_values(array_filter(array_map('intval', $decoded)));
+                } else {
+                    $targetChannelIds = array_values(array_filter(array_map('intval', explode(',', $rawIds))));
+                }
+            }
+
+            if (empty($targetChannelIds)) {
+                $fallbackChannel = Channel::find($request->input('channel_id', 1)) ?? Channel::first();
+                if ($fallbackChannel) {
+                    $targetChannelIds = [$fallbackChannel->id];
+                    $request->merge(['channel_id' => $fallbackChannel->id]);
+                }
+            } else {
+                $request->merge(['channel_id' => $targetChannelIds[0]]);
+            }
+        }
+
+        $channel = Channel::find($request->input('channel_id'));
         $authResponse = Gate::inspect('create', [Announcement::class, $channel]);
         if ($authResponse->denied()) {
             return response()->json([
@@ -129,7 +183,8 @@ class AnnouncementController
             'content.required' => 'The announcement content field is required.',
         ]);
 
-        $tags = ['OFFICIAL MEMO', 'CDO CAMPUS', 'CITC'];
+        $pubDept = $user->academicProfile?->department ?? 'CITC';
+        $tags = ['OFFICIAL MEMO', 'CDO CAMPUS', $pubDept];
         if (! empty($validated['tags'])) {
             if (is_array($validated['tags'])) {
                 $tags = $validated['tags'];
@@ -160,44 +215,51 @@ class AnnouncementController
             $attachmentUrl = "/storage/memos/{$attachmentName}";
         }
 
-        $announcement = Announcement::create([
-            'channel_id' => (int) $validated['channel_id'],
-            'publisher_id' => $user->id,
-            'title' => trim($validated['title']),
-            'subtitle' => 'USTP Digital Transformation',
-            'content' => trim($validated['content']),
-            'attachment_url' => $attachmentUrl,
-            'attachment_name' => $attachmentName,
-            'attachment_type' => $attachmentType,
-            'tags' => $tags,
-            'is_urgent' => $isUrgent,
-            'is_pinned' => $isUrgent,
-            'trigger_sms_fallback' => $triggerSms,
-            'status' => $validated['status'] ?? 'published',
-            'is_edited' => false,
-            'published_at' => now(),
-        ]);
+        $firstAnnouncement = null;
+        foreach ($targetChannelIds as $cid) {
+            $ann = Announcement::create([
+                'channel_id' => (int) $cid,
+                'publisher_id' => $user->id,
+                'title' => trim($validated['title']),
+                'subtitle' => "{$pubDept} Department",
+                'content' => trim($validated['content']),
+                'attachment_url' => $attachmentUrl,
+                'attachment_name' => $attachmentName,
+                'attachment_type' => $attachmentType,
+                'tags' => $tags,
+                'is_urgent' => $isUrgent,
+                'is_pinned' => $isUrgent,
+                'trigger_sms_fallback' => $triggerSms,
+                'status' => $validated['status'] ?? 'published',
+                'is_edited' => false,
+                'published_at' => now(),
+            ]);
 
-        AnnouncementRead::firstOrCreate([
-            'announcement_id' => $announcement->id,
-            'user_id' => $user->id,
-        ], [
-            'acknowledged_at' => now(),
-        ]);
+            if (! $firstAnnouncement) {
+                $firstAnnouncement = $ann;
+            }
 
-        if ($isUrgent) {
-            DispatchUrgentPushAlerts::dispatch($announcement);
+            AnnouncementRead::firstOrCreate([
+                'announcement_id' => $ann->id,
+                'user_id' => $user->id,
+            ], [
+                'acknowledged_at' => now(),
+            ]);
+
+            if ($isUrgent) {
+                DispatchUrgentPushAlerts::dispatch($ann);
+            }
+
+            if ($triggerSms) {
+                TriggerSmsFallbackBatch::dispatch($ann);
+            }
         }
 
-        if ($triggerSms) {
-            TriggerSmsFallbackBatch::dispatch($announcement);
-        }
-
-        $resourcePayload = (new AnnouncementResource($announcement->load(['publisher.academicProfile', 'channel', 'reads'])))->resolve($request);
+        $resourcePayload = (new AnnouncementResource($firstAnnouncement->load(['publisher.academicProfile', 'channel', 'reads'])))->resolve($request);
 
         RealtimeStateUpdated::safeDispatch(
             $isUrgent ? 'announcement.urgent' : 'announcement.created',
-            (int) $announcement->channel_id,
+            (int) $firstAnnouncement->channel_id,
             (int) $user->id,
             $resourcePayload
         );
@@ -205,7 +267,9 @@ class AnnouncementController
         return response()->json([
             'message' => $isUrgent
                 ? 'Urgent Announcement published! Push alerts queued (<= 2.0s) and pinned to top.'
-                : 'Announcement published to Course Hub.',
+                : (count($targetChannelIds) > 1
+                    ? 'Announcement published across ' . count($targetChannelIds) . ' handled Course Hubs.'
+                    : 'Announcement published.'),
             'data' => $resourcePayload,
         ], 201);
     }

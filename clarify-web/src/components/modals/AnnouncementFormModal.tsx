@@ -16,7 +16,9 @@ import {
   updateAnnouncementApi,
 } from '../../lib/api-client';
 import {
+  formatCourseHubName,
   getFieldValidationError,
+  getJoinedCourseHubs,
   getTopLevelCourseHubs,
 } from '../../lib/domain-logic';
 import type { LaravelValidationError } from '../../types/api';
@@ -34,8 +36,11 @@ const AVAILABLE_TAGS = [
   'MEMORANDUM',
 ];
 
+const CAMPUS_DEPARTMENTS = ['CITC', 'CEA', 'COT', 'CSM'];
+
 export function AnnouncementFormModal() {
   const {
+    user,
     announcementModalState,
     closeAnnouncementModal,
     channels,
@@ -43,18 +48,27 @@ export function AnnouncementFormModal() {
     showToast,
   } = useClarify();
 
-  const courseHubs = getTopLevelCourseHubs(channels);
-  const { isOpen, editingAnnouncement, defaultChannelId } = announcementModalState;
+  const allCourseHubs = getTopLevelCourseHubs(channels);
+  const joinedCourseHubs = getJoinedCourseHubs(channels, user);
+  const handledCourseHubs =
+    joinedCourseHubs.length > 0 ? joinedCourseHubs : allCourseHubs;
+
+  const { isOpen, editingAnnouncement, defaultChannelId, mode } =
+    announcementModalState;
+
+  const isCampusWideMode = editingAnnouncement
+    ? editingAnnouncement.channel_type === 'university'
+    : mode === 'campus_wide';
 
   const [title, setTitle] = useState('');
   const [content, setContent] = useState('');
-  const [channelId, setChannelId] = useState<number>(
-    defaultChannelId || courseHubs[0]?.id || 1
+  const [selectedChannelIds, setSelectedChannelIds] = useState<number[]>(
+    defaultChannelId ? [defaultChannelId] : []
   );
   const [selectedTags, setSelectedTags] = useState<string[]>([
     'OFFICIAL MEMO',
     'CDO CAMPUS',
-    'CITC',
+    user?.academic_profile?.department || 'CITC',
   ]);
   const [showTagPicker, setShowTagPicker] = useState(false);
   const [isUrgent, setIsUrgent] = useState(false);
@@ -75,7 +89,7 @@ export function AnnouncementFormModal() {
       if (editingAnnouncement) {
         setTitle(editingAnnouncement.title);
         setContent(editingAnnouncement.content);
-        setChannelId(editingAnnouncement.channel_id);
+        setSelectedChannelIds([editingAnnouncement.channel_id]);
         setSelectedTags(editingAnnouncement.tags);
         setIsUrgent(editingAnnouncement.is_urgent);
         setTriggerSmsFallback(Boolean(editingAnnouncement.trigger_sms_fallback));
@@ -88,11 +102,13 @@ export function AnnouncementFormModal() {
         setTitle('');
         setContent('');
         const validDefault =
-          defaultChannelId && channels.some((c) => c.id === defaultChannelId)
+          defaultChannelId &&
+          handledCourseHubs.some((c) => c.id === defaultChannelId)
             ? defaultChannelId
-            : channels[0]?.id || 1;
-        setChannelId(validDefault);
-        setSelectedTags(['OFFICIAL MEMO', 'CDO CAMPUS', 'CITC']);
+            : handledCourseHubs[0]?.id || 1;
+        setSelectedChannelIds([validDefault]);
+        const userDept = user?.academic_profile?.department || 'CITC';
+        setSelectedTags(['OFFICIAL MEMO', 'CDO CAMPUS', userDept]);
         setIsUrgent(false);
         setTriggerSmsFallback(false);
         setStatus('published');
@@ -100,7 +116,13 @@ export function AnnouncementFormModal() {
         setAttachmentType(null);
       }
     }
-  }, [isOpen, editingAnnouncement, defaultChannelId, channels]);
+  }, [
+    isOpen,
+    editingAnnouncement,
+    defaultChannelId,
+    handledCourseHubs,
+    user?.academic_profile?.department,
+  ]);
 
   if (!isOpen) return null;
 
@@ -108,6 +130,16 @@ export function AnnouncementFormModal() {
     setSelectedTags((prev) =>
       prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag]
     );
+  };
+
+  const toggleCourseHubSelection = (hubId: number) => {
+    setSelectedChannelIds((prev) => {
+      if (prev.includes(hubId)) {
+        if (prev.length === 1) return prev; // Keep at least 1 handled course selected
+        return prev.filter((id) => id !== hubId);
+      }
+      return [...prev, hubId];
+    });
   };
 
   const handleSimulatedFileSelect = (type: 'image' | 'document') => {
@@ -139,7 +171,16 @@ export function AnnouncementFormModal() {
         showToast(res.message || 'Announcement updated.', 'success');
       } else {
         const formData = new FormData();
-        formData.set('channel_id', String(channelId));
+        formData.set(
+          'scope_mode',
+          isCampusWideMode ? 'campus_wide' : 'course_hub'
+        );
+        if (!isCampusWideMode) {
+          const primaryId =
+            selectedChannelIds[0] || defaultChannelId || handledCourseHubs[0]?.id || 1;
+          formData.set('channel_id', String(primaryId));
+          formData.set('channel_ids', JSON.stringify(selectedChannelIds));
+        }
         formData.set('title', title);
         formData.set('content', content);
         formData.set('tags', JSON.stringify(selectedTags));
@@ -187,8 +228,12 @@ export function AnnouncementFormModal() {
         <div className="flex items-center justify-between px-6 py-3.5 bg-ustp-navy text-white">
           <h2 id="announcement-modal-title" className="text-sm font-bold tracking-tight">
             {editingAnnouncement
-              ? `Edit Scoped Announcement #${editingAnnouncement.id}`
-              : 'Create Scoped Announcement'}
+              ? `Edit ${
+                  isCampusWideMode ? 'Campus-Wide' : 'Course Hub'
+                } Announcement #${editingAnnouncement.id}`
+              : isCampusWideMode
+              ? 'Create Campus-Wide Announcement (Department Head)'
+              : 'Create Course Hub Announcement'}
           </h2>
           <button
             type="button"
@@ -229,51 +274,86 @@ export function AnnouncementFormModal() {
             )}
           </div>
 
-          {/* "Add tags +" multi-select pill picker + Target Channel Scope */}
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex flex-wrap items-center gap-1.5">
-              {selectedTags.map((tag) => (
+          {/* "Add tags +" multi-select pill picker */}
+          <div className="space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex flex-wrap items-center gap-1.5">
+                {selectedTags.map((tag) => (
+                  <button
+                    key={tag}
+                    type="button"
+                    onClick={() => toggleTag(tag)}
+                    title="Click to remove tag"
+                    className="cursor-pointer"
+                  >
+                    <TagBadge tag={tag} size="xs" />
+                  </button>
+                ))}
                 <button
-                  key={tag}
                   type="button"
-                  onClick={() => toggleTag(tag)}
-                  title="Click to remove tag"
-                  className="cursor-pointer"
+                  onClick={() => setShowTagPicker((v) => !v)}
+                  className="inline-flex items-center gap-1 px-2.5 py-0.5 text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 rounded cursor-pointer"
                 >
-                  <TagBadge tag={tag} size="xs" />
+                  <span>Add tags</span>
+                  <Plus className="w-3 h-3" />
                 </button>
-              ))}
-              <button
-                type="button"
-                onClick={() => setShowTagPicker((v) => !v)}
-                className="inline-flex items-center gap-1 px-2.5 py-0.5 text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 rounded cursor-pointer"
-              >
-                <span>Add tags</span>
-                <Plus className="w-3 h-3" />
-              </button>
+              </div>
+
+              {isCampusWideMode && (
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="text-[11px] font-bold text-slate-600">
+                    Departments:
+                  </span>
+                  {CAMPUS_DEPARTMENTS.map((dept) => {
+                    const isDeptActive = selectedTags.includes(dept);
+                    return (
+                      <button
+                        key={dept}
+                        type="button"
+                        onClick={() => toggleTag(dept)}
+                        className={`px-2 py-0.5 rounded text-[11px] font-bold border transition-colors cursor-pointer ${
+                          isDeptActive
+                            ? 'bg-ustp-navy text-ustp-gold border-ustp-navy'
+                            : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-100'
+                        }`}
+                      >
+                        {isDeptActive ? `✓ ${dept}` : dept}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
             </div>
 
-            <div className="flex items-center gap-2">
-              <label
-                htmlFor="announcement-channel-select"
-                className="text-xs font-semibold text-slate-600"
-              >
-                Scope:
-              </label>
-              <select
-                id="announcement-channel-select"
-                value={channelId}
-                onChange={(e) => setChannelId(Number(e.target.value))}
-                className="text-xs font-semibold text-ustp-text bg-slate-50 border border-slate-300 rounded px-2.5 py-1.5 focus:outline-none focus:border-ustp-navy"
-              >
-                {courseHubs.map((ch) => (
-                  <option key={ch.id} value={ch.id}>
-                    {ch.name.replace(/^#\s*/, '')} (
-                    {ch.scope_section || ch.scope_department || 'Campus'})
-                  </option>
-                ))}
-              </select>
-            </div>
+            {/* Course Hub Mode: Allow Instructor to select 1 or multiple handled Course Hubs */}
+            {!isCampusWideMode && !editingAnnouncement && (
+              <div className="p-2.5 bg-ustp-cream border border-amber-200/80 rounded-md space-y-1.5">
+                <p className="text-[11px] font-extrabold text-ustp-navy">
+                  Target Handled Course Hub(s) ({selectedChannelIds.length}{' '}
+                  selected):
+                </p>
+                <div className="flex flex-wrap gap-1.5">
+                  {handledCourseHubs.map((ch) => {
+                    const isSelected = selectedChannelIds.includes(ch.id);
+                    return (
+                      <button
+                        key={ch.id}
+                        type="button"
+                        onClick={() => toggleCourseHubSelection(ch.id)}
+                        className={`px-2.5 py-1 rounded text-xs font-bold border transition-colors cursor-pointer ${
+                          isSelected
+                            ? 'bg-ustp-navy text-ustp-gold border-ustp-navy'
+                            : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'
+                        }`}
+                      >
+                        {isSelected ? '✓ ' : '+ '}
+                        {formatCourseHubName(ch)} ({ch.scope_section || 'IT3R2'})
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
 
           {showTagPicker && (

@@ -14,7 +14,7 @@ import {
 import { useClarify } from '@/src/context/ClarifyContext';
 import { getAnnouncementsApi } from '@/src/lib/api-client';
 import {
-  canPublishOrManageAnnouncements,
+  canPublishCampusWideAnnouncements,
   getJoinedCourseHubs,
   getTopLevelCourseHubs,
 } from '@/src/lib/domain-logic';
@@ -89,7 +89,7 @@ export default function DashboardPage() {
     return null;
   }
 
-  const canPublish = canPublishOrManageAnnouncements(user.role);
+  const canPublishCampusWide = canPublishCampusWideAnnouncements(user.role);
 
   return (
     <AppShell title="Dashboard">
@@ -102,14 +102,14 @@ export default function DashboardPage() {
             </h2>
           </div>
 
-          {canPublish && (
+          {canPublishCampusWide && (
             <button
               type="button"
-              onClick={() => openAnnouncementModal()}
+              onClick={() => openAnnouncementModal({ mode: 'campus_wide' })}
               className="inline-flex items-center gap-2 px-4 py-2.5 bg-ustp-navy text-white text-xs font-bold rounded-lg hover:opacity-95 focus-visible:outline-2 focus-visible:outline-ustp-gold self-start sm:self-auto cursor-pointer"
             >
               <Plus className="w-4 h-4 text-ustp-gold" />
-              <span>Create Announcement</span>
+              <span>Create Campus-Wide Announcement</span>
             </button>
           )}
         </div>
