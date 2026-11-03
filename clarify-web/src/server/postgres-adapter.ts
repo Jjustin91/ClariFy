@@ -2378,22 +2378,26 @@ export async function handlePostgresApiRequest(
         }
       }
 
-      let parsedTags: string[] = [
-        'OFFICIAL MEMO',
-        'CDO CAMPUS',
-        activeUser.academic_profile?.department || 'CITC',
-      ];
-      if (Array.isArray(body.tags)) {
-        parsedTags = body.tags.map((t) => String(t));
-      } else if (typeof body.tags === 'string' && body.tags.trim()) {
-        try {
-          parsedTags = JSON.parse(body.tags);
-        } catch {
-          parsedTags = body.tags.split(',').map((t) => t.trim());
+      let parsedTags: string[] = isCampusWide
+        ? [
+            'OFFICIAL MEMO',
+            'CDO CAMPUS',
+            activeUser.academic_profile?.department || 'CITC',
+          ]
+        : [];
+      if (isCampusWide) {
+        if (Array.isArray(body.tags)) {
+          parsedTags = body.tags.map((t) => String(t));
+        } else if (typeof body.tags === 'string' && body.tags.trim()) {
+          try {
+            parsedTags = JSON.parse(body.tags);
+          } catch {
+            parsedTags = body.tags.split(',').map((t) => t.trim());
+          }
         }
-      }
-      if (isUrgent && !parsedTags.includes('URGENT NOTICE')) {
-        parsedTags = ['URGENT NOTICE', ...parsedTags];
+        if (isUrgent && !parsedTags.includes('URGENT NOTICE')) {
+          parsedTags = ['URGENT NOTICE', ...parsedTags];
+        }
       }
 
       const attachmentUrl = attachmentName

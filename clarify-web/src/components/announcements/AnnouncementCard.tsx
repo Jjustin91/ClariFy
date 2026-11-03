@@ -130,12 +130,14 @@ export function AnnouncementCard({
               {departmentSubtitle}
             </p>
 
-            {/* Tag Pills Row */}
-            <div className="flex flex-wrap items-center gap-1.5 mt-2">
-              {announcement.tags.map((tag) => (
-                <TagBadge key={tag} tag={tag} size="xs" />
-              ))}
-            </div>
+            {/* Tag Pills Row (Campus-Wide Memos Only) */}
+            {isCampusWideMemo && announcement.tags.length > 0 && (
+              <div className="flex flex-wrap items-center gap-1.5 mt-2">
+                {announcement.tags.map((tag) => (
+                  <TagBadge key={tag} tag={tag} size="xs" />
+                ))}
+              </div>
+            )}
 
             {/* Publisher Metadata */}
             <p className="text-xs text-slate-600 mt-2 font-medium tabular-nums">
@@ -307,12 +309,14 @@ export function AnnouncementCard({
           </div>
         </div>
 
-        {/* Colored Tag Pills Row matching Wireframe */}
-        <div className="flex flex-wrap items-center gap-1.5 mt-2.5">
-          {announcement.tags.map((tag) => (
-            <TagBadge key={tag} tag={tag} size="xs" />
-          ))}
-        </div>
+        {/* Colored Tag Pills Row matching Wireframe (Campus-Wide Memos Only) */}
+        {isCampusWideMemo && announcement.tags.length > 0 && (
+          <div className="flex flex-wrap items-center gap-1.5 mt-2.5">
+            {announcement.tags.map((tag) => (
+              <TagBadge key={tag} tag={tag} size="xs" />
+            ))}
+          </div>
+        )}
 
         {/* 2-Column Body matching Wireframes Pages 2, 5, 6: Left photo/memo box, Right text excerpt */}
         <div className="grid grid-cols-12 gap-4 mt-3.5 items-stretch">

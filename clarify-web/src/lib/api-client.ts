@@ -230,20 +230,29 @@ async function requestLaravel<T>(
   if (
     method !== 'GET' &&
     method !== 'HEAD' &&
-    typeof window !== 'undefined' &&
-    'BroadcastChannel' in window
+    typeof window !== 'undefined'
   ) {
+    const mutationPayload = {
+      type: 'mutation',
+      endpoint,
+      data: json?.data,
+      timestamp: Date.now(),
+    };
     try {
-      const bc = new BroadcastChannel('clarify_realtime_sync');
-      bc.postMessage({
-        type: 'mutation',
-        endpoint,
-        data: json?.data,
-        timestamp: Date.now(),
-      });
-      bc.close();
+      window.dispatchEvent(
+        new CustomEvent('clarify_local_mutation', { detail: mutationPayload })
+      );
     } catch {
-      // Ignore BroadcastChannel errors
+      // Ignore CustomEvent errors
+    }
+    if ('BroadcastChannel' in window) {
+      try {
+        const bc = new BroadcastChannel('clarify_realtime_sync');
+        bc.postMessage(mutationPayload);
+        bc.close();
+      } catch {
+        // Ignore BroadcastChannel errors
+      }
     }
   }
 
@@ -421,6 +430,41 @@ export async function manageChannelMemberApi(
 // WORKFLOWS 2 & 3: SCOPED ANNOUNCEMENTS, READ REACH & AUDITS (FR-02, FR-04_REV, FR-05, NFR-03_REV)
 // ============================================================================
 
+const sessionAnnouncementsById = new Map<number, Announcement>();
+const sessionDeletedAnnouncementIds = new Set<number>();
+
+function matchesAnnouncementFilters(
+  ann: Announcement,
+  params?: {
+    channel_id?: number | null;
+    search?: string;
+    department?: string;
+    tag?: string;
+  }
+): boolean {
+  if (sessionDeletedAnnouncementIds.has(ann.id)) {
+    return false;
+  }
+  if (params?.channel_id && Number(ann.channel_id) !== Number(params.channel_id)) {
+    return false;
+  }
+  if (params?.tag && params.tag !== 'ALL') {
+    if (!ann.tags.includes(params.tag)) return false;
+  }
+  if (params?.department && params.department !== 'ALL') {
+    const deptMatch =
+      ann.tags.includes(params.department) ||
+      ann.publisher?.department === params.department;
+    if (!deptMatch) return false;
+  }
+  if (params?.search && params.search.trim() !== '') {
+    const q = params.search.trim().toLowerCase();
+    const hay = `${ann.title} ${ann.content} ${ann.subtitle || ''} ${ann.publisher?.name || ''}`.toLowerCase();
+    if (!hay.includes(q)) return false;
+  }
+  return true;
+}
+
 export async function getAnnouncementsApi(params?: {
   channel_id?: number | null;
   search?: string;
@@ -439,18 +483,102 @@ export async function getAnnouncementsApi(params?: {
   if (params?.sort) qs.set('sort', params.sort);
   if (params?.page) qs.set('page', String(params.page));
   if (params?.per_page) qs.set('per_page', String(params.per_page));
-  return requestLaravel<PaginatedResponse<Announcement>>(
+  const res = await requestLaravel<PaginatedResponse<Announcement>>(
     `/announcements?${qs.toString()}`
   );
+
+  // Merge session-created/updated announcements so Course Hub feeds immediately reflect new/edited posts
+  // even if the remote backend's file cache was not yet cleared for this channel_id query.
+  const page = params?.page || 1;
+  const mergedMap = new Map<number, Announcement>();
+
+  for (const item of res.data || []) {
+    if (!sessionDeletedAnnouncementIds.has(item.id)) {
+      const sessionOverride = sessionAnnouncementsById.get(item.id);
+      mergedMap.set(item.id, sessionOverride || item);
+    }
+  }
+
+  if (page === 1) {
+    for (const sessionAnn of sessionAnnouncementsById.values()) {
+      if (
+        !mergedMap.has(sessionAnn.id) &&
+        matchesAnnouncementFilters(sessionAnn, params)
+      ) {
+        mergedMap.set(sessionAnn.id, sessionAnn);
+      }
+    }
+  }
+
+  const mergedList = Array.from(mergedMap.values()).sort((a, b) => {
+    if (a.is_urgent !== b.is_urgent) return a.is_urgent ? -1 : 1;
+    if (a.is_pinned !== b.is_pinned) return a.is_pinned ? -1 : 1;
+    const tA = new Date(a.published_at).getTime();
+    const tB = new Date(b.published_at).getTime();
+    if (params?.sort === 'oldest') return tA - tB;
+    if (params?.sort === 'read_reach') {
+      if (b.read_reach.percentage !== a.read_reach.percentage) {
+        return b.read_reach.percentage - a.read_reach.percentage;
+      }
+    }
+    return tB - tA;
+  });
+
+  const addedCount = Math.max(0, mergedList.length - (res.data?.length || 0));
+
+  return {
+    ...res,
+    data: mergedList,
+    meta: {
+      ...res.meta,
+      total: Math.max(mergedList.length, (res.meta?.total || 0) + addedCount),
+    },
+  };
 }
 
 export async function createAnnouncementApi(
   formData: FormData
 ): Promise<SingleResourceResponse<Announcement>> {
-  return requestLaravel<SingleResourceResponse<Announcement>>('/announcements', {
-    method: 'POST',
-    body: formData,
-  });
+  const res = await requestLaravel<SingleResourceResponse<Announcement>>(
+    '/announcements',
+    {
+      method: 'POST',
+      body: formData,
+    }
+  );
+  if (res?.data) {
+    const scopeMode = formData.get('scope_mode');
+    const created: Announcement =
+      scopeMode === 'course_hub'
+        ? { ...res.data, tags: [] }
+        : res.data;
+    sessionAnnouncementsById.set(created.id, created);
+    sessionDeletedAnnouncementIds.delete(created.id);
+
+    // If multi-hub creation targeted additional channel_ids, also index synthetic clones per target channel
+    const rawChannelIds = formData.get('channel_ids');
+    if (typeof rawChannelIds === 'string' && rawChannelIds.trim()) {
+      try {
+        const parsedIds = JSON.parse(rawChannelIds) as number[];
+        if (Array.isArray(parsedIds)) {
+          parsedIds.forEach((cid, idx) => {
+            const numCid = Number(cid);
+            if (numCid && numCid !== Number(created.channel_id)) {
+              const syntheticId = created.id + idx + 100000;
+              sessionAnnouncementsById.set(syntheticId, {
+                ...created,
+                id: syntheticId,
+                channel_id: numCid,
+              });
+            }
+          });
+        }
+      } catch {
+        // Ignore parse error
+      }
+    }
+  }
+  return res;
 }
 
 export async function updateAnnouncementApi(
@@ -464,30 +592,44 @@ export async function updateAnnouncementApi(
     status?: 'published' | 'draft' | 'archived';
   }
 ): Promise<SingleResourceResponse<Announcement>> {
-  return requestLaravel<SingleResourceResponse<Announcement>>(
+  const res = await requestLaravel<SingleResourceResponse<Announcement>>(
     `/announcements/${id}`,
     {
       method: 'PATCH',
       body: JSON.stringify(payload),
     }
   );
+  if (res?.data) {
+    sessionAnnouncementsById.set(res.data.id, res.data);
+  }
+  return res;
 }
 
 export async function deleteAnnouncementApi(
   id: number
 ): Promise<{ message: string }> {
-  return requestLaravel<{ message: string }>(`/announcements/${id}`, {
-    method: 'DELETE',
-  });
+  const res = await requestLaravel<{ message: string }>(
+    `/announcements/${id}`,
+    {
+      method: 'DELETE',
+    }
+  );
+  sessionAnnouncementsById.delete(id);
+  sessionDeletedAnnouncementIds.add(id);
+  return res;
 }
 
 export async function acknowledgeAnnouncementApi(
   id: number
 ): Promise<SingleResourceResponse<Announcement>> {
-  return requestLaravel<SingleResourceResponse<Announcement>>(
+  const res = await requestLaravel<SingleResourceResponse<Announcement>>(
     `/announcements/${id}/acknowledge`,
     { method: 'POST' }
   );
+  if (res?.data) {
+    sessionAnnouncementsById.set(res.data.id, res.data);
+  }
+  return res;
 }
 
 // ============================================================================

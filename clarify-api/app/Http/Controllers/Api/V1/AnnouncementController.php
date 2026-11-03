@@ -220,20 +220,25 @@ class AnnouncementController
         ]);
 
         $pubDept = $user->academicProfile?->department ?? 'CITC';
-        $tags = ['OFFICIAL MEMO', 'CDO CAMPUS', $pubDept];
-        if (! empty($validated['tags'])) {
+        $tags = $isCampusWide ? ['OFFICIAL MEMO', 'CDO CAMPUS', $pubDept] : [];
+        if (array_key_exists('tags', $validated) && $validated['tags'] !== null) {
             if (is_array($validated['tags'])) {
                 $tags = $validated['tags'];
             } elseif (is_string($validated['tags'])) {
                 $decoded = json_decode($validated['tags'], true);
-                $tags = is_array($decoded) ? $decoded : array_map('trim', explode(',', $validated['tags']));
+                $tags = is_array($decoded)
+                    ? $decoded
+                    : (trim($validated['tags']) !== '' ? array_map('trim', explode(',', $validated['tags'])) : []);
             }
+        }
+        if (! $isCampusWide) {
+            $tags = [];
         }
 
         $isUrgent = filter_var($request->input('is_urgent', false), FILTER_VALIDATE_BOOLEAN);
         $triggerSms = filter_var($request->input('trigger_sms_fallback', false), FILTER_VALIDATE_BOOLEAN);
 
-        if ($isUrgent && ! in_array('URGENT NOTICE', $tags, true)) {
+        if ($isCampusWide && $isUrgent && ! in_array('URGENT NOTICE', $tags, true)) {
             array_unshift($tags, 'URGENT NOTICE');
         }
 
@@ -289,7 +294,12 @@ class AnnouncementController
             if ($triggerSms) {
                 TriggerSmsFallbackBatch::dispatch($ann);
             }
+
+            ApiCache::forgetChannelAnnouncements((int) $cid);
+            ApiCache::forgetChannels((int) $cid);
         }
+
+        ApiCache::forgetChannelAnnouncements(null);
 
         $resourcePayload = (new AnnouncementResource($firstAnnouncement->load(['publisher.academicProfile', 'channel', 'reads'])))->resolve($request);
 
@@ -346,6 +356,9 @@ class AnnouncementController
             'is_edited' => true,
         ]);
 
+        ApiCache::forgetChannelAnnouncements((int) $announcement->channel_id);
+        ApiCache::forgetChannels((int) $announcement->channel_id);
+
         $freshAnnouncement = $announcement->fresh(['publisher.academicProfile', 'channel', 'reads']);
         $resourcePayload = (new AnnouncementResource($freshAnnouncement))->resolve($request);
 
@@ -380,6 +393,9 @@ class AnnouncementController
         $channelId = (int) $announcement->channel_id;
         $announcement->update(['status' => 'archived']);
         $announcement->delete();
+
+        ApiCache::forgetChannelAnnouncements($channelId);
+        ApiCache::forgetChannels($channelId);
 
         RealtimeStateUpdated::safeDispatch(
             'announcement.deleted',

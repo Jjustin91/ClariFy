@@ -84,14 +84,24 @@ export function AnnouncementFormModal() {
 
   const wasOpenRef = React.useRef(false);
   const lastEditingIdRef = React.useRef<number | null>(null);
+  const lastDefaultChannelIdRef = React.useRef<number | undefined>(undefined);
+  const lastModeRef = React.useRef<'campus_wide' | 'course_hub' | undefined>(
+    undefined
+  );
 
   useEffect(() => {
     const editingId = editingAnnouncement?.id ?? null;
     const justOpened = isOpen && !wasOpenRef.current;
-    const switchedTarget = isOpen && editingId !== lastEditingIdRef.current;
+    const switchedTarget =
+      isOpen &&
+      (editingId !== lastEditingIdRef.current ||
+        defaultChannelId !== lastDefaultChannelIdRef.current ||
+        mode !== lastModeRef.current);
 
     wasOpenRef.current = isOpen;
     lastEditingIdRef.current = editingId;
+    lastDefaultChannelIdRef.current = defaultChannelId;
+    lastModeRef.current = mode;
 
     if (!justOpened && !switchedTarget) {
       return;
@@ -99,11 +109,16 @@ export function AnnouncementFormModal() {
 
     setFieldErrors({});
     setGeneralError(null);
+    setShowTagPicker(false);
     if (editingAnnouncement) {
       setTitle(editingAnnouncement.title);
       setContent(editingAnnouncement.content);
       setSelectedChannelIds([editingAnnouncement.channel_id]);
-      setSelectedTags(editingAnnouncement.tags);
+      setSelectedTags(
+        editingAnnouncement.channel_type === 'university'
+          ? editingAnnouncement.tags
+          : []
+      );
       setIsUrgent(editingAnnouncement.is_urgent);
       setTriggerSmsFallback(Boolean(editingAnnouncement.trigger_sms_fallback));
       setStatus(
@@ -115,13 +130,12 @@ export function AnnouncementFormModal() {
       setTitle('');
       setContent('');
       const validDefault =
-        defaultChannelId &&
-        handledCourseHubs.some((c) => c.id === defaultChannelId)
-          ? defaultChannelId
-          : handledCourseHubs[0]?.id || 1;
+        defaultChannelId || handledCourseHubs[0]?.id || 1;
       setSelectedChannelIds([validDefault]);
       const userDept = user?.academic_profile?.department || 'CITC';
-      setSelectedTags(['OFFICIAL MEMO', 'CDO CAMPUS', userDept]);
+      setSelectedTags(
+        mode === 'campus_wide' ? ['OFFICIAL MEMO', 'CDO CAMPUS', userDept] : []
+      );
       setIsUrgent(false);
       setTriggerSmsFallback(false);
       setStatus('published');
@@ -132,6 +146,7 @@ export function AnnouncementFormModal() {
     isOpen,
     editingAnnouncement,
     defaultChannelId,
+    mode,
     handledCourseHubs,
     user?.academic_profile?.department,
   ]);
@@ -170,12 +185,14 @@ export function AnnouncementFormModal() {
     setFieldErrors({});
     setGeneralError(null);
 
+    const outgoingTags = isCampusWideMode ? selectedTags : [];
+
     try {
       if (editingAnnouncement) {
         const res = await updateAnnouncementApi(editingAnnouncement.id, {
           title,
           content,
-          tags: selectedTags,
+          tags: outgoingTags,
           is_urgent: isUrgent,
           trigger_sms_fallback: triggerSmsFallback,
           status,
@@ -190,12 +207,14 @@ export function AnnouncementFormModal() {
         if (!isCampusWideMode) {
           const primaryId =
             selectedChannelIds[0] || defaultChannelId || handledCourseHubs[0]?.id || 1;
+          const targetIds =
+            selectedChannelIds.length > 0 ? selectedChannelIds : [primaryId];
           formData.set('channel_id', String(primaryId));
-          formData.set('channel_ids', JSON.stringify(selectedChannelIds));
+          formData.set('channel_ids', JSON.stringify(targetIds));
         }
         formData.set('title', title);
         formData.set('content', content);
-        formData.set('tags', JSON.stringify(selectedTags));
+        formData.set('tags', JSON.stringify(outgoingTags));
         formData.set('is_urgent', String(isUrgent));
         formData.set('trigger_sms_fallback', String(triggerSmsFallback));
         formData.set('status', status);
@@ -286,32 +305,32 @@ export function AnnouncementFormModal() {
             )}
           </div>
 
-          {/* "Add tags +" multi-select pill picker */}
-          <div className="space-y-3">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="flex flex-wrap items-center gap-1.5">
-                {selectedTags.map((tag) => (
+          {/* Campus-Wide Mode: "Add tags +" multi-select pill picker */}
+          {isCampusWideMode && (
+            <div className="space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {selectedTags.map((tag) => (
+                    <button
+                      key={tag}
+                      type="button"
+                      onClick={() => toggleTag(tag)}
+                      title="Click to remove tag"
+                      className="cursor-pointer"
+                    >
+                      <TagBadge tag={tag} size="xs" />
+                    </button>
+                  ))}
                   <button
-                    key={tag}
                     type="button"
-                    onClick={() => toggleTag(tag)}
-                    title="Click to remove tag"
-                    className="cursor-pointer"
+                    onClick={() => setShowTagPicker((v) => !v)}
+                    className="inline-flex items-center gap-1 px-2.5 py-0.5 text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 rounded cursor-pointer"
                   >
-                    <TagBadge tag={tag} size="xs" />
+                    <span>Add tags</span>
+                    <Plus className="w-3 h-3" />
                   </button>
-                ))}
-                <button
-                  type="button"
-                  onClick={() => setShowTagPicker((v) => !v)}
-                  className="inline-flex items-center gap-1 px-2.5 py-0.5 text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 rounded cursor-pointer"
-                >
-                  <span>Add tags</span>
-                  <Plus className="w-3 h-3" />
-                </button>
-              </div>
+                </div>
 
-              {isCampusWideMode && (
                 <div className="flex flex-wrap items-center gap-1.5">
                   <span className="text-[11px] font-bold text-slate-600">
                     Departments:
@@ -334,41 +353,41 @@ export function AnnouncementFormModal() {
                     );
                   })}
                 </div>
-              )}
-            </div>
-
-            {/* Course Hub Mode: Allow Instructor to select 1 or multiple handled Course Hubs */}
-            {!isCampusWideMode && !editingAnnouncement && (
-              <div className="p-2.5 bg-ustp-cream border border-amber-200/80 rounded-md space-y-1.5">
-                <p className="text-[11px] font-extrabold text-ustp-navy">
-                  Target Handled Course Hub(s) ({selectedChannelIds.length}{' '}
-                  selected):
-                </p>
-                <div className="flex flex-wrap gap-1.5">
-                  {handledCourseHubs.map((ch) => {
-                    const isSelected = selectedChannelIds.includes(ch.id);
-                    return (
-                      <button
-                        key={ch.id}
-                        type="button"
-                        onClick={() => toggleCourseHubSelection(ch.id)}
-                        className={`px-2.5 py-1 rounded text-xs font-bold border transition-colors cursor-pointer ${
-                          isSelected
-                            ? 'bg-ustp-navy text-ustp-gold border-ustp-navy'
-                            : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'
-                        }`}
-                      >
-                        {isSelected ? '✓ ' : '+ '}
-                        {formatCourseHubName(ch)} ({ch.scope_section || 'IT3R2'})
-                      </button>
-                    );
-                  })}
-                </div>
               </div>
-            )}
-          </div>
+            </div>
+          )}
 
-          {showTagPicker && (
+          {/* Course Hub Mode: Allow Instructor to select 1 or multiple handled Course Hubs */}
+          {!isCampusWideMode && !editingAnnouncement && (
+            <div className="p-2.5 bg-ustp-cream border border-amber-200/80 rounded-md space-y-1.5">
+              <p className="text-[11px] font-extrabold text-ustp-navy">
+                Target Handled Course Hub(s) ({selectedChannelIds.length}{' '}
+                selected):
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                {handledCourseHubs.map((ch) => {
+                  const isSelected = selectedChannelIds.includes(ch.id);
+                  return (
+                    <button
+                      key={ch.id}
+                      type="button"
+                      onClick={() => toggleCourseHubSelection(ch.id)}
+                      className={`px-2.5 py-1 rounded text-xs font-bold border transition-colors cursor-pointer ${
+                        isSelected
+                          ? 'bg-ustp-navy text-ustp-gold border-ustp-navy'
+                          : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'
+                      }`}
+                    >
+                      {isSelected ? '✓ ' : '+ '}
+                      {formatCourseHubName(ch)} ({ch.scope_section || 'IT3R2'})
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {isCampusWideMode && showTagPicker && (
             <div className="p-3 bg-slate-50 border border-slate-200 rounded-md flex flex-wrap gap-1.5">
               {AVAILABLE_TAGS.map((tag) => {
                 const active = selectedTags.includes(tag);

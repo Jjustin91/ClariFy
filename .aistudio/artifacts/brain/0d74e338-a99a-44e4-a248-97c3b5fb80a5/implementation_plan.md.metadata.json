@@ -1,6 +1,6 @@
 {
-  "summary": "Plan to fix the 'Uncaught Error: Invalid supabaseUrl: Must be a valid HTTP or HTTPS URL' crash on Vercel by normalizing and validating NEXT_PUBLIC_SUPABASE_URL with a try/catch guard before initializing the Supabase client.",
-  "updatedAt": "2026-11-03T17:43:13.219969643Z",
+  "summary": "Implementation plan to remove tags from Course Hub announcements and fix Course Hub announcement creation so new notices appear immediately in the Course Hub Noticeboard Feed without requiring acknowledgment in All Announcements first.",
+  "updatedAt": "2026-11-03T18:38:19.233623660Z",
   "requestFeedback": true,
   "userFacing": true
 }

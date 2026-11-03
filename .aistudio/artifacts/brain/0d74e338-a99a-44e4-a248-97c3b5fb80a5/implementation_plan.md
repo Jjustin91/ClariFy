@@ -1,32 +1,32 @@
-# Fix `Invalid supabaseUrl: Must be a valid HTTP or HTTPS URL` Crash on Vercel
+# Remove Tags from Course Hub Announcements & Fix Immediate Noticeboard Visibility
 
-This plan resolves the runtime crash shown in the browser console (`Uncaught Error: Invalid supabaseUrl: Must be a valid HTTP or HTTPS URL`) when loading the deployed Next.js app on Vercel.
+This plan removes tag selection/badges from Course Hub announcements and fixes the issue where newly created Course Hub announcements only appeared in **All Announcements** until acknowledged.
 
-## User Review & Critical Decisions
+## Root Cause Analysis
 
-> [!IMPORTANT]
-> The console screenshot pinpoints the exact root cause. Please review the fix below and click **Proceed** to apply it.
-
-- **Why the Crash Happened**:
-  - `@supabase/supabase-js` throws `Uncaught Error: Invalid supabaseUrl: Must be a valid HTTP or HTTPS URL` inside `createClient()` whenever `NEXT_PUBLIC_SUPABASE_URL` is either missing, contains quotes/whitespace, lacks the `https://` protocol (e.g., `xyz.supabase.co`), is set to a `postgresql://...` database connection URI instead of the Supabase Project URL, or is a non-URL string.
-  - Because `createClient()` was called eagerly at module import time in `clarify-web/lib/supabase.ts`, any non-HTTP/HTTPS value in `NEXT_PUBLIC_SUPABASE_URL` crashed the client bundle on load.
-- **How We Will Fix It**:
-  1. **Smart URL Normalization & Strict HTTP/HTTPS Validation**:
-     - Trim surrounding whitespace and quotes from `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY`.
-     - If `NEXT_PUBLIC_SUPABASE_URL` was set to a `postgresql://` connection string (e.g. `postgres.<project-ref>` or `db.<project-ref>.supabase.co`), automatically extract `<project-ref>` and derive `https://<project-ref>.supabase.co`.
-     - If `NEXT_PUBLIC_SUPABASE_URL` is a bare domain like `<project-ref>.supabase.co`, automatically prefix `https://`.
-     - Validate the final URL with `new URL(...)` to confirm its protocol is `http:` or `https:`.
-  2. **Crash-Proof Lazy Client Initialization**:
-     - Only instantiate `createClient()` inside a `try / catch` block when both a validated `https://` URL and anon key are present (`getSupabaseClient()`), returning `null` safely if unconfigured or invalid so the application never crashes on startup.
+1. **Why Course Hub Announcements Only Appeared After Acknowledging in All Announcements**:
+   - When opening a Course Hub's **Noticeboard Feed**, `AnnouncementController@index` caches the channel's announcement list under `announcements.channel.{channelId}.{hash}` for 10 minutes.
+   - In `AnnouncementController`, `acknowledge()` explicitly called `ApiCache::forgetChannelAnnouncements((int) $announcement->channel_id)`, whereas `store()`, `update()`, and `destroy()` did not call `ApiCache::forgetChannelAnnouncements(...)` directly in the controller.
+   - As a result, creating a Course Hub announcement saved it to PostgreSQL (so it appeared on **All Announcements** via a separate feed cache key), while the Course Hub's `channel_id` endpoint continued serving the cached pre-creation list until `acknowledge()` was triggered in **All Announcements**.
+   - Additionally, on the frontend (`clarify-web`), `BroadcastChannel` only fires in other browser tabs, so the active tab relied solely on re-fetching `GET /api/v1/announcements?channel_id={id}`.
 
 ---
 
-## Technical Changes
+## Proposed Changes
 
-### 1. Crash-Proof Supabase Helper (`clarify-web/lib/supabase.ts`)
-- Export `resolveValidSupabaseUrl(raw?: string): string | null` to normalize and validate `NEXT_PUBLIC_SUPABASE_URL`.
-- Export `getSupabaseClient(): SupabaseClient | null` and `isSupabaseConfigured: boolean` wrapped in a `try / catch` guard so `createClient` can never throw an unhandled exception at module load time.
+### 1. Remove Tags from Course Hub Announcements
+- **Create / Edit Announcement Modal (`clarify-web/src/components/modals/AnnouncementFormModal.tsx`)**:
+  - Hide the tag pills (`OFFICIAL MEMO`, `CDO CAMPUS`, `CITC`), the `Add tags +` button, and the expandable tag picker when creating or editing a **Course Hub Announcement** (`!isCampusWideMode`).
+  - Keep the **Target Handled Course Hub(s)** selector for Course Hub announcements, and send `tags: []` for Course Hub announcements.
+  - Retain the tag & department selectors exclusively for **Campus-Wide Announcements** (`isCampusWideMode`).
+- **Announcement Cards (`clarify-web/src/components/announcements/AnnouncementCard.tsx`)**:
+  - Hide the tag pills row on Course Hub announcements (`announcement.channel_type === 'course_hub'`), displaying tags only on Campus-Wide announcements.
+- **Backend Default Tags (`clarify-api/app/Http/Controllers/Api/V1/AnnouncementController.php` & `clarify-web/src/server/postgres-adapter.ts`)**:
+  - Default `$tags` to `[]` for Course Hub announcements (`!$isCampusWide`) instead of auto-assigning `['OFFICIAL MEMO', 'CDO CAMPUS', $pubDept]`.
 
-### 2. Safe Realtime Subscription Guard (`clarify-web/src/components/threads/MessengerChatBox.tsx`)
-- Retrieve the validated client via `const supabaseClient = getSupabaseClient();` inside the `useEffect` hook.
-- Only subscribe and call `supabaseClient.removeChannel(realtimeChannel)` when `supabaseClient` is non-null, while Optimistic UI updates and REST/SSE messaging continue to work regardless of whether Supabase Realtime environment variables are configured on Vercel.
+### 2. Fix Course Hub Noticeboard Immediate Display & Cache Invalidation
+- **Laravel Controller Cache Invalidation (`clarify-api/app/Http/Controllers/Api/V1/AnnouncementController.php`)**:
+  - Explicitly call `ApiCache::forgetChannelAnnouncements((int) $cid)` and `ApiCache::forgetChannels((int) $cid)` inside `store()`, `update()`, and `destroy()` (matching `acknowledge()`), ensuring the channel's cached Noticeboard Feed is invalidated immediately upon creation, edit, or deletion.
+- **Frontend Immediate State Sync & Stale-Cache Protection (`clarify-web/src/lib/api-client.ts`, `clarify-web/src/context/ClarifyContext.tsx`, `clarify-web/app/channels/[channelId]/page.tsx`)**:
+  - Maintain a session-level mutation overlay in `api-client.ts` for newly created, updated, acknowledged, and deleted announcements across all target `channel_ids` so `getAnnouncementsApi({ channel_id })` immediately merges newly created Course Hub announcements even if a remote server returns a cached list.
+  - Dispatch same-tab realtime events inside `ClarifyContext` when `createAnnouncementApi`, `updateAnnouncementApi`, or `deleteAnnouncementApi` completes so `CourseHubPage` updates its Noticeboard Feed instantaneously.

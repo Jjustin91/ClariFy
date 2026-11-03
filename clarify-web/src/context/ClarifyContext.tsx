@@ -421,45 +421,70 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
       }
     );
 
-    // 2. Cross-tab BroadcastChannel for instant zero-latency local browser sync
+    // 2. Cross-tab BroadcastChannel + Same-tab CustomEvent for instant zero-latency local browser sync
+    const processMutationPayload = (msgData: {
+      endpoint?: string;
+      data?: Record<string, unknown>;
+    }) => {
+      const endpoint = String(msgData?.endpoint || '');
+      let evType: RealtimeEvent['type'] = 'db.changed';
+      let announcement: Announcement | undefined;
+      let message: RealtimeEvent['message'];
+      let thread: RealtimeEvent['thread'];
+
+      if (
+        endpoint.includes('/announcements') &&
+        endpoint.endsWith('/acknowledge')
+      ) {
+        evType = 'announcement.acknowledged';
+        announcement = msgData?.data as unknown as Announcement;
+      } else if (endpoint.includes('/announcements')) {
+        const ann = msgData?.data as unknown as Announcement | undefined;
+        evType = ann?.is_urgent ? 'announcement.urgent' : 'announcement.created';
+        announcement = ann;
+      } else if (endpoint.includes('/chat') || endpoint.includes('/messages')) {
+        evType = 'chat.message';
+        message = msgData?.data as unknown as RealtimeEvent['message'];
+      } else if (endpoint.includes('/threads')) {
+        evType = 'thread.updated';
+        thread = msgData?.data as unknown as RealtimeEvent['thread'];
+      }
+
+      handleIncomingRealtimeEvent({
+        revision: Date.now(),
+        type: evType,
+        channel_id: announcement?.channel_id || message?.channel_id || thread?.channel_id,
+        announcement,
+        message,
+        thread,
+        timestamp: new Date().toISOString(),
+      });
+    };
+
+    const handleLocalMutationEvent = (ev: Event) => {
+      const customEv = ev as CustomEvent<{
+        endpoint?: string;
+        data?: Record<string, unknown>;
+      }>;
+      if (customEv.detail) {
+        processMutationPayload(customEv.detail);
+      }
+    };
+    window.addEventListener('clarify_local_mutation', handleLocalMutationEvent);
+
     let bc: BroadcastChannel | null = null;
     if ('BroadcastChannel' in window) {
       try {
         bc = new BroadcastChannel('clarify_realtime_sync');
         bc.onmessage = (msgEvent) => {
-          const msgData = msgEvent.data as {
-            endpoint?: string;
-            data?: Record<string, unknown>;
-          };
-          const endpoint = String(msgData?.endpoint || '');
-          let evType: RealtimeEvent['type'] = 'db.changed';
-          let announcement: Announcement | undefined;
-          let message: RealtimeEvent['message'];
-          let thread: RealtimeEvent['thread'];
-
-          if (endpoint.includes('/announcements') && endpoint.endsWith('/acknowledge')) {
-            evType = 'announcement.acknowledged';
-            announcement = msgData?.data as unknown as Announcement;
-          } else if (endpoint.includes('/announcements')) {
-            const ann = msgData?.data as unknown as Announcement | undefined;
-            evType = ann?.is_urgent ? 'announcement.urgent' : 'announcement.created';
-            announcement = ann;
-          } else if (endpoint.includes('/chat')) {
-            evType = 'chat.message';
-            message = msgData?.data as unknown as RealtimeEvent['message'];
-          } else if (endpoint.includes('/threads')) {
-            evType = 'thread.updated';
-            thread = msgData?.data as unknown as RealtimeEvent['thread'];
+          if (msgEvent.data) {
+            processMutationPayload(
+              msgEvent.data as {
+                endpoint?: string;
+                data?: Record<string, unknown>;
+              }
+            );
           }
-
-          handleIncomingRealtimeEvent({
-            revision: Date.now(),
-            type: evType,
-            announcement,
-            message,
-            thread,
-            timestamp: new Date().toISOString(),
-          });
         };
       } catch {
         bc = null;
@@ -521,6 +546,10 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
 
     return () => {
       unsubscribeReverb();
+      window.removeEventListener(
+        'clarify_local_mutation',
+        handleLocalMutationEvent
+      );
       if (bc) {
         try {
           bc.close();
