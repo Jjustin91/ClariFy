@@ -1,91 +1,32 @@
-# Announcement Form Input Fix & Zero-Latency Real-Time Channel Chat
+# Fix `Invalid supabaseUrl: Must be a valid HTTP or HTTPS URL` Crash on Vercel
 
-This plan resolves the input reset bug in the **Create / Edit Announcement Modal** and upgrades the **Course Hub Channel Chat** (`clarify-web`) with zero-latency optimistic UI updates, retryable error states, multi-line `Enter` / `Shift+Enter` keyboard UX, and a live Supabase Realtime WebSocket subscription (`@supabase/supabase-js`).
+This plan resolves the runtime crash shown in the browser console (`Uncaught Error: Invalid supabaseUrl: Must be a valid HTTP or HTTPS URL`) when loading the deployed Next.js app on Vercel.
 
 ## User Review & Critical Decisions
 
 > [!IMPORTANT]
-> All functional and architectural requirements were specified in the prompt. Please review the summary below and click **Proceed** to execute.
+> The console screenshot pinpoints the exact root cause. Please review the fix below and click **Proceed** to apply it.
 
-- **Announcement Modal Input Stability**: Stabilize the modal initialization `useEffect` in the Announcement Form so typing into the **Title** or **Content** fields never triggers a form state reset when derived Course Hub lists re-evaluate on render.
-- **Zero-Latency Optimistic Messaging**: Immediately append outgoing messages with a temporary ID (`temp-${Date.now()}`), current ISO timestamp, sender profile, and `status: 'sending'`, clear the composer input, and smoothly scroll to the bottom while the `POST /channels/${channelId}/messages` request executes in the background.
-- **Supabase Realtime Subscription (`messages` Table)**: Subscribe to `postgres_changes` (`INSERT` on `public.messages` filtered by `channel_id=eq.${channelId}`) via `@supabase/supabase-js` and deduplicate incoming payloads against existing confirmed `id` or optimistic `temp_id` entries.
-
----
-
-## 1. Overview & Core Concept
-
-- **What It Does**:
-  1. Fixes the **Create / Edit Announcement** modal so Department Heads and Faculty can type freely into the Title and Content inputs without characters being wiped on re-render.
-  2. Delivers instant, zero-latency message sending in Course Hub channels (`#general` and custom sub-channels) with optimistic status indicators (`Sending...`, `Sent`, `Failed — Tap to retry`) and live WebSocket message delivery via Supabase Realtime.
-- **Target Audience / Persona**: USTP Students, Faculty Instructors, and Department Heads collaborating in Course Hub channels and publishing official announcements.
-- **Key Value**: Eliminates perceived network latency when chatting and ensures multi-participant messages appear live without page refreshes.
+- **Why the Crash Happened**:
+  - `@supabase/supabase-js` throws `Uncaught Error: Invalid supabaseUrl: Must be a valid HTTP or HTTPS URL` inside `createClient()` whenever `NEXT_PUBLIC_SUPABASE_URL` is either missing, contains quotes/whitespace, lacks the `https://` protocol (e.g., `xyz.supabase.co`), is set to a `postgresql://...` database connection URI instead of the Supabase Project URL, or is a non-URL string.
+  - Because `createClient()` was called eagerly at module import time in `clarify-web/lib/supabase.ts`, any non-HTTP/HTTPS value in `NEXT_PUBLIC_SUPABASE_URL` crashed the client bundle on load.
+- **How We Will Fix It**:
+  1. **Smart URL Normalization & Strict HTTP/HTTPS Validation**:
+     - Trim surrounding whitespace and quotes from `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY`.
+     - If `NEXT_PUBLIC_SUPABASE_URL` was set to a `postgresql://` connection string (e.g. `postgres.<project-ref>` or `db.<project-ref>.supabase.co`), automatically extract `<project-ref>` and derive `https://<project-ref>.supabase.co`.
+     - If `NEXT_PUBLIC_SUPABASE_URL` is a bare domain like `<project-ref>.supabase.co`, automatically prefix `https://`.
+     - Validate the final URL with `new URL(...)` to confirm its protocol is `http:` or `https:`.
+  2. **Crash-Proof Lazy Client Initialization**:
+     - Only instantiate `createClient()` inside a `try / catch` block when both a validated `https://` URL and anon key are present (`getSupabaseClient()`), returning `null` safely if unconfigured or invalid so the application never crashes on startup.
 
 ---
 
-## 2. User Experience & Visual Design
+## Technical Changes
 
-- **Key User Flows**:
-  1. **Creating an Announcement**:
-     - Opening the modal initializes the form fields once per open session (`isOpen` transition / `editingAnnouncement?.id`).
-     - Typing into **Title** and **Type here** updates state smoothly without re-running initialization logic.
-  2. **Optimistic Channel Messaging**:
-     - Pressing `Enter` (without `Shift`) or clicking the Send button immediately appends the message bubble into the chat stream with a subtle `Sending...` status indicator, clears the composer input, and smoothly scrolls the chat container to the latest message.
-     - Pressing `Shift + Enter` inserts a newline in the auto-expanding composer textarea.
-     - The composer remains active and responsive while background requests are in flight (only disabled during the initial channel load).
-     - When the API responds with `201 Created`, the temporary optimistic record (`temp-...`) is seamlessly replaced in-place by the confirmed database record.
-     - If the API request fails, the message bubble remains visible with a red `Failed to send • Retry` action button that re-submits the payload on click.
-  3. **Live Incoming Messages (Supabase Realtime)**:
-     - When another participant posts a message to the same channel, the Supabase Realtime `postgres_changes` listener receives the `INSERT` event on `messages`, checks that the message is not already present in local state (by confirmed `id` or matching `temp_id`), appends it to the conversation, and smoothly scrolls to the bottom.
+### 1. Crash-Proof Supabase Helper (`clarify-web/lib/supabase.ts`)
+- Export `resolveValidSupabaseUrl(raw?: string): string | null` to normalize and validate `NEXT_PUBLIC_SUPABASE_URL`.
+- Export `getSupabaseClient(): SupabaseClient | null` and `isSupabaseConfigured: boolean` wrapped in a `try / catch` guard so `createClient` can never throw an unhandled exception at module load time.
 
----
-
-## 3. Key Product Decisions & Trade-Offs
-
-- **Decision 1: Optimistic Reconciliation & Deduplication Strategy**
-  - *Chosen Approach*: Attach both `id` (`temp-${Date.now()}`) and `temp_id` to optimistic messages. Reconcile on API completion by replacing the matching `temp_id` item with the confirmed server record, and guard the Realtime `INSERT` handler against both `msg.id === incoming.id` and `msg.temp_id === incoming.temp_id` (plus matching sender + content + pending status if the WebSocket event arrives before the HTTP response returns).
-  - *Why*: Prevents duplicate bubbles when both the HTTP response and the Supabase Realtime WebSocket broadcast arrive within milliseconds of each other.
-- **Decision 2: Dual Endpoint Route Compatibility (`/channels/{channelId}/messages` & `/channels/{channelId}/chat`)**
-  - *Chosen Approach*: Register `GET` and `POST /api/v1/channels/{channelId}/messages` alongside `/channels/{channelId}/chat` in the Laravel API, and configure the Next.js API client to post to `/channels/${channelId}/messages` with automatic fallback to `/channels/${channelId}/chat`.
-  - *Why*: Guarantees compatibility with both the `/channels/${channelId}/messages` endpoint contract and any existing `/chat` callers.
-
----
-
-## 4. Technical Architecture & Data Strategy *(Technical Reference)*
-
-### Architecture & Data Flow Diagram
-
-```
-┌──────────────────────────────────────────────────────────────────────────┐
-│                     Next.js Channel Chat Component                       │
-│  ┌─────────────────────────┐        ┌─────────────────────────────────┐  │
-│  │ Composer Textarea       │        │ Optimistic Message State        │  │
-│  │ • Enter = Submit        │───────▶│ • id: "temp-173065..."          │  │
-│  │ • Shift+Enter = Newline │        │ • status: 'sending' | 'failed'  │  │
-│  └─────────────────────────┘        └───────────┬─────────────────────┘  │
-│                                                 │                        │
-│               ┌─────────────────────────────────┴───────────────┐        │
-│               ▼                                                 ▼        │
-│  ┌────────────────────────────────────┐   ┌───────────────────────────┐  │
-│  │ POST /channels/{id}/messages       │   │ Supabase Realtime Client  │  │
-│  │ • Background async request         │   │ • channel_id=eq.{id}      │  │
-│  │ • Success: swap temp_id -> DB row  │   │ • Deduplicate id/temp_id  │  │
-│  │ • Error: status='failed' + Retry   │   │ • Auto-scroll on insert   │  │
-│  └────────────────┬───────────────────┘   └─────────────▲─────────────┘  │
-└───────────────────┼─────────────────────────────────────┼────────────────┘
-                    ▼                                     │
-       ┌─────────────────────────┐           ┌────────────┴────────────┐
-       │ Laravel 11 REST API     │──────────▶│ Supabase PostgreSQL     │
-       │ ChannelChatController   │  INSERT   │ Table: public.messages  │
-       └─────────────────────────┘           └─────────────────────────┘
-```
-
-### Interactive Component & State Mapping
-- **Announcement Modal (`AnnouncementFormModal`)**:
-  - Track modal open lifecycle so form reset only executes when opening the modal or switching the target announcement being edited, never on keystrokes.
-- **Supabase Client Helper (`clarify-web/lib/supabase.ts`)**:
-  - Initialize `@supabase/supabase-js` client with `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY`, providing a safe no-op guard if environment variables are not configured in local preview.
-- **Channel Chat (`MessengerChatBox` / `ChannelChat`)**:
-  - Maintain `messagesByChannel` with `status?: 'sending' | 'sent' | 'failed'` and `temp_id?: string`.
-  - Provide `handleRetryMessage(failedMsg)` to re-dispatch failed optimistic messages without re-typing.
-  - Clean up the Supabase Realtime subscription via `supabase.removeChannel(realtimeChannel)` on unmount or `channelId` change.
+### 2. Safe Realtime Subscription Guard (`clarify-web/src/components/threads/MessengerChatBox.tsx`)
+- Retrieve the validated client via `const supabaseClient = getSupabaseClient();` inside the `useEffect` hook.
+- Only subscribe and call `supabaseClient.removeChannel(realtimeChannel)` when `supabaseClient` is non-null, while Optimistic UI updates and REST/SSE messaging continue to work regardless of whether Supabase Realtime environment variables are configured on Vercel.

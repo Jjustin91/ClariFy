@@ -26,7 +26,7 @@ import {
   Volume2,
   X,
 } from 'lucide-react';
-import { isSupabaseConfigured, supabase } from '@/lib/supabase';
+import { getSupabaseClient, isSupabaseConfigured } from '@/lib/supabase';
 import { formatShortTime } from '../announcements/AnnouncementCard';
 import { useClarify } from '../../context/ClarifyContext';
 import {
@@ -471,8 +471,14 @@ export function MessengerChatBox({
     const unsubscribeStream = subscribeRealtimeEvents(handleRealtimeChatEvent);
 
     // Subscribe to Supabase Realtime postgres_changes INSERT on public.messages
-    const realtimeChannel = isSupabaseConfigured
-      ? supabase
+    const supabaseClient = isSupabaseConfigured ? getSupabaseClient() : null;
+    let realtimeChannel: ReturnType<
+      NonNullable<typeof supabaseClient>['channel']
+    > | null = null;
+
+    if (supabaseClient) {
+      try {
+        realtimeChannel = supabaseClient
           .channel(`channel-messages-${channelKey}`)
           .on(
             'postgres_changes',
@@ -545,14 +551,17 @@ export function MessengerChatBox({
               scrollToBottomSmooth();
             }
           )
-          .subscribe()
-      : null;
+          .subscribe();
+      } catch {
+        realtimeChannel = null;
+      }
+    }
 
     return () => {
       unsubscribeReverb();
       unsubscribeStream();
-      if (realtimeChannel) {
-        void supabase.removeChannel(realtimeChannel);
+      if (supabaseClient && realtimeChannel) {
+        void supabaseClient.removeChannel(realtimeChannel);
       }
     };
   }, [

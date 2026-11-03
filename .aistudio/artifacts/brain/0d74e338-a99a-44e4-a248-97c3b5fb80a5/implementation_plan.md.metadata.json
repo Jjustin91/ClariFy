@@ -1,6 +1,6 @@
 {
-  "summary": "Implementation plan for fixing the Create Announcement modal input reset bug and adding zero-latency optimistic UI updates + Supabase Realtime WebSocket subscriptions to the Course Hub channel chat.",
-  "updatedAt": "2026-11-03T17:26:42.376466705Z",
+  "summary": "Plan to fix the 'Uncaught Error: Invalid supabaseUrl: Must be a valid HTTP or HTTPS URL' crash on Vercel by normalizing and validating NEXT_PUBLIC_SUPABASE_URL with a try/catch guard before initializing the Supabase client.",
+  "updatedAt": "2026-11-03T17:43:13.219969643Z",
   "requestFeedback": true,
   "userFacing": true
 }
