@@ -7,6 +7,7 @@ use App\Http\Resources\UserResource;
 use App\Models\AnnouncementAudit;
 use App\Models\PrismsSyncLog;
 use App\Models\User;
+use App\Support\ApiCache;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Artisan;
@@ -59,6 +60,8 @@ class AccountController
         $user->verified_by = $request->user()?->id;
         $user->save();
 
+        ApiCache::forgetInstructors();
+        ApiCache::forgetChannels();
         RealtimeStateUpdated::safeDispatch('admin.updated', null, (int) ($request->user()?->id ?? 0));
 
         return response()->json([
@@ -119,6 +122,8 @@ class AccountController
             ]
         );
 
+        ApiCache::forgetInstructors();
+        ApiCache::forgetChannels();
         RealtimeStateUpdated::safeDispatch('admin.updated', null, (int) ($request->user()?->id ?? 0));
 
         return response()->json([
@@ -151,6 +156,9 @@ class AccountController
                     : 'IT Admin Console',
             ]);
         }
+
+        ApiCache::forgetInstructors();
+        ApiCache::forgetChannels();
 
         return response()->json([
             'message' => "PRISMS batch synchronization completed for {$validated['semester_code']}.",

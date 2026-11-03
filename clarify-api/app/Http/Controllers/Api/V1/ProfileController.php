@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Resources\UserResource;
+use App\Support\ApiCache;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
@@ -49,6 +50,9 @@ class ProfileController
         // Automatically encrypted at rest via User model 'encrypted' cast (RA 10173)
         $user->contact_number = $validated['contact_number'];
         $user->save();
+
+        ApiCache::forgetInstructors();
+        ApiCache::forgetChannels();
 
         return response()->json([
             'message' => 'Profile settings and avatar updated.',

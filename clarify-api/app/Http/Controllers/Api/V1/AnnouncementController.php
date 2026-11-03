@@ -9,8 +9,10 @@ use App\Jobs\TriggerSmsFallbackBatch;
 use App\Models\Announcement;
 use App\Models\AnnouncementRead;
 use App\Models\Channel;
+use App\Support\ApiCache;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Storage;
 
@@ -18,44 +20,76 @@ class AnnouncementController
 {
     /**
      * GET /api/v1/announcements (Workflow 3, FR-04_REV, FR-05)
+     * Caches active announcements per channel for 10 minutes (600s) using the 'file' cache store.
      */
     public function index(Request $request): JsonResponse
     {
         $user = $request->user();
-        $query = Announcement::with(['publisher.academicProfile', 'channel', 'reads'])
-            ->withCount('reads');
-        $likeOp = \Illuminate\Support\Facades\DB::getDriverName() === 'pgsql' ? 'ilike' : 'like';
+        $channelId = $request->query('channel_id');
+        $tag = $request->query('tag');
+        $department = $request->query('department');
+        $search = trim((string) $request->query('search', ''));
+        $sort = (string) $request->query('sort', 'latest');
+        $perPage = max(1, (int) $request->query('per_page', 4));
+        $page = max(1, (int) $request->query('page', 1));
 
-        if (! $user || ! $user->canPublishOrManage()) {
-            $query->where('status', 'published');
-        }
+        $cacheParams = array_filter([
+            'user_id' => $user?->id ?? 0,
+            'can_manage' => $user?->canPublishOrManage() ? 1 : 0,
+            'tag' => $tag,
+            'department' => $department,
+            'search' => $search,
+            'sort' => $sort,
+            'per_page' => $perPage,
+            'page' => $page,
+        ], fn ($value) => $value !== null && $value !== '');
 
-        if ($channelId = $request->query('channel_id')) {
-            $query->where('channel_id', (int) $channelId);
-        } elseif ($user) {
-            $hasApprovalCol = Channel::ensureApprovalStatusColumn();
-            $enrolledQuery = \Illuminate\Support\Facades\DB::table('channel_user')
-                ->where('user_id', $user->id);
-            if ($hasApprovalCol) {
-                $enrolledQuery->where('approval_status', 'approved');
+        $cacheKey = $channelId
+            ? ApiCache::announcementChannelKey((int) $channelId, $cacheParams)
+            : ApiCache::announcementFeedKey($user?->id, $cacheParams);
+
+        $payload = Cache::remember($cacheKey, ApiCache::ANNOUNCEMENTS_TTL_SECONDS, function () use (
+            $request,
+            $user,
+            $channelId,
+            $tag,
+            $department,
+            $search,
+            $sort,
+            $perPage,
+            $page
+        ): array {
+            $query = Announcement::with(['publisher.academicProfile', 'channel', 'reads'])
+                ->withCount('reads');
+            $likeOp = \Illuminate\Support\Facades\DB::getDriverName() === 'pgsql' ? 'ilike' : 'like';
+
+            if (! $user || ! $user->canPublishOrManage()) {
+                $query->where('status', 'published');
             }
-            $enrolledIds = $enrolledQuery->pluck('channel_id')->all();
 
-            $query->where(function ($q) use ($enrolledIds, $user) {
-                $q->whereHas('channel', fn ($cq) => $cq->where('channel_type', '!=', 'course_hub'))
-                    ->orWhereIn('channel_id', $enrolledIds)
-                    ->orWhere('publisher_id', $user->id);
-            });
-        }
+            if ($channelId) {
+                $query->where('channel_id', (int) $channelId);
+            } elseif ($user) {
+                $hasApprovalCol = Channel::ensureApprovalStatusColumn();
+                $enrolledQuery = \Illuminate\Support\Facades\DB::table('channel_user')
+                    ->where('user_id', $user->id);
+                if ($hasApprovalCol) {
+                    $enrolledQuery->where('approval_status', 'approved');
+                }
+                $enrolledIds = $enrolledQuery->pluck('channel_id')->all();
 
-        if ($tag = $request->query('tag')) {
-            if (strtoupper($tag) !== 'ALL') {
+                $query->where(function ($q) use ($enrolledIds, $user) {
+                    $q->whereHas('channel', fn ($cq) => $cq->where('channel_type', '!=', 'course_hub'))
+                        ->orWhereIn('channel_id', $enrolledIds)
+                        ->orWhere('publisher_id', $user->id);
+                });
+            }
+
+            if ($tag && strtoupper((string) $tag) !== 'ALL') {
                 $query->whereJsonContains('tags', $tag);
             }
-        }
 
-        if ($department = $request->query('department')) {
-            if (strtoupper($department) !== 'ALL') {
+            if ($department && strtoupper((string) $department) !== 'ALL') {
                 $query->where(function ($q) use ($department) {
                     $q->whereJsonContains('tags', $department)
                         ->orWhereHas('publisher.academicProfile', function ($pq) use ($department) {
@@ -63,46 +97,45 @@ class AnnouncementController
                         });
                 });
             }
-        }
 
-        if ($search = trim((string) $request->query('search', ''))) {
-            $query->where(function ($q) use ($search, $likeOp) {
-                $q->where('title', $likeOp, "%{$search}%")
-                    ->orWhere('content', $likeOp, "%{$search}%")
-                    ->orWhere('subtitle', $likeOp, "%{$search}%")
-                    ->orWhereHas('channel', fn ($cq) => $cq->where('course_code', $likeOp, "%{$search}%"))
-                    ->orWhereHas('publisher', fn ($pq) => $pq->where('name', $likeOp, "%{$search}%"));
-            });
-        }
+            if ($search !== '') {
+                $query->where(function ($q) use ($search, $likeOp) {
+                    $q->where('title', $likeOp, "%{$search}%")
+                        ->orWhere('content', $likeOp, "%{$search}%")
+                        ->orWhere('subtitle', $likeOp, "%{$search}%")
+                        ->orWhereHas('channel', fn ($cq) => $cq->where('course_code', $likeOp, "%{$search}%"))
+                        ->orWhereHas('publisher', fn ($pq) => $pq->where('name', $likeOp, "%{$search}%"));
+                });
+            }
 
-        // Urgent notices first, then pinned notices, then sort preference (FR-04_REV)
-        $sort = $request->query('sort', 'latest');
-        $query->orderByDesc('is_urgent')->orderByDesc('is_pinned');
+            // Urgent notices first, then pinned notices, then sort preference (FR-04_REV)
+            $query->orderByDesc('is_urgent')->orderByDesc('is_pinned');
 
-        if ($sort === 'oldest') {
-            $query->orderBy('published_at');
-        } elseif ($sort === 'read_reach') {
-            $query->orderByDesc('reads_count')->orderByDesc('published_at');
-        } else {
-            $query->orderByDesc('published_at');
-        }
+            if ($sort === 'oldest') {
+                $query->orderBy('published_at');
+            } elseif ($sort === 'read_reach') {
+                $query->orderByDesc('reads_count')->orderByDesc('published_at');
+            } else {
+                $query->orderByDesc('published_at');
+            }
 
-        $perPage = max(1, (int) $request->query('per_page', 4));
-        $page = max(1, (int) $request->query('page', 1));
-        $paginator = $query->paginate($perPage, ['*'], 'page', $page);
-        if ($paginator->lastPage() > 0 && $page > $paginator->lastPage()) {
-            $paginator = $query->paginate($perPage, ['*'], 'page', $paginator->lastPage());
-        }
+            $paginator = $query->paginate($perPage, ['*'], 'page', $page);
+            if ($paginator->lastPage() > 0 && $page > $paginator->lastPage()) {
+                $paginator = $query->paginate($perPage, ['*'], 'page', $paginator->lastPage());
+            }
 
-        return response()->json([
-            'data' => AnnouncementResource::collection($paginator->items()),
-            'meta' => [
-                'current_page' => $paginator->currentPage(),
-                'last_page' => max(1, $paginator->lastPage()),
-                'per_page' => $paginator->perPage(),
-                'total' => $paginator->total(),
-            ],
-        ]);
+            return [
+                'data' => AnnouncementResource::collection($paginator->items())->resolve($request),
+                'meta' => [
+                    'current_page' => $paginator->currentPage(),
+                    'last_page' => max(1, $paginator->lastPage()),
+                    'per_page' => $paginator->perPage(),
+                    'total' => $paginator->total(),
+                ],
+            ];
+        });
+
+        return response()->json($payload);
     }
 
     /**
@@ -373,6 +406,8 @@ class AnnouncementController
         ], [
             'acknowledged_at' => now(),
         ]);
+
+        ApiCache::forgetChannelAnnouncements((int) $announcement->channel_id);
 
         $freshAnnouncement = $announcement->fresh(['publisher.academicProfile', 'channel', 'reads']);
         $resourcePayload = (new AnnouncementResource($freshAnnouncement))->resolve($request);

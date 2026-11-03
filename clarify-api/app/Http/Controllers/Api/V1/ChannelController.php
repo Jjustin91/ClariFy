@@ -8,44 +8,58 @@ use App\Models\Announcement;
 use App\Models\Channel;
 use App\Models\Message;
 use App\Models\User;
+use App\Support\ApiCache;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 
 class ChannelController
 {
     /**
      * GET /api/v1/channels (Workflow 5, FR-01_REV)
+     * Caches the user's visible channel list for 10 minutes (600s) using the 'file' cache store.
      */
     public function index(Request $request): JsonResponse
     {
-        Channel::ensureApprovalStatusColumn();
-        $query = Channel::with(['members.academicProfile', 'announcements.publisher']);
+        $user = $request->user();
+        $search = trim((string) $request->query('search', ''));
+        $type = (string) $request->query('type', 'course_hub');
 
-        $likeOp = \Illuminate\Support\Facades\DB::getDriverName() === 'pgsql' ? 'ilike' : 'like';
+        $cacheParams = array_filter([
+            'search' => $search,
+            'type' => $type,
+        ], fn ($value) => $value !== '');
 
-        if ($search = trim((string) $request->query('search', ''))) {
-            $query->where(function ($q) use ($search, $likeOp) {
-                $q->where('name', $likeOp, "%{$search}%")
-                    ->orWhere('course_code', $likeOp, "%{$search}%")
-                    ->orWhere('description', $likeOp, "%{$search}%")
-                    ->orWhere('scope_department', $likeOp, "%{$search}%");
-            });
-        }
+        $cacheKey = ApiCache::channelsKey($user?->id, $cacheParams);
 
-        if ($type = $request->query('type')) {
-            if ($type !== 'all') {
+        $data = Cache::remember($cacheKey, ApiCache::CHANNELS_TTL_SECONDS, function () use ($request, $search, $type): array {
+            Channel::ensureApprovalStatusColumn();
+            $query = Channel::with(['members.academicProfile', 'announcements.publisher']);
+
+            $likeOp = \Illuminate\Support\Facades\DB::getDriverName() === 'pgsql' ? 'ilike' : 'like';
+
+            if ($search !== '') {
+                $query->where(function ($q) use ($search, $likeOp) {
+                    $q->where('name', $likeOp, "%{$search}%")
+                        ->orWhere('course_code', $likeOp, "%{$search}%")
+                        ->orWhere('description', $likeOp, "%{$search}%")
+                        ->orWhere('scope_department', $likeOp, "%{$search}%");
+                });
+            }
+
+            if ($type !== '' && $type !== 'all') {
                 $query->where('channel_type', $type);
             } else {
                 $query->where('channel_type', 'course_hub');
             }
-        } else {
-            $query->where('channel_type', 'course_hub');
-        }
 
-        $channels = $query->orderBy('id')->get();
+            $channels = $query->orderBy('id')->get();
+
+            return ChannelResource::collection($channels)->resolve($request);
+        });
 
         return response()->json([
-            'data' => ChannelResource::collection($channels),
+            'data' => $data,
         ]);
     }
 
@@ -109,6 +123,7 @@ class ChannelController
             $user->id => $pivotData,
         ]);
 
+        ApiCache::forgetChannels((int) $channel->id);
         RealtimeStateUpdated::safeDispatch('channel.created', (int) $channel->id, (int) $user->id);
 
         return response()->json([
@@ -190,6 +205,8 @@ class ChannelController
                 'scope_section' => $scopeSection,
             ]);
 
+        ApiCache::forgetChannels((int) $channel->id);
+        ApiCache::forgetChannelAnnouncements((int) $channel->id);
         RealtimeStateUpdated::safeDispatch('channel.updated', (int) $channel->id, (int) $user->id);
 
         return response()->json([
@@ -244,6 +261,11 @@ class ChannelController
         \Illuminate\Support\Facades\DB::table('channel_user')->whereIn('channel_id', $allTargetIds)->delete();
         Channel::whereIn('id', $allTargetIds)->delete();
 
+        foreach ($allTargetIds as $targetId) {
+            ApiCache::forgetChannelAnnouncements((int) $targetId);
+            ApiCache::forgetChannels((int) $targetId);
+        }
+
         RealtimeStateUpdated::safeDispatch('channel.updated', (int) $id, (int) $user->id);
 
         return response()->json([
@@ -292,6 +314,8 @@ class ChannelController
             ]);
         }
 
+        ApiCache::forgetChannels((int) $channel->id);
+        ApiCache::forgetChannelAnnouncements((int) $channel->id);
         RealtimeStateUpdated::safeDispatch('channel.updated', (int) $channel->id, (int) $user->id);
 
         $fresh = $channel->fresh('members.academicProfile');
@@ -323,6 +347,8 @@ class ChannelController
             ->where('user_id', $user->id)
             ->delete();
 
+        ApiCache::forgetChannels((int) $channel->id);
+        ApiCache::forgetChannelAnnouncements((int) $channel->id);
         RealtimeStateUpdated::safeDispatch('channel.updated', (int) $channel->id, (int) $user->id);
 
         return response()->json([
@@ -406,6 +432,8 @@ class ChannelController
             $channel->members()->detach($targetUser->id);
         }
 
+        ApiCache::forgetChannels((int) $channel->id);
+        ApiCache::forgetChannelAnnouncements((int) $channel->id);
         RealtimeStateUpdated::safeDispatch('channel.updated', (int) $channel->id, (int) $user->id);
 
         $actionMessages = [

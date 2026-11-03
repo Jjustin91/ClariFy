@@ -4,6 +4,7 @@ namespace App\Observers;
 
 use App\Models\Announcement;
 use App\Models\AnnouncementAudit;
+use App\Support\ApiCache;
 use Illuminate\Support\Facades\Auth;
 
 class AnnouncementObserver
@@ -27,5 +28,36 @@ class AnnouncementObserver
                 'edited_at' => now(),
             ]);
         }
+    }
+
+    /**
+     * Invalidate the specific channel's announcement cache when an announcement is created.
+     */
+    public function created(Announcement $announcement): void
+    {
+        ApiCache::forgetChannelAnnouncements((int) $announcement->channel_id);
+        ApiCache::forgetChannels((int) $announcement->channel_id);
+    }
+
+    /**
+     * Invalidate the specific channel's announcement cache when an announcement is updated.
+     */
+    public function updated(Announcement $announcement): void
+    {
+        ApiCache::forgetChannelAnnouncements((int) $announcement->channel_id);
+
+        $originalChannelId = $announcement->getOriginal('channel_id');
+        if ($originalChannelId && (int) $originalChannelId !== (int) $announcement->channel_id) {
+            ApiCache::forgetChannelAnnouncements((int) $originalChannelId);
+        }
+    }
+
+    /**
+     * Invalidate the specific channel's announcement cache when an announcement is deleted.
+     */
+    public function deleted(Announcement $announcement): void
+    {
+        ApiCache::forgetChannelAnnouncements((int) $announcement->channel_id);
+        ApiCache::forgetChannels((int) $announcement->channel_id);
     }
 }
