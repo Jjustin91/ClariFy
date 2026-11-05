@@ -3,9 +3,9 @@ name: Deploy Laravel Backend to Hostinger VPS
 on:
   push:
     branches:
-      - jonathan # Change to 'master' if your default branch is master
+      - jonathan
     paths:
-      - 'clarify-api/**' # Only triggers when backend code changes
+      - 'clarify-api/**'
 
 jobs:
   deploy:
@@ -31,19 +31,27 @@ jobs:
             # Pull latest changes
             git pull origin jonathan
 
-            # Install dependencies
+            # Install production dependencies
             composer install --no-dev --optimize-autoloader --no-interaction
 
             # Run database migrations
             php artisan migrate --force
 
-            # Optimize cache
+            # Optimize caches
+            php artisan optimize:clear
             php artisan config:cache
             php artisan route:cache
             php artisan view:cache
 
-            # Restart queue workers if using queues
+            # Restore correct web server ownership and permissions
+            chown -R www-data:www-data storage bootstrap/cache
+            chmod -R 775 storage bootstrap/cache
+
+            # Restart queue workers
             php artisan queue:restart
+
+            # Reload PHP-FPM (adjust to your installed version, e.g., php8.3-fpm or php8.2-fpm)
+            sudo systemctl reload php8.3-fpm || sudo systemctl restart php*-fpm
 
             # Bring Laravel back online
             php artisan up
