@@ -1,0 +1,49 @@
+name: Deploy Laravel Backend to Hostinger VPS
+
+on:
+  push:
+    branches:
+      - main # Change to 'master' if your default branch is master
+    paths:
+      - 'clarify-api/**' # Only triggers when backend code changes
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Deploy to Hostinger VPS via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          port: ${{ secrets.SSH_PORT }}
+          script: |
+            cd /var/www/clarify/ClariFy/clarify-api
+
+            # Put Laravel into maintenance mode
+            php artisan down || true
+
+            # Pull latest changes
+            git pull origin main
+
+            # Install dependencies
+            composer install --no-dev --optimize-autoloader --no-interaction
+
+            # Run database migrations
+            php artisan migrate --force
+
+            # Optimize cache
+            php artisan config:cache
+            php artisan route:cache
+            php artisan view:cache
+
+            # Restart queue workers if using queues
+            php artisan queue:restart
+
+            # Bring Laravel back online
+            php artisan up
