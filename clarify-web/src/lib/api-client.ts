@@ -16,7 +16,10 @@ import type {
 } from '../types/api';
 
 // Always route browser requests through same-origin /api/v1 (which connects to PostgreSQL directly or proxies to LARAVEL_BACKEND_URL)
-const RAW_API_URL = process.env.NEXT_PUBLIC_API_URL || 'https://clarify-api-4jwj.onrender.com/api/v1';
+const RAW_API_URL = 
+  process.env.NEXT_PUBLIC_API_URL || 
+  process.env.NEXT_PUBLIC_API_BASE_URL || 
+  'https://api.ustpclarify.tech/api/v1';
 export const API_BASE_URL = RAW_API_URL.replace(/\/+$/, '');
 
 const STORAGE_KEYS = {
