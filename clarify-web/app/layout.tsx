@@ -1,55 +1,44 @@
-import type { Metadata } from 'next';
-import { Plus_Jakarta_Sans, JetBrains_Mono } from 'next/font/google';
-import './globals.css';
-import { ClarifyProvider } from '@/src/context/ClarifyContext';
-
-const plusJakarta = Plus_Jakarta_Sans({
-  subsets: ['latin'],
-  weight: ['400', '500', '600', '700', '800'],
-  variable: '--font-plus-jakarta',
-  display: 'swap',
-});
-
-const jetbrainsMono = JetBrains_Mono({
-  subsets: ['latin'],
-  weight: ['400', '500', '600', '700'],
-  variable: '--font-jetbrains-mono',
-  display: 'swap',
-});
+import type { Metadata } from "next";
+import "./globals.css";
+import { ClarifyProvider } from "@/src/context/ClarifyContext";
 
 export const metadata: Metadata = {
-  title: 'ClariFy — USTP Unified Campus Noticeboard & Scoped Communication Platform',
-  description:
-    'Unified Campus Noticeboard, Scoped Course Hubs, Isolated Q&A Threads, 1-Click Anonymized Class FAQs, and PRISMS Admin Console for USTP-CDO (IT314 Group 5).',
-  icons: {
-    icon: '/assets/aistudio/image_07899ab9.png',
-    shortcut: '/assets/aistudio/image_07899ab9.png',
-    apple: '/assets/aistudio/image_07899ab9.png',
-  },
-  openGraph: {
-    title: 'ClariFy — USTP Unified Campus Noticeboard & Scoped Communication Platform',
-    description:
-      'Unified Campus Noticeboard, Scoped Course Hubs, Isolated Q&A Threads, 1-Click Anonymized Class FAQs, and PRISMS Admin Console for USTP-CDO (IT314 Group 5).',
-    type: 'website',
-  },
-  twitter: {
-    card: 'summary_large_image',
-    title: 'ClariFy — USTP Unified Campus Noticeboard & Scoped Communication Platform',
-    description:
-      'Unified Campus Noticeboard, Scoped Course Hubs, Isolated Q&A Threads, 1-Click Anonymized Class FAQs, and PRISMS Admin Console for USTP-CDO (IT314 Group 5).',
-  },
+  title: "ClariFy",
+  description: "Official Academic Communication Hub & Broadcast Portal",
 };
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default function RootLayout({
+  children,
+}: Readonly<{
+  children: React.ReactNode;
+}>) {
   return (
-    <html lang="en" className={`${plusJakarta.variable} ${jetbrainsMono.variable}`}>
-      <body
-        suppressHydrationWarning
-        className="font-sans bg-ustp-cream text-ustp-text antialiased selection:bg-ustp-gold selection:text-ustp-navy"
-      >
-        <ClarifyProvider>{children}</ClarifyProvider>
+    <html lang="en">
+      <head>
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link
+          rel="preconnect"
+          href="https://fonts.gstatic.com"
+          crossOrigin="anonymous"
+        />
+        <link
+          href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap"
+          rel="stylesheet"
+        />
+        <style>{`
+          :root {
+            --font-plus-jakarta: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+          }
+          body {
+            font-family: var(--font-plus-jakarta);
+          }
+        `}</style>
+      </head>
+      <body className="antialiased min-h-screen bg-slate-950 text-slate-100">
+        <ClarifyProvider>
+          {children}
+        </ClarifyProvider>
       </body>
     </html>
   );
 }
-
