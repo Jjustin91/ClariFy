@@ -1,30 +1,20 @@
-import type { NextConfig } from 'next';
+import type { NextConfig } from "next";
+import path from "node:path";
 
 const nextConfig: NextConfig = {
-  reactStrictMode: true,
-  typescript: {
-    ignoreBuildErrors: false,
-  },
+  output: "standalone",
+  outputFileTracingRoot: path.join(__dirname),
   images: {
     remotePatterns: [
       {
-        protocol: 'https',
-        hostname: 'picsum.photos',
-        port: '',
-        pathname: '/**',
+        protocol: "https",
+        hostname: "**",
+      },
+      {
+        protocol: "http",
+        hostname: "**",
       },
     ],
-  },
-  output: 'standalone',
-  transpilePackages: ['motion'],
-  turbopack: {},
-  async rewrites() {
-    return [
-      {
-        source: '/api/v1/:path*',
-        destination: 'https://clarify-api-4jwj.onrender.com/api/v1/:path*',
-      },
-    ];
   },
 };
 
