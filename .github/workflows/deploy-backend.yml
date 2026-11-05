@@ -3,7 +3,7 @@ name: Deploy Laravel Backend to Hostinger VPS
 on:
   push:
     branches:
-      - main # Change to 'master' if your default branch is master
+      - jonathan # Change to 'master' if your default branch is master
     paths:
       - 'clarify-api/**' # Only triggers when backend code changes
 
