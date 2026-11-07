@@ -6,6 +6,7 @@ use App\Events\RealtimeStateUpdated;
 use App\Http\Resources\ThreadResource;
 use App\Models\Channel;
 use App\Models\Message;
+use App\Policies\ChannelPolicy;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -17,12 +18,18 @@ class ThreadController
     public function index(Request $request, int $channelId): JsonResponse
     {
         $user = $request->user();
-        $channel = Channel::find($channelId) ?? Channel::first();
-        $resolvedChannelId = $channel ? $channel->id : $channelId;
+        $channel = Channel::findOrFail($channelId);
 
-        $query = Message::with(['sender', 'replies.sender'])
+        if (! $user || ! ChannelPolicy::hasApprovedChannelAccess($user, $channel)) {
+            return response()->json([
+                'status' => 403,
+                'message' => "Access Denied: You are not an approved member of {$channel->name} (FR-01_REV).",
+            ], 403);
+        }
+
+        $query = Message::with(['sender:id,name,role,avatar_url', 'replies.sender:id,name,role,avatar_url'])
             ->rootThreads()
-            ->where('channel_id', $resolvedChannelId)
+            ->where('channel_id', $channel->id)
             ->latest('created_at');
 
         if ($status = $request->query('status')) {
@@ -34,7 +41,7 @@ class ThreadController
         }
 
         // Enforce Private Inquiry visibility (Stakeholder Table E)
-        if ($user && $user->role === 'student') {
+        if ($user->role === 'student') {
             $query->where(function ($q) use ($user) {
                 $q->where('is_private', false)
                     ->orWhere('sender_id', $user->id);
@@ -53,26 +60,34 @@ class ThreadController
      */
     public function store(Request $request, int $channelId): JsonResponse
     {
+        $user = $request->user();
+        $channel = Channel::findOrFail($channelId);
+
+        if (! $user || ! ChannelPolicy::hasApprovedChannelAccess($user, $channel)) {
+            return response()->json([
+                'status' => 403,
+                'message' => "Access Denied: You are not an approved member of {$channel->name} (FR-01_REV).",
+            ], 403);
+        }
+
         $validated = $request->validate([
             'announcement_id' => ['nullable', 'integer', 'exists:announcements,id'],
             'subject_hashtag' => ['required', 'string', 'max:120'],
-            'content' => ['required', 'string'],
+            'content' => ['required', 'string', 'max:5000'],
             'is_private' => ['nullable', 'boolean'],
         ], [
             'subject_hashtag.required' => 'Please enter a subject hashtag (e.g., #Defence).',
             'content.required' => 'Please enter your inquiry or clarification details.',
+            'content.max' => 'Inquiry content cannot exceed 5,000 characters.',
         ]);
-
-        $channel = Channel::find($channelId) ?? Channel::first();
-        $resolvedChannelId = $channel ? $channel->id : $channelId;
 
         $rawTag = ltrim(trim($validated['subject_hashtag']), '#');
         $formattedHashtag = '#' . $rawTag;
 
         $thread = Message::create([
-            'channel_id' => $resolvedChannelId,
+            'channel_id' => $channel->id,
             'announcement_id' => $validated['announcement_id'] ?? null,
-            'sender_id' => $request->user()->id,
+            'sender_id' => $user->id,
             'parent_id' => null,
             'subject_hashtag' => $formattedHashtag,
             'content' => trim($validated['content']),
@@ -85,8 +100,8 @@ class ThreadController
 
         RealtimeStateUpdated::safeDispatch(
             'thread.created',
-            (int) $resolvedChannelId,
-            (int) $request->user()->id,
+            (int) $channel->id,
+            (int) $user->id,
             null,
             null,
             $threadPayload
@@ -104,7 +119,15 @@ class ThreadController
     public function update(Request $request, int $threadId): JsonResponse
     {
         $thread = Message::rootThreads()->findOrFail($threadId);
+        $channel = Channel::findOrFail($thread->channel_id);
         $user = $request->user();
+
+        if (! $user || ! ChannelPolicy::hasApprovedChannelAccess($user, $channel)) {
+            return response()->json([
+                'status' => 403,
+                'message' => "Access Denied: You are not an approved member of {$channel->name}.",
+            ], 403);
+        }
 
         if ($thread->sender_id !== $user->id && ! $user->canPublishOrManage()) {
             return response()->json([
@@ -122,7 +145,7 @@ class ThreadController
 
         $validated = $request->validate([
             'subject_hashtag' => ['sometimes', 'string', 'max:120'],
-            'content' => ['required', 'string'],
+            'content' => ['required', 'string', 'max:5000'],
         ]);
 
         if (! empty($validated['subject_hashtag'])) {
@@ -154,7 +177,15 @@ class ThreadController
     public function destroy(Request $request, int $threadId): JsonResponse
     {
         $thread = Message::rootThreads()->findOrFail($threadId);
+        $channel = Channel::findOrFail($thread->channel_id);
         $user = $request->user();
+
+        if (! $user || ! ChannelPolicy::hasApprovedChannelAccess($user, $channel)) {
+            return response()->json([
+                'status' => 403,
+                'message' => "Access Denied: You are not an approved member of {$channel->name}.",
+            ], 403);
+        }
 
         if ($thread->sender_id !== $user->id && ! $user->canPublishOrManage()) {
             return response()->json([
@@ -183,22 +214,31 @@ class ThreadController
     public function reply(Request $request, int $threadId): JsonResponse
     {
         $user = $request->user();
-        if (! $user->canPublishOrManage()) {
+        if (! $user || ! $user->canPublishOrManage()) {
             return response()->json([
                 'status' => 403,
                 'message' => 'HTTP 403 Forbidden: Only instructors can answer and resolve tickets.',
             ], 403);
         }
 
+        $thread = Message::rootThreads()->findOrFail($threadId);
+        $channel = Channel::findOrFail($thread->channel_id);
+
+        if (! ChannelPolicy::hasApprovedChannelAccess($user, $channel)) {
+            return response()->json([
+                'status' => 403,
+                'message' => "Access Denied: You are not an approved member or instructor of {$channel->name}.",
+            ], 403);
+        }
+
         $validated = $request->validate([
-            'content' => ['required', 'string'],
+            'content' => ['required', 'string', 'max:5000'],
             'mark_resolved' => ['nullable', 'boolean'],
             'pin_to_faq' => ['nullable', 'boolean'],
         ], [
             'content.required' => 'Please enter a faculty response before submitting.',
+            'content.max' => 'Reply content cannot exceed 5,000 characters.',
         ]);
-
-        $thread = Message::rootThreads()->findOrFail($threadId);
 
         Message::create([
             'channel_id' => $thread->channel_id,
@@ -243,7 +283,7 @@ class ThreadController
     public function convertToFaq(Request $request, int $threadId): JsonResponse
     {
         $user = $request->user();
-        if (! $user->canPublishOrManage()) {
+        if (! $user || ! $user->canPublishOrManage()) {
             return response()->json([
                 'status' => 403,
                 'message' => 'HTTP 403 Forbidden: Only instructors can publish Class FAQs.',
@@ -251,6 +291,15 @@ class ThreadController
         }
 
         $thread = Message::rootThreads()->findOrFail($threadId);
+        $channel = Channel::findOrFail($thread->channel_id);
+
+        if (! ChannelPolicy::hasApprovedChannelAccess($user, $channel)) {
+            return response()->json([
+                'status' => 403,
+                'message' => "Access Denied: You are not an approved member or instructor of {$channel->name}.",
+            ], 403);
+        }
+
         $thread->is_resolved = true;
         $thread->is_pinned_faq = true;
         $thread->is_private = false;
@@ -273,3 +322,4 @@ class ThreadController
         ]);
     }
 }
+

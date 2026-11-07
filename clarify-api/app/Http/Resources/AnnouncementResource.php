@@ -10,15 +10,27 @@ class AnnouncementResource extends JsonResource
     public function toArray(Request $request): array
     {
         $user = $request->user();
-        $enrolledTotal = max(42, (int) $this->channel?->members()->count());
-        $acknowledgedCount = (int) $this->reads()->count();
+
+        $channelMembersCount = $this->channel?->members_count !== null
+            ? (int) $this->channel->members_count
+            : (int) ($this->channel?->members()->count() ?? 0);
+        $enrolledTotal = max(42, $channelMembersCount);
+
+        $acknowledgedCount = $this->reads_count !== null
+            ? (int) $this->reads_count
+            : (int) $this->reads()->count();
+
         $percentage = $enrolledTotal > 0
             ? round(($acknowledgedCount / $enrolledTotal) * 100, 1)
             : 0.0;
 
-        $hasAcknowledged = $user
-            ? $this->reads()->where('user_id', $user->id)->exists()
-            : false;
+        if ($this->has_current_user_acknowledged !== null) {
+            $hasAcknowledged = (bool) $this->has_current_user_acknowledged;
+        } else {
+            $hasAcknowledged = $user
+                ? $this->reads()->where('user_id', $user->id)->exists()
+                : false;
+        }
 
         $pubDept = $this->publisher?->academicProfile?->department ?? 'CITC';
         $channelType = $this->channel?->channel_type ?? 'course_hub';

@@ -8,22 +8,15 @@ return [
     |--------------------------------------------------------------------------
     */
 
-    'paths' => ['api/*', 'sanctum/csrf-cookie'],
+    'paths' => ['api/*', 'broadcasting/auth', 'sanctum/csrf-cookie'],
 
     'allowed_methods' => ['*'],
 
-    'allowed_origins' => [
-        'http://localhost:3000',
-        'http://127.0.0.1:3000',
-        'https://ustpclarify.tech',
-        'https://www.ustpclarify.tech',
-        rtrim(env('FRONTEND_URL', 'https://ustpclarify.tech'), '/'),
-    ],
+    'allowed_origins' => array_values(array_filter([
+        rtrim((string) env('FRONTEND_URL', 'http://localhost:3000'), '/'),
+    ])),
 
-    'allowed_origins_patterns' => [
-        '#^https?://([a-z0-9-]+\.)?ustpclarify\.tech(:\d+)?$#',
-        '#^https?://localhost(:\d+)?$#',
-    ],
+    'allowed_origins_patterns' => [],
 
     'allowed_headers' => ['*'],
 

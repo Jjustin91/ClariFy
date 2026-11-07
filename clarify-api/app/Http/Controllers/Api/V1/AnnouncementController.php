@@ -9,10 +9,12 @@ use App\Jobs\TriggerSmsFallbackBatch;
 use App\Models\Announcement;
 use App\Models\AnnouncementRead;
 use App\Models\Channel;
+use App\Policies\ChannelPolicy;
 use App\Support\ApiCache;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Storage;
 
@@ -20,7 +22,7 @@ class AnnouncementController
 {
     /**
      * GET /api/v1/announcements (Workflow 3, FR-04_REV, FR-05)
-     * Caches active announcements per channel for 10 minutes (600s) using the 'file' cache store.
+     * Uses withCount('reads') and computes per-user acknowledgment status after reading shared cache.
      */
     public function index(Request $request): JsonResponse
     {
@@ -30,12 +32,35 @@ class AnnouncementController
         $department = $request->query('department');
         $search = trim((string) $request->query('search', ''));
         $sort = (string) $request->query('sort', 'latest');
-        $perPage = max(1, (int) $request->query('per_page', 4));
+        $perPage = min(50, max(1, (int) $request->query('per_page', 4)));
         $page = max(1, (int) $request->query('page', 1));
 
+        if ($channelId !== null && $channelId !== '') {
+            $channel = Channel::findOrFail((int) $channelId);
+            if (! $user || ! ChannelPolicy::hasApprovedChannelAccess($user, $channel)) {
+                return response()->json([
+                    'status' => 403,
+                    'message' => "Access Denied: You are not an approved member of {$channel->name} (FR-01_REV).",
+                ], 403);
+            }
+        }
+
+        $enrolledIds = [];
+        if (! $channelId && $user) {
+            $enrolledIds = DB::table('channel_user')
+                ->where('user_id', $user->id)
+                ->where('approval_status', 'approved')
+                ->orderBy('channel_id')
+                ->pluck('channel_id')
+                ->map(fn ($id) => (int) $id)
+                ->all();
+        }
+
+        // Cache key is shared across users with the same role/scope filter; per-user acknowledgment is computed after cache read
         $cacheParams = array_filter([
-            'user_id' => $user?->id ?? 0,
             'can_manage' => $user?->canPublishOrManage() ? 1 : 0,
+            'enrolled' => ! $channelId ? implode(',', $enrolledIds) : null,
+            'pub_uid' => (! $channelId && $user?->canPublishOrManage()) ? $user->id : null,
             'tag' => $tag,
             'department' => $department,
             'search' => $search,
@@ -52,6 +77,7 @@ class AnnouncementController
             $request,
             $user,
             $channelId,
+            $enrolledIds,
             $tag,
             $department,
             $search,
@@ -59,9 +85,12 @@ class AnnouncementController
             $perPage,
             $page
         ): array {
-            $query = Announcement::with(['publisher.academicProfile', 'channel', 'reads'])
-                ->withCount('reads');
-            $likeOp = \Illuminate\Support\Facades\DB::getDriverName() === 'pgsql' ? 'ilike' : 'like';
+            $query = Announcement::with([
+                'publisher.academicProfile',
+                'channel' => fn ($cq) => $cq->withCount('members'),
+            ])->withCount('reads');
+
+            $likeOp = DB::getDriverName() === 'pgsql' ? 'ilike' : 'like';
 
             if (! $user || ! $user->canPublishOrManage()) {
                 $query->where('status', 'published');
@@ -70,14 +99,6 @@ class AnnouncementController
             if ($channelId) {
                 $query->where('channel_id', (int) $channelId);
             } elseif ($user) {
-                $hasApprovalCol = Channel::ensureApprovalStatusColumn();
-                $enrolledQuery = \Illuminate\Support\Facades\DB::table('channel_user')
-                    ->where('user_id', $user->id);
-                if ($hasApprovalCol) {
-                    $enrolledQuery->where('approval_status', 'approved');
-                }
-                $enrolledIds = $enrolledQuery->pluck('channel_id')->all();
-
                 $query->where(function ($q) use ($enrolledIds, $user) {
                     $q->whereHas('channel', fn ($cq) => $cq->where('channel_type', '!=', 'course_hub'))
                         ->orWhereIn('channel_id', $enrolledIds)
@@ -128,8 +149,13 @@ class AnnouncementController
                 $paginator = $query->paginate($perPage, ['*'], 'page', $paginator->lastPage());
             }
 
+            $items = $paginator->items();
+            foreach ($items as $item) {
+                $item->has_current_user_acknowledged = false;
+            }
+
             return [
-                'data' => AnnouncementResource::collection($paginator->items())->resolve($request),
+                'data' => AnnouncementResource::collection($items)->resolve($request),
                 'meta' => [
                     'current_page' => $paginator->currentPage(),
                     'last_page' => max(1, $paginator->lastPage()),
@@ -138,6 +164,30 @@ class AnnouncementController
                 ],
             ];
         });
+
+        // Compute per-user acknowledgment flags in a single indexed query after cache read
+        if ($user && ! empty($payload['data'])) {
+            $announcementIds = array_values(array_filter(array_map(
+                fn (array $item) => isset($item['id']) ? (int) $item['id'] : 0,
+                $payload['data']
+            )));
+
+            if (! empty($announcementIds)) {
+                $ackedSet = array_flip(
+                    AnnouncementRead::where('user_id', $user->id)
+                        ->whereIn('announcement_id', $announcementIds)
+                        ->pluck('announcement_id')
+                        ->map(fn ($id) => (int) $id)
+                        ->all()
+                );
+
+                foreach ($payload['data'] as &$item) {
+                    $aid = (int) ($item['id'] ?? 0);
+                    $item['read_reach']['has_current_user_acknowledged'] = isset($ackedSet[$aid]);
+                }
+                unset($item);
+            }
+        }
 
         return response()->json($payload);
     }
@@ -187,48 +237,52 @@ class AnnouncementController
                 }
             }
 
-            if (empty($targetChannelIds)) {
-                $fallbackChannel = Channel::find($request->input('channel_id', 1)) ?? Channel::first();
-                if ($fallbackChannel) {
-                    $targetChannelIds = [$fallbackChannel->id];
-                    $request->merge(['channel_id' => $fallbackChannel->id]);
-                }
-            } else {
+            if (empty($targetChannelIds) && $request->filled('channel_id')) {
+                $targetChannelIds = [(int) $request->input('channel_id')];
+            }
+
+            if (! empty($targetChannelIds)) {
                 $request->merge(['channel_id' => $targetChannelIds[0]]);
             }
         }
 
-        $channel = Channel::find($request->input('channel_id'));
-        $authResponse = Gate::inspect('create', [Announcement::class, $channel]);
-        if ($authResponse->denied()) {
-            return response()->json([
-                'status' => 403,
-                'message' => $authResponse->message(),
-            ], 403);
+        foreach ($targetChannelIds as $cid) {
+            $targetChannel = Channel::findOrFail((int) $cid);
+            $authResponse = Gate::inspect('create', [Announcement::class, $targetChannel]);
+            if ($authResponse->denied()) {
+                return response()->json([
+                    'status' => 403,
+                    'message' => $authResponse->message(),
+                ], 403);
+            }
+        }
+
+        if (empty($targetChannelIds)) {
+            $authResponse = Gate::inspect('create', [Announcement::class, null]);
+            if ($authResponse->denied()) {
+                return response()->json([
+                    'status' => 403,
+                    'message' => $authResponse->message(),
+                ], 403);
+            }
         }
 
         $validated = $request->validate([
             'channel_id' => ['required', 'integer', 'exists:channels,id'],
             'title' => ['required', 'string', 'max:255'],
-            'content' => ['required', 'string'],
+            'content' => ['required', 'string', 'max:10000'],
             'tags' => ['nullable'],
             'is_urgent' => ['nullable'],
             'trigger_sms_fallback' => ['nullable'],
             'status' => ['nullable', 'in:published,draft,archived'],
             'attachment' => ['nullable', 'file', 'max:10240'],
             'attachment_url' => ['nullable', 'string'],
-            'attachment_name' => ['nullable', 'string'],
+            'attachment_name' => ['nullable', 'string', 'max:255'],
             'attachment_type' => ['nullable', 'in:image,document'],
         ], [
             'title.required' => 'The title field is required.',
             'content.required' => 'The announcement content field is required.',
         ]);
-
-        try {
-            \Illuminate\Support\Facades\DB::statement('ALTER TABLE announcements ALTER COLUMN attachment_url TYPE TEXT');
-        } catch (\Throwable $e) {
-            // Ignore if already TEXT or SQLite
-        }
 
         $pubDept = $user->academicProfile?->department ?? 'CITC';
         $tags = $isCampusWide ? ['OFFICIAL MEMO', 'CDO CAMPUS', $pubDept] : [];
@@ -320,7 +374,13 @@ class AnnouncementController
 
         ApiCache::forgetChannelAnnouncements(null);
 
-        $resourcePayload = (new AnnouncementResource($firstAnnouncement->load(['publisher.academicProfile', 'channel', 'reads'])))->resolve($request);
+        $firstAnnouncement->load([
+            'publisher.academicProfile',
+            'channel' => fn ($cq) => $cq->withCount('members'),
+        ])->loadCount('reads');
+        $firstAnnouncement->has_current_user_acknowledged = true;
+
+        $resourcePayload = (new AnnouncementResource($firstAnnouncement))->resolve($request);
 
         RealtimeStateUpdated::safeDispatch(
             $isUrgent ? 'announcement.urgent' : 'announcement.created',
@@ -341,7 +401,6 @@ class AnnouncementController
 
     /**
      * PATCH /api/v1/announcements/{id} (NFR-03_REV / TC-NFR03)
-     * AnnouncementObserver automatically logs audit trail and sets is_edited = true.
      */
     public function update(Request $request, int $id): JsonResponse
     {
@@ -355,21 +414,15 @@ class AnnouncementController
             ], 403);
         }
 
-        try {
-            \Illuminate\Support\Facades\DB::statement('ALTER TABLE announcements ALTER COLUMN attachment_url TYPE TEXT');
-        } catch (\Throwable $e) {
-            // Ignore if already TEXT or SQLite
-        }
-
         $validated = $request->validate([
             'title' => ['required', 'string', 'max:255'],
-            'content' => ['required', 'string'],
+            'content' => ['required', 'string', 'max:10000'],
             'tags' => ['nullable', 'array'],
             'is_urgent' => ['nullable', 'boolean'],
             'trigger_sms_fallback' => ['nullable', 'boolean'],
             'status' => ['nullable', 'in:published,draft,archived'],
             'attachment_url' => ['nullable', 'string'],
-            'attachment_name' => ['nullable', 'string'],
+            'attachment_name' => ['nullable', 'string', 'max:255'],
             'attachment_type' => ['nullable', 'in:image,document'],
             'remove_attachment' => ['nullable', 'boolean'],
         ]);
@@ -403,7 +456,10 @@ class AnnouncementController
         ApiCache::forgetChannelAnnouncements(null);
         ApiCache::forgetChannels((int) $announcement->channel_id);
 
-        $freshAnnouncement = $announcement->fresh(['publisher.academicProfile', 'channel', 'reads']);
+        $freshAnnouncement = $announcement->fresh([
+            'publisher.academicProfile',
+            'channel' => fn ($cq) => $cq->withCount('members'),
+        ])->loadCount('reads');
         $resourcePayload = (new AnnouncementResource($freshAnnouncement))->resolve($request);
 
         RealtimeStateUpdated::safeDispatch(
@@ -460,6 +516,16 @@ class AnnouncementController
         $announcement = Announcement::findOrFail($id);
         $user = $request->user();
 
+        if ($announcement->channel_id) {
+            $channel = Channel::find($announcement->channel_id);
+            if ($channel && ! ChannelPolicy::hasApprovedChannelAccess($user, $channel)) {
+                return response()->json([
+                    'status' => 403,
+                    'message' => "Access Denied: You are not an approved member of {$channel->name}.",
+                ], 403);
+            }
+        }
+
         AnnouncementRead::firstOrCreate([
             'announcement_id' => $announcement->id,
             'user_id' => $user->id,
@@ -469,7 +535,12 @@ class AnnouncementController
 
         ApiCache::forgetChannelAnnouncements((int) $announcement->channel_id);
 
-        $freshAnnouncement = $announcement->fresh(['publisher.academicProfile', 'channel', 'reads']);
+        $freshAnnouncement = $announcement->fresh([
+            'publisher.academicProfile',
+            'channel' => fn ($cq) => $cq->withCount('members'),
+        ])->loadCount('reads');
+        $freshAnnouncement->has_current_user_acknowledged = true;
+
         $resourcePayload = (new AnnouncementResource($freshAnnouncement))->resolve($request);
 
         RealtimeStateUpdated::safeDispatch(
@@ -485,3 +556,4 @@ class AnnouncementController
         ]);
     }
 }
+

@@ -11,117 +11,117 @@ class ApiCache
     public const INSTRUCTORS_TTL_SECONDS = 1800;  // 30 minutes
 
     /**
-     * Builds the deterministic cache key for a channel's active announcements
-     * and registers it under the channel's key index for targeted invalidation on the 'file' store.
+     * Reads the current generation counter for a namespace (initializes to 1 if absent).
+     */
+    public static function getVersion(string $namespace): int
+    {
+        $versionKey = "ver:{$namespace}";
+        $ver = Cache::get($versionKey);
+        if (! is_numeric($ver) || (int) $ver < 1) {
+            Cache::forever($versionKey, 1);
+            return 1;
+        }
+
+        return (int) $ver;
+    }
+
+    /**
+     * Atomically bumps a namespace generation counter without scanning or maintaining .keys arrays.
+     */
+    public static function bumpVersion(string $namespace): int
+    {
+        $versionKey = "ver:{$namespace}";
+        if (! Cache::has($versionKey)) {
+            Cache::forever($versionKey, 2);
+            return 2;
+        }
+
+        return (int) Cache::increment($versionKey);
+    }
+
+    /**
+     * Builds the versioned cache key for a channel's shared announcements query.
      */
     public static function announcementChannelKey(int $channelId, array $params = []): string
     {
-        $baseKey = "announcements.channel.{$channelId}";
-        $key = empty($params) ? $baseKey : "{$baseKey}." . md5(json_encode($params));
+        $channelVer = self::getVersion("announcements.channel.{$channelId}");
+        $globalVer = self::getVersion('announcements.global');
+        ksort($params);
+        $hash = empty($params) ? 'default' : md5(json_encode($params));
 
-        self::registerIndexedKey("{$baseKey}.keys", $key, self::ANNOUNCEMENTS_TTL_SECONDS);
-
-        return $key;
+        return "announcements.ch.{$channelId}.v{$channelVer}.g{$globalVer}.{$hash}";
     }
 
     /**
-     * Builds the deterministic cache key for the combined campus-wide + enrolled announcements feed.
+     * Builds the versioned cache key for the combined campus-wide + enrolled announcements feed.
      */
     public static function announcementFeedKey(?int $userId, array $params = []): string
     {
+        $feedVer = self::getVersion('announcements.feed');
+        $globalVer = self::getVersion('announcements.global');
         $uid = $userId ?? 0;
-        $key = "announcements.feed.user.{$uid}." . md5(json_encode($params));
+        ksort($params);
+        $hash = md5(json_encode($params));
 
-        self::registerIndexedKey('announcements.feed.keys', $key, self::ANNOUNCEMENTS_TTL_SECONDS);
-
-        return $key;
+        return "announcements.feed.u{$uid}.v{$feedVer}.g{$globalVer}.{$hash}";
     }
 
     /**
-     * Builds the deterministic cache key for a user's visible channel list.
+     * Builds the versioned cache key for the shared channel list (independent of per-user id).
      */
-    public static function channelsKey(?int $userId, array $params = []): string
+    public static function channelsKey(?int $userId = null, array $params = []): string
     {
-        $uid = $userId ?? 0;
-        $baseKey = "channels.user.{$uid}";
-        $key = empty($params) ? $baseKey : "{$baseKey}." . md5(json_encode($params));
+        $ver = self::getVersion('channels.list');
+        ksort($params);
+        $hash = empty($params) ? 'default' : md5(json_encode($params));
 
-        self::registerIndexedKey('channels.keys', $key, self::CHANNELS_TTL_SECONDS);
-
-        return $key;
+        return "channels.shared.v{$ver}.{$hash}";
     }
 
     /**
-     * Builds the deterministic cache key for the verified instructor directory.
+     * Builds the versioned cache key for the verified instructor directory.
      */
     public static function instructorsKey(array $params = []): string
     {
-        $baseKey = 'instructors.directory';
-        $key = empty($params) ? $baseKey : "{$baseKey}." . md5(json_encode($params));
+        $ver = self::getVersion('instructors.directory');
+        ksort($params);
+        $hash = empty($params) ? 'default' : md5(json_encode($params));
 
-        self::registerIndexedKey('instructors.keys', $key, self::INSTRUCTORS_TTL_SECONDS);
-
-        return $key;
+        return "instructors.dir.v{$ver}.{$hash}";
     }
 
     /**
-     * Invalidates all cached announcement keys for a specific channel (and combined feeds).
+     * Invalidates cached announcement keys for a specific channel (and combined feeds) by bumping version counters.
      */
     public static function forgetChannelAnnouncements(?int $channelId): void
     {
         if ($channelId !== null) {
-            Cache::forget("announcements.channel.{$channelId}");
-            self::forgetIndexedKeys("announcements.channel.{$channelId}.keys");
+            self::bumpVersion("announcements.channel.{$channelId}");
+        } else {
+            self::bumpVersion('announcements.global');
         }
 
-        Cache::forget('announcements.feed');
-        self::forgetIndexedKeys('announcements.feed.keys');
+        self::bumpVersion('announcements.feed');
     }
 
     /**
-     * Invalidates all cached channel list keys when a channel is created, updated, deleted, or membership changes.
+     * Invalidates cached channel list keys when a channel is created, updated, deleted, or membership changes.
      */
     public static function forgetChannels(?int $channelId = null): void
     {
         if ($channelId !== null) {
-            Cache::forget("channels.channel.{$channelId}");
+            self::bumpVersion("channels.channel.{$channelId}");
         }
 
-        Cache::forget('channels.list');
-        self::forgetIndexedKeys('channels.keys');
+        self::bumpVersion('channels.list');
     }
 
     /**
-     * Invalidates all cached instructor directory keys.
+     * Invalidates cached instructor directory keys.
      */
     public static function forgetInstructors(): void
     {
-        Cache::forget('instructors.directory');
-        self::forgetIndexedKeys('instructors.keys');
-    }
-
-    private static function registerIndexedKey(string $indexKey, string $targetKey, int $ttlSeconds): void
-    {
-        $tracked = Cache::get($indexKey, []);
-        if (! is_array($tracked)) {
-            $tracked = [];
-        }
-
-        if (! in_array($targetKey, $tracked, true)) {
-            $tracked[] = $targetKey;
-            Cache::put($indexKey, $tracked, $ttlSeconds);
-        }
-    }
-
-    private static function forgetIndexedKeys(string $indexKey): void
-    {
-        $tracked = Cache::pull($indexKey, []);
-        if (is_array($tracked)) {
-            foreach ($tracked as $key) {
-                if (is_string($key)) {
-                    Cache::forget($key);
-                }
-            }
-        }
+        self::bumpVersion('instructors.directory');
     }
 }
+

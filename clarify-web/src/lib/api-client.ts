@@ -126,16 +126,11 @@ async function requestLaravel<T>(
   options: RequestInit = {}
 ): Promise<T> {
   const token = getStoredToken();
-  const activeUser = getStoredSessionUser();
   const isFormData = options.body instanceof FormData;
 
   const headers: Record<string, string> = {
     Accept: 'application/json',
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    ...(activeUser?.institutional_id
-      ? { 'X-Clarify-Institutional-Id': activeUser.institutional_id }
-      : {}),
-    ...(activeUser?.id ? { 'X-Clarify-User-Id': String(activeUser.id) } : {}),
     ...(!isFormData ? { 'Content-Type': 'application/json' } : {}),
     ...(options.headers as Record<string, string> | undefined),
   };
@@ -340,13 +335,23 @@ export async function updateProfileApi(
 export async function getChannelsApi(params?: {
   search?: string;
   type?: string;
+  include?: 'roster';
 }): Promise<SingleResourceResponse<Channel[]>> {
   const qs = new URLSearchParams();
   if (params?.search) qs.set('search', params.search);
   if (params?.type) qs.set('type', params.type);
+  if (params?.include) qs.set('include', params.include);
   const queryString = qs.toString();
   return requestLaravel<SingleResourceResponse<Channel[]>>(
     `/channels${queryString ? `?${queryString}` : ''}`
+  );
+}
+
+export async function getChannelRosterApi(
+  channelId: number
+): Promise<SingleResourceResponse<Channel>> {
+  return requestLaravel<SingleResourceResponse<Channel>>(
+    `/channels/${channelId}/roster`
   );
 }
 
@@ -907,18 +912,33 @@ export async function getAdminMetricsApi(): Promise<
 // COURSE HUB MESSENGER CHAT & PERSISTENCE STATUS
 // ============================================================================
 
+export interface PaginatedChatMessagesResponse
+  extends SingleResourceResponse<ChatMessage[]> {
+  meta?: {
+    has_more: boolean;
+    next_before: number | null;
+  };
+}
+
 export async function getChannelChatMessagesApi(
-  channelId: number
-): Promise<SingleResourceResponse<ChatMessage[]>> {
+  channelId: number,
+  params?: { before?: number; limit?: number }
+): Promise<PaginatedChatMessagesResponse> {
+  const qs = new URLSearchParams();
+  if (params?.before) qs.set('before', String(params.before));
+  if (params?.limit) qs.set('limit', String(params.limit));
+  const queryString = qs.toString();
+  const suffix = queryString ? `?${queryString}` : '';
+
   try {
-    return await requestLaravel<SingleResourceResponse<ChatMessage[]>>(
-      `/channels/${channelId}/messages`
+    return await requestLaravel<PaginatedChatMessagesResponse>(
+      `/channels/${channelId}/messages${suffix}`
     );
   } catch (err) {
     const apiErr = err as LaravelValidationError;
     if (apiErr?.status === 404) {
-      return requestLaravel<SingleResourceResponse<ChatMessage[]>>(
-        `/channels/${channelId}/chat`
+      return requestLaravel<PaginatedChatMessagesResponse>(
+        `/channels/${channelId}/chat${suffix}`
       );
     }
     throw err;

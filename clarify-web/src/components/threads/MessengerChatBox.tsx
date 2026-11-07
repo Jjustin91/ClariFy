@@ -31,6 +31,7 @@ import { formatShortTime } from '../announcements/AnnouncementCard';
 import { useClarify } from '../../context/ClarifyContext';
 import {
   getChannelChatMessagesApi,
+  getChannelRosterApi,
   joinChannelApi,
   leaveChannelApi,
   manageChannelMemberApi,
@@ -260,6 +261,18 @@ export function MessengerChatBox({
   const [messagesByChannel, setMessagesByChannel] = useState<
     Record<number, ChatMessage[]>
   >({});
+  const [hasMoreByChannel, setHasMoreByChannel] = useState<
+    Record<number, boolean>
+  >({});
+  const [nextBeforeByChannel, setNextBeforeByChannel] = useState<
+    Record<number, number | null>
+  >({});
+  const [isLoadingOlderByChannel, setIsLoadingOlderByChannel] = useState<
+    Record<number, boolean>
+  >({});
+  const [rosterChannelById, setRosterChannelById] = useState<
+    Record<number, Channel>
+  >({});
   const [loadedChannelKeys, setLoadedChannelKeys] = useState<
     Record<number, boolean>
   >({});
@@ -269,6 +282,7 @@ export function MessengerChatBox({
     null
   );
   const [showSettingsMenu, setShowSettingsMenu] = useState(false);
+  const skipAutoScrollRef = useRef(false);
 
   // Voice recording state
   const [isRecordingVoice, setIsRecordingVoice] = useState(false);
@@ -321,6 +335,27 @@ export function MessengerChatBox({
       cleanupRecordingTimersAndStream();
     };
   }, [cleanupRecordingTimersAndStream]);
+
+  const fetchFullChannelRoster = useCallback(async (targetHubId: number) => {
+    if (!targetHubId) return;
+    try {
+      const res = await getChannelRosterApi(targetHubId);
+      if (res?.data) {
+        setRosterChannelById((prev) => ({
+          ...prev,
+          [targetHubId]: res.data,
+        }));
+      }
+    } catch {
+      // Fallback to existing channel data
+    }
+  }, []);
+
+  useEffect(() => {
+    if (showSettingsMenu && channel?.id) {
+      void fetchFullChannelRoster(channel.id);
+    }
+  }, [showSettingsMenu, channel?.id, fetchFullChannelRoster]);
 
   /**
    * Appends an incoming real-time message or reconciles it with an in-flight optimistic message
@@ -402,10 +437,34 @@ export function MessengerChatBox({
     if (!isAuthReady || !isAuthenticated || !channelKey) return;
     setIsLoadingChannel(true);
     try {
-      const res = await getChannelChatMessagesApi(channelKey);
+      const res = await getChannelChatMessagesApi(channelKey, { limit: 50 });
       if (Array.isArray(res.data)) {
+        setHasMoreByChannel((prev) => ({
+          ...prev,
+          [channelKey]: Boolean(res.meta?.has_more),
+        }));
+        setNextBeforeByChannel((prev) => ({
+          ...prev,
+          [channelKey]:
+            res.meta?.next_before !== undefined
+              ? res.meta.next_before
+              : res.data.length > 0
+              ? Number(res.data[0].id)
+              : null,
+        }));
         setMessagesByChannel((prev) => {
           const currentList = prev[channelKey] || [];
+          const latestIds = new Set(res.data.map((m) => String(m.id)));
+          const earliestNewId =
+            res.data.length > 0 ? Number(res.data[0].id) : Infinity;
+          // Preserve any older paginated messages already loaded in this channel
+          const olderLoaded = currentList.filter(
+            (m) =>
+              m.status === 'sent' &&
+              !String(m.id).startsWith('temp-') &&
+              Number(m.id) < earliestNewId &&
+              !latestIds.has(String(m.id))
+          );
           // Preserve any optimistic messages currently in 'sending' or 'failed' state
           const pendingOptimistic = currentList.filter(
             (m) =>
@@ -420,6 +479,7 @@ export function MessengerChatBox({
           return {
             ...prev,
             [channelKey]: [
+              ...olderLoaded,
               ...res.data.map((m) => ({ ...m, status: 'sent' as const })),
               ...pendingOptimistic,
             ],
@@ -433,6 +493,70 @@ export function MessengerChatBox({
       setIsLoadingChannel(false);
     }
   }, [channelKey, isAuthReady, isAuthenticated]);
+
+  const loadOlderChatMessages = useCallback(async () => {
+    if (!channelKey) return;
+    const hasMore = hasMoreByChannel[channelKey];
+    const nextBefore = nextBeforeByChannel[channelKey];
+    const isLoadingOlder = isLoadingOlderByChannel[channelKey];
+    if (!hasMore || !nextBefore || isLoadingOlder) return;
+
+    setIsLoadingOlderByChannel((prev) => ({ ...prev, [channelKey]: true }));
+    const container = streamContainerRef.current;
+    const prevScrollHeight = container?.scrollHeight || 0;
+    const prevScrollTop = container?.scrollTop || 0;
+
+    try {
+      const res = await getChannelChatMessagesApi(channelKey, {
+        before: nextBefore,
+        limit: 50,
+      });
+      if (Array.isArray(res.data)) {
+        skipAutoScrollRef.current = true;
+        setHasMoreByChannel((prev) => ({
+          ...prev,
+          [channelKey]: Boolean(res.meta?.has_more),
+        }));
+        setNextBeforeByChannel((prev) => ({
+          ...prev,
+          [channelKey]:
+            res.meta?.next_before !== undefined
+              ? res.meta.next_before
+              : res.data.length > 0
+              ? Number(res.data[0].id)
+              : null,
+        }));
+        setMessagesByChannel((prev) => {
+          const existing = prev[channelKey] || [];
+          const existingIds = new Set(existing.map((m) => String(m.id)));
+          const olderUnique = res.data
+            .filter((m) => !existingIds.has(String(m.id)))
+            .map((m) => ({ ...m, status: 'sent' as const }));
+          return {
+            ...prev,
+            [channelKey]: [...olderUnique, ...existing],
+          };
+        });
+
+        if (typeof window !== 'undefined' && container) {
+          window.requestAnimationFrame(() => {
+            const newScrollHeight = container.scrollHeight;
+            container.scrollTop =
+              prevScrollTop + (newScrollHeight - prevScrollHeight);
+          });
+        }
+      }
+    } catch {
+      // Ignore older load error
+    } finally {
+      setIsLoadingOlderByChannel((prev) => ({ ...prev, [channelKey]: false }));
+    }
+  }, [
+    channelKey,
+    hasMoreByChannel,
+    nextBeforeByChannel,
+    isLoadingOlderByChannel,
+  ]);
 
   useEffect(() => {
     if (!isAuthReady || !isAuthenticated || !channelKey) return;
@@ -582,8 +706,18 @@ export function MessengerChatBox({
   const conversationMessages = channelKey
     ? messagesByChannel[channelKey] || []
     : [];
+  const hasMoreOlderMessages = Boolean(
+    channelKey && hasMoreByChannel[channelKey]
+  );
+  const isLoadingOlderMessages = Boolean(
+    channelKey && isLoadingOlderByChannel[channelKey]
+  );
 
   useEffect(() => {
+    if (skipAutoScrollRef.current) {
+      skipAutoScrollRef.current = false;
+      return;
+    }
     if (streamContainerRef.current && activeTab === 'messenger') {
       streamContainerRef.current.scrollTo({
         top: streamContainerRef.current.scrollHeight,
@@ -1036,10 +1170,14 @@ export function MessengerChatBox({
     );
   };
 
-  const channelRoster = channel?.roster || [];
+  const detailedChannel =
+    (channel?.id ? rosterChannelById[channel.id] : undefined) || channel;
+  const channelRoster = detailedChannel?.roster || channel?.roster || [];
   const enrolledCount =
-    channel?.roster !== undefined
-      ? channel.roster.length
+    detailedChannel?.members_count !== undefined
+      ? detailedChannel.members_count
+      : channelRoster.length > 0
+      ? channelRoster.length
       : channel?.members_count ?? 0;
   const facultyInRoster = channelRoster.filter(
     (m) => m.role === 'faculty' || m.role === 'dept_head'
@@ -1061,6 +1199,9 @@ export function MessengerChatBox({
     setIsManagingRoster(true);
     try {
       const res = await joinChannelApi(channelKey);
+      if (res?.data && channel?.id) {
+        setRosterChannelById((prev) => ({ ...prev, [channel.id]: res.data }));
+      }
       await refreshChannels();
       showToast(res.message || 'Course Hub roster synced.', 'success');
     } catch (err) {
@@ -1110,6 +1251,9 @@ export function MessengerChatBox({
         section: channel?.scope_section || 'IT3R2',
         action: 'add',
       });
+      if (res?.data && channel?.id) {
+        setRosterChannelById((prev) => ({ ...prev, [channel.id]: res.data }));
+      }
       await refreshChannels();
       setNewMemberId('');
       setNewMemberName('');
@@ -1134,6 +1278,9 @@ export function MessengerChatBox({
         institutional_id: institutionalId,
         action: 'remove',
       });
+      if (res?.data && channel?.id) {
+        setRosterChannelById((prev) => ({ ...prev, [channel.id]: res.data }));
+      }
       await refreshChannels();
       showToast(res.message || 'Member removed from roster.', 'info');
     } catch (err) {
@@ -1152,6 +1299,9 @@ export function MessengerChatBox({
         institutional_id: institutionalId,
         action: 'approve',
       });
+      if (res?.data && channel?.id) {
+        setRosterChannelById((prev) => ({ ...prev, [channel.id]: res.data }));
+      }
       await refreshChannels();
       showToast(res.message || 'Join request approved!', 'success');
     } catch (err) {
@@ -1170,6 +1320,9 @@ export function MessengerChatBox({
         institutional_id: institutionalId,
         action: 'reject',
       });
+      if (res?.data && channel?.id) {
+        setRosterChannelById((prev) => ({ ...prev, [channel.id]: res.data }));
+      }
       await refreshChannels();
       showToast(res.message || 'Join request declined.', 'info');
     } catch (err) {
@@ -1180,7 +1333,8 @@ export function MessengerChatBox({
     }
   };
 
-  const pendingJoinRequests = channel?.pending_requests || [];
+  const pendingJoinRequests =
+    detailedChannel?.pending_requests || channel?.pending_requests || [];
 
   const memberIdError = getFieldValidationError(
     rosterFieldErrors,
@@ -1555,8 +1709,32 @@ export function MessengerChatBox({
           {/* Center White Full-Height Scrollable Messenger Stream */}
           <div
             ref={streamContainerRef}
+            onScroll={(e) => {
+              const el = e.currentTarget;
+              if (
+                el.scrollTop <= 16 &&
+                hasMoreOlderMessages &&
+                !isLoadingOlderMessages
+              ) {
+                void loadOlderChatMessages();
+              }
+            }}
             className="flex-1 min-h-0 px-3 sm:px-6 py-4 sm:py-5 space-y-3.5 overflow-y-auto overscroll-contain bg-white"
           >
+            {hasMoreOlderMessages && (
+              <div className="flex justify-center pb-2">
+                <button
+                  type="button"
+                  disabled={isLoadingOlderMessages}
+                  onClick={() => void loadOlderChatMessages()}
+                  className="px-3 py-1 rounded-md border border-slate-300 bg-ustp-cream text-ustp-navy text-xs font-bold hover:bg-amber-100/60 disabled:opacity-50 cursor-pointer"
+                >
+                  {isLoadingOlderMessages
+                    ? 'Loading older messages...'
+                    : 'Load older messages'}
+                </button>
+              </div>
+            )}
             {conversationMessages.length === 0 ? (
               <div className="h-full flex flex-col items-center justify-center text-center py-12 px-4">
                 <div className="w-12 h-12 rounded-full bg-ustp-navy/10 text-ustp-navy border border-ustp-gold flex items-center justify-center mb-3">

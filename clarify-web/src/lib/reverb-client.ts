@@ -3,11 +3,13 @@
 import Echo from 'laravel-echo';
 import Pusher from 'pusher-js';
 import type { RealtimeEvent } from '../types/api';
+import { API_BASE_URL, getStoredToken } from './api-client';
 
 declare global {
   interface Window {
     Pusher?: typeof Pusher;
     __clarifyEchoInstance?: Echo<'reverb'> | null;
+    __clarifyEchoToken?: string | null;
   }
 }
 
@@ -22,13 +24,21 @@ export interface ReverbBroadcastPayload {
 }
 
 /**
- * Initializes or retrieves the singleton Laravel Echo client configured for Laravel Reverb.
- * Automatically connects when NEXT_PUBLIC_REVERB_APP_KEY is configured (or defaults to clarify-reverb-key on localhost).
+ * Initializes or retrieves the singleton Laravel Echo client configured for Laravel Reverb
+ * using Sanctum bearer authentication against /api/v1/broadcasting/auth for private channels.
  */
 export function getReverbEcho(): Echo<'reverb'> | null {
   if (typeof window === 'undefined') return null;
 
-  if (window.__clarifyEchoInstance !== undefined) {
+  const currentToken = getStoredToken();
+  if (!currentToken) {
+    return null;
+  }
+
+  if (
+    window.__clarifyEchoInstance &&
+    window.__clarifyEchoToken === currentToken
+  ) {
     return window.__clarifyEchoInstance;
   }
 
@@ -48,8 +58,15 @@ export function getReverbEcho(): Echo<'reverb'> | null {
   }
 
   try {
+    if (window.__clarifyEchoInstance) {
+      try {
+        window.__clarifyEchoInstance.disconnect();
+      } catch {
+        // Ignore disconnect errors
+      }
+    }
+
     window.Pusher = Pusher;
-    // Suppress noisy Pusher console logs if local Reverb daemon isn't started yet
     Pusher.logToConsole = false;
 
     const key = envKey || 'clarify-reverb-key';
@@ -66,9 +83,17 @@ export function getReverbEcho(): Echo<'reverb'> | null {
       forceTLS,
       enabledTransports: ['ws', 'wss'],
       disableStats: true,
+      authEndpoint: `${API_BASE_URL}/broadcasting/auth`,
+      auth: {
+        headers: {
+          Authorization: `Bearer ${currentToken}`,
+          Accept: 'application/json',
+        },
+      },
     });
 
     window.__clarifyEchoInstance = echo;
+    window.__clarifyEchoToken = currentToken;
     return echo;
   } catch {
     window.__clarifyEchoInstance = null;
@@ -77,11 +102,12 @@ export function getReverbEcho(): Echo<'reverb'> | null {
 }
 
 /**
- * Subscribes to the global ClariFy Reverb channel (`clarify.global`) for
- * Urgent Announcement Popups, Live Acknowledgment Counters, Course Hub Chat, and Q&A Threads.
+ * Subscribes to the private global ClariFy Reverb channel (`clarify.global`) for
+ * minimal notice metadata (type + IDs only) and optional per-user channel (`clarify.user.{userId}`).
  */
 export function subscribeGlobalReverb(
-  onEvent: (payload: ReverbBroadcastPayload) => void
+  onEvent: (payload: ReverbBroadcastPayload) => void,
+  userId?: number
 ): () => void {
   const echo = getReverbEcho();
   if (!echo) {
@@ -89,14 +115,25 @@ export function subscribeGlobalReverb(
   }
 
   try {
-    const channel = echo.channel('clarify.global');
-    channel.listen('.realtime.updated', (data: ReverbBroadcastPayload) => {
+    const globalChannel = echo.private('clarify.global');
+    globalChannel.listen('.realtime.updated', (data: ReverbBroadcastPayload) => {
       onEvent(data);
     });
 
+    const userChannel =
+      userId && userId > 0 ? echo.private(`clarify.user.${userId}`) : null;
+    if (userChannel) {
+      userChannel.listen('.realtime.updated', (data: ReverbBroadcastPayload) => {
+        onEvent(data);
+      });
+    }
+
     return () => {
       try {
-        channel.stopListening('.realtime.updated');
+        globalChannel.stopListening('.realtime.updated');
+        if (userChannel) {
+          userChannel.stopListening('.realtime.updated');
+        }
       } catch {
         // Ignore cleanup errors
       }
@@ -107,8 +144,8 @@ export function subscribeGlobalReverb(
 }
 
 /**
- * Subscribes to a specific Course Hub Reverb channel (`clarify.channel.{channelId}`)
- * for low-latency Live Channel Chat & Isolated Q&A Thread updates.
+ * Subscribes to a private Course Hub Reverb channel (`clarify.channel.{channelId}`)
+ * authorized via ChannelPolicy for low-latency Live Channel Chat & Isolated Q&A Thread updates.
  */
 export function subscribeChannelReverb(
   channelId: number,
@@ -121,7 +158,7 @@ export function subscribeChannelReverb(
 
   try {
     const channelName = `clarify.channel.${channelId}`;
-    const channel = echo.channel(channelName);
+    const channel = echo.private(channelName);
     channel.listen('.realtime.updated', (data: ReverbBroadcastPayload) => {
       onEvent(data);
     });

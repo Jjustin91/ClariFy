@@ -177,6 +177,12 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
   const lastRevisionRef = useRef<number>(0);
   const dismissedUrgentIdsRef = useRef<Set<number>>(new Set());
   const eventListenersRef = useRef<Set<RealtimeEventListener>>(new Set());
+  const refreshChannelsInFlightRef = useRef<Promise<void> | null>(null);
+  const urgentCheckInFlightRef = useRef<Promise<void> | null>(null);
+  const debouncedRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  );
+  const pendingVisibilityRefreshRef = useRef<boolean>(false);
 
   const showToast = useCallback(
     (message: string, variant: ToastItem['variant'] = 'info') => {
@@ -221,53 +227,100 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const refreshChannels = useCallback(async () => {
+    if (typeof document !== 'undefined' && document.hidden) {
+      pendingVisibilityRefreshRef.current = true;
+      return;
+    }
+    if (refreshChannelsInFlightRef.current) {
+      return refreshChannelsInFlightRef.current;
+    }
+
     const sessionUser = getStoredSessionUser();
     const token = getStoredToken();
     if (!sessionUser || !token || sessionUser.role === 'it_admin') {
       setChannels([]);
       return;
     }
-    try {
-      const res = await getChannelsApi();
-      setChannels(res.data);
-    } catch {
-      // Retain existing channels if backend is unreachable
-    }
+
+    const promise = (async () => {
+      try {
+        const res = await getChannelsApi();
+        setChannels(res.data);
+      } catch {
+        // Retain existing channels if backend is unreachable
+      } finally {
+        refreshChannelsInFlightRef.current = null;
+      }
+    })();
+
+    refreshChannelsInFlightRef.current = promise;
+    return promise;
   }, []);
 
+  const scheduleDebouncedChannelRefresh = useCallback(() => {
+    if (typeof document !== 'undefined' && document.hidden) {
+      pendingVisibilityRefreshRef.current = true;
+      return;
+    }
+    if (debouncedRefreshTimerRef.current) {
+      clearTimeout(debouncedRefreshTimerRef.current);
+    }
+    const jitterMs = Math.floor(Math.random() * 400);
+    debouncedRefreshTimerRef.current = setTimeout(() => {
+      debouncedRefreshTimerRef.current = null;
+      void refreshChannels();
+    }, 1500 + jitterMs);
+  }, [refreshChannels]);
+
   const checkUnacknowledgedUrgentAnnouncement = useCallback(async () => {
+    if (typeof document !== 'undefined' && document.hidden) {
+      pendingVisibilityRefreshRef.current = true;
+      return;
+    }
+    if (urgentCheckInFlightRef.current) {
+      return urgentCheckInFlightRef.current;
+    }
+
     const sessionUser = getStoredSessionUser();
     const token = getStoredToken();
     if (!sessionUser || !token || sessionUser.role === 'it_admin') {
       return;
     }
-    try {
-      const res = await getAnnouncementsApi({
-        sort: 'latest',
-        page: 1,
-        per_page: 6,
-      });
-      const urgentCandidate = res.data.find(
-        (ann) =>
-          ann.is_urgent &&
-          ann.status === 'published' &&
-          !ann.read_reach.has_current_user_acknowledged &&
-          ann.publisher.id !== sessionUser.id &&
-          !dismissedUrgentIdsRef.current.has(ann.id)
-      );
-      if (urgentCandidate) {
-        setUrgentPopupAnnouncement(urgentCandidate);
-      } else {
-        // Also keep live acknowledgment counter synced if modal is currently open
-        setUrgentPopupAnnouncement((current) => {
-          if (!current) return null;
-          const updatedMatch = res.data.find((a) => a.id === current.id);
-          return updatedMatch || current;
+
+    const promise = (async () => {
+      try {
+        const res = await getAnnouncementsApi({
+          sort: 'latest',
+          page: 1,
+          per_page: 6,
         });
+        const urgentCandidate = res.data.find(
+          (ann) =>
+            ann.is_urgent &&
+            ann.status === 'published' &&
+            !ann.read_reach.has_current_user_acknowledged &&
+            ann.publisher.id !== sessionUser.id &&
+            !dismissedUrgentIdsRef.current.has(ann.id)
+        );
+        if (urgentCandidate) {
+          setUrgentPopupAnnouncement(urgentCandidate);
+        } else {
+          // Also keep live acknowledgment counter synced if modal is currently open
+          setUrgentPopupAnnouncement((current) => {
+            if (!current) return null;
+            const updatedMatch = res.data.find((a) => a.id === current.id);
+            return updatedMatch || current;
+          });
+        }
+      } catch {
+        // Ignore errors
+      } finally {
+        urgentCheckInFlightRef.current = null;
       }
-    } catch {
-      // Ignore errors
-    }
+    })();
+
+    urgentCheckInFlightRef.current = promise;
+    return promise;
   }, []);
 
   const refreshPersistenceStatus = useCallback(async () => {
@@ -367,54 +420,124 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (typeof window === 'undefined' || !isAuthenticated) return;
 
+    const handleVisibilityChange = () => {
+      if (!document.hidden && pendingVisibilityRefreshRef.current) {
+        pendingVisibilityRefreshRef.current = false;
+        void refreshChannels();
+        void checkUnacknowledgedUrgentAnnouncement();
+        setAnnouncementVersion((v) => v + 1);
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
     const handleIncomingRealtimeEvent = (event: RealtimeEvent) => {
       const activeUser = getStoredUser();
 
-      // 1. Urgent Announcement Popup trigger
+      notifyEventListeners(event);
+
+      // Event-type switch to prevent HTTP fan-out storms
+      if (event.type === 'chat.message') {
+        const targetChannelId = Number(
+          event.channel_id || event.message?.channel_id || 0
+        );
+        if (targetChannelId > 0) {
+          setChannels((prev) =>
+            prev.map((ch) => {
+              if (Number(ch.id) !== targetChannelId) return ch;
+              const previewText = event.message?.content
+                ? String(event.message.content).slice(0, 72)
+                : ch.latest_activity_preview;
+              return {
+                ...ch,
+                chat_messages_count: (ch.chat_messages_count ?? 0) + 1,
+                latest_activity_preview: previewText,
+                latest_activity_at: 'Just now',
+              };
+            })
+          );
+        }
+        return;
+      }
+
       if (
-        (event.type === 'announcement.urgent' ||
-          event.type === 'announcement.created' ||
-          event.type === 'announcement.updated') &&
-        event.announcement?.is_urgent &&
-        event.announcement.status === 'published' &&
-        activeUser.role !== 'it_admin'
+        event.type === 'announcement.urgent' ||
+        event.type === 'announcement.created' ||
+        event.type === 'announcement.updated' ||
+        event.type === 'announcement.deleted' ||
+        event.type === 'announcement.acknowledged'
       ) {
-        const incomingAnn = event.announcement;
-        const isPublisher = incomingAnn.publisher.id === activeUser.id;
-        if (!isPublisher) {
-          dismissedUrgentIdsRef.current.delete(incomingAnn.id);
-          setUrgentPopupAnnouncement({
-            ...incomingAnn,
-            read_reach: {
-              ...incomingAnn.read_reach,
-              has_current_user_acknowledged: false,
-            },
+        // 1. Urgent Announcement Popup trigger when full payload is present
+        if (
+          (event.type === 'announcement.urgent' ||
+            event.type === 'announcement.created' ||
+            event.type === 'announcement.updated') &&
+          event.announcement?.is_urgent &&
+          event.announcement.status === 'published' &&
+          activeUser.role !== 'it_admin'
+        ) {
+          if (event.announcement.title && event.announcement.publisher) {
+            const incomingAnn = event.announcement;
+            const isPublisher = incomingAnn.publisher.id === activeUser.id;
+            if (!isPublisher) {
+              dismissedUrgentIdsRef.current.delete(incomingAnn.id);
+              setUrgentPopupAnnouncement({
+                ...incomingAnn,
+                read_reach: {
+                  ...incomingAnn.read_reach,
+                  has_current_user_acknowledged: false,
+                },
+              });
+            }
+          } else {
+            // Minimal global notice payload -> fetch urgent announcement once
+            void checkUnacknowledgedUrgentAnnouncement();
+          }
+        }
+
+        // 2. Live Acknowledgment Counter update inside open Urgent Popup
+        if (
+          event.type === 'announcement.acknowledged' &&
+          event.announcement?.read_reach
+        ) {
+          const updatedAnn = event.announcement;
+          setUrgentPopupAnnouncement((current) => {
+            if (!current || current.id !== updatedAnn.id) return current;
+            return {
+              ...current,
+              read_reach: {
+                ...updatedAnn.read_reach,
+                has_current_user_acknowledged:
+                  current.read_reach.has_current_user_acknowledged,
+              },
+            };
           });
         }
+
+        setAnnouncementVersion((v) => v + 1);
+        return;
       }
 
-      // 2. Live Acknowledgment Counter update inside open Urgent Popup
       if (
-        event.type === 'announcement.acknowledged' &&
-        event.announcement
+        event.type === 'channel.created' ||
+        event.type === 'channel.updated'
       ) {
-        const updatedAnn = event.announcement;
-        setUrgentPopupAnnouncement((current) => {
-          if (!current || current.id !== updatedAnn.id) return current;
-          return {
-            ...current,
-            read_reach: {
-              ...updatedAnn.read_reach,
-              has_current_user_acknowledged:
-                current.read_reach.has_current_user_acknowledged,
-            },
-          };
-        });
+        scheduleDebouncedChannelRefresh();
+        return;
       }
 
-      notifyEventListeners(event);
-      void refreshChannels();
-      void checkUnacknowledgedUrgentAnnouncement();
+      if (
+        event.type === 'thread.created' ||
+        event.type === 'thread.updated' ||
+        event.type === 'thread.replied' ||
+        event.type === 'thread.faq_pinned' ||
+        event.type === 'thread.deleted'
+      ) {
+        scheduleDebouncedChannelRefresh();
+        return;
+      }
+
+      // Fallback for db.changed or admin.updated
+      scheduleDebouncedChannelRefresh();
       setAnnouncementVersion((v) => v + 1);
     };
 
@@ -432,7 +555,8 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
           timestamp: payload.timestamp || new Date().toISOString(),
         };
         handleIncomingRealtimeEvent(normalizedEvent);
-      }
+      },
+      user.id
     );
 
     // 2. Cross-tab BroadcastChannel + Same-tab CustomEvent for instant zero-latency local browser sync
@@ -462,12 +586,17 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
       } else if (endpoint.includes('/threads')) {
         evType = 'thread.updated';
         thread = msgData?.data as unknown as RealtimeEvent['thread'];
+      } else if (endpoint.includes('/channels')) {
+        evType = 'channel.updated';
       }
 
       handleIncomingRealtimeEvent({
         revision: Date.now(),
         type: evType,
-        channel_id: announcement?.channel_id || message?.channel_id || thread?.channel_id,
+        channel_id:
+          announcement?.channel_id ||
+          message?.channel_id ||
+          thread?.channel_id,
         announcement,
         message,
         thread,
@@ -534,6 +663,7 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
 
     if (isUsingLocalNextApi) {
       pollInterval = setInterval(async () => {
+        if (typeof document !== 'undefined' && document.hidden) return;
         try {
           const res = await fetch(
             `/api/v1/realtime/stream?poll=1&since_revision=${lastRevisionRef.current}`,
@@ -564,6 +694,10 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
 
     return () => {
       unsubscribeReverb();
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      if (debouncedRefreshTimerRef.current) {
+        clearTimeout(debouncedRefreshTimerRef.current);
+      }
       window.removeEventListener(
         'clarify_local_mutation',
         handleLocalMutationEvent
@@ -584,7 +718,9 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
     };
   }, [
     isAuthenticated,
+    user.id,
     refreshChannels,
+    scheduleDebouncedChannelRefresh,
     checkUnacknowledgedUrgentAnnouncement,
     notifyEventListeners,
   ]);

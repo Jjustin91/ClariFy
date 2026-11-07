@@ -46,9 +46,15 @@ Route::prefix('v1')->group(function () {
         Route::get('/auth/me', [AuthController::class, 'me']);
         Route::match(['post', 'patch'], '/profile', [ProfileController::class, 'update']);
 
+        // Broadcasting Auth Endpoint for Sanctum Bearer Tokens (/api/v1/broadcasting/auth)
+        Route::post('/broadcasting/auth', function (\Illuminate\Http\Request $request) {
+            return \Illuminate\Support\Facades\Broadcast::auth($request);
+        });
+
         // Scoped Channels & Roster
         Route::get('/channels', [ChannelController::class, 'index']);
         Route::post('/channels', [ChannelController::class, 'store']);
+        Route::get('/channels/{id}/roster', [ChannelController::class, 'roster'])->middleware('channel.scope');
         Route::match(['post', 'patch', 'put'], '/channels/{id}', [ChannelController::class, 'update']);
         Route::delete('/channels/{id}', [ChannelController::class, 'destroy']);
         Route::post('/channels/{id}/join', [ChannelController::class, 'join']);
@@ -56,10 +62,16 @@ Route::prefix('v1')->group(function () {
         Route::post('/channels/{id}/members', [ChannelController::class, 'manageMembers']);
 
         // Course Hub Messenger Chat (/messages & /chat aliases)
-        Route::get('/channels/{channelId}/messages', [ChannelChatController::class, 'index']);
-        Route::post('/channels/{channelId}/messages', [ChannelChatController::class, 'store']);
-        Route::get('/channels/{channelId}/chat', [ChannelChatController::class, 'index']);
-        Route::post('/channels/{channelId}/chat', [ChannelChatController::class, 'store']);
+        Route::middleware('channel.scope')->group(function () {
+            Route::get('/channels/{channelId}/messages', [ChannelChatController::class, 'index']);
+            Route::post('/channels/{channelId}/messages', [ChannelChatController::class, 'store']);
+            Route::get('/channels/{channelId}/chat', [ChannelChatController::class, 'index']);
+            Route::post('/channels/{channelId}/chat', [ChannelChatController::class, 'store']);
+
+            // Isolated Q&A Threads per Channel
+            Route::get('/channels/{channelId}/threads', [ThreadController::class, 'index']);
+            Route::post('/channels/{channelId}/threads', [ThreadController::class, 'store']);
+        });
 
         // Scoped Announcements, Read Reach & Audits
         Route::get('/announcements', [AnnouncementController::class, 'index']);
@@ -68,9 +80,7 @@ Route::prefix('v1')->group(function () {
         Route::delete('/announcements/{id}', [AnnouncementController::class, 'destroy']);
         Route::post('/announcements/{id}/acknowledge', [AnnouncementController::class, 'acknowledge']);
 
-        // Isolated Q&A Threads, 1-Click FAQs & Instructor Directory
-        Route::get('/channels/{channelId}/threads', [ThreadController::class, 'index']);
-        Route::post('/channels/{channelId}/threads', [ThreadController::class, 'store']);
+        // Thread Item Actions & Instructor Directory
         Route::patch('/threads/{threadId}', [ThreadController::class, 'update']);
         Route::delete('/threads/{threadId}', [ThreadController::class, 'destroy']);
         Route::post('/threads/{threadId}/replies', [ThreadController::class, 'reply']);

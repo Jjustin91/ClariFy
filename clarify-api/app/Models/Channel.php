@@ -13,6 +13,7 @@ class Channel extends Model
     use HasFactory;
 
     protected $fillable = [
+        'parent_hub_id',
         'course_code',
         'name',
         'description',
@@ -24,53 +25,20 @@ class Channel extends Model
         'created_by',
     ];
 
-    private static bool $approvalColumnEnsured = false;
-
-    /**
-     * Ensures the `approval_status` column exists on `channel_user` before any pivot query runs.
-     */
-    public static function ensureApprovalStatusColumn(): bool
+    public function parentHub(): BelongsTo
     {
-        if (self::$approvalColumnEnsured) {
-            return true;
-        }
+        return $this->belongsTo(self::class, 'parent_hub_id');
+    }
 
-        try {
-            if (! \Illuminate\Support\Facades\Schema::hasTable('channel_user')) {
-                return false;
-            }
-
-            if (\Illuminate\Support\Facades\Schema::hasColumn('channel_user', 'approval_status')) {
-                self::$approvalColumnEnsured = true;
-                return true;
-            }
-
-            try {
-                \Illuminate\Support\Facades\DB::statement(
-                    "ALTER TABLE channel_user ADD COLUMN IF NOT EXISTS approval_status VARCHAR(24) NOT NULL DEFAULT 'approved'"
-                );
-                self::$approvalColumnEnsured = true;
-                return true;
-            } catch (\Throwable $inner) {
-                \Illuminate\Support\Facades\Schema::table('channel_user', function (\Illuminate\Database\Schema\Blueprint $table) {
-                    $table->string('approval_status', 24)->default('approved');
-                });
-                self::$approvalColumnEnsured = true;
-                return true;
-            }
-        } catch (\Throwable $e) {
-            return false;
-        }
+    public function subChannels(): HasMany
+    {
+        return $this->hasMany(self::class, 'parent_hub_id');
     }
 
     public function members(): BelongsToMany
     {
-        $pivotColumns = self::ensureApprovalStatusColumn()
-            ? ['can_publish', 'approval_status', 'joined_at']
-            : ['can_publish', 'joined_at'];
-
         return $this->belongsToMany(User::class, 'channel_user')
-            ->withPivot($pivotColumns);
+            ->withPivot(['can_publish', 'approval_status', 'joined_at']);
     }
 
     public function announcements(): HasMany
@@ -100,3 +68,4 @@ class Channel extends Model
         return $this->belongsTo(User::class, 'created_by');
     }
 }
+

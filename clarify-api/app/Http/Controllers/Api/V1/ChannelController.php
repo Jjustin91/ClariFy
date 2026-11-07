@@ -8,35 +8,47 @@ use App\Models\Announcement;
 use App\Models\Channel;
 use App\Models\Message;
 use App\Models\User;
+use App\Policies\ChannelPolicy;
 use App\Support\ApiCache;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 
 class ChannelController
 {
     /**
      * GET /api/v1/channels (Workflow 5, FR-01_REV)
-     * Caches the user's visible channel list for 10 minutes (600s) using the 'file' cache store.
+     * Uses a fixed number of grouped queries (zero N+1 queries per channel) and caches shared channel metadata.
      */
     public function index(Request $request): JsonResponse
     {
         $user = $request->user();
         $search = trim((string) $request->query('search', ''));
         $type = (string) $request->query('type', 'course_hub');
+        $includeParam = strtolower(trim((string) $request->query('include', '')));
+        $includeRoster = in_array('roster', array_map('trim', explode(',', $includeParam)), true);
 
         $cacheParams = array_filter([
             'search' => $search,
             'type' => $type,
+            'include_roster' => $includeRoster ? '1' : '',
         ], fn ($value) => $value !== '');
 
-        $cacheKey = ApiCache::channelsKey($user?->id, $cacheParams);
+        $cacheKey = ApiCache::channelsKey(null, $cacheParams);
 
-        $data = Cache::remember($cacheKey, ApiCache::CHANNELS_TTL_SECONDS, function () use ($request, $search, $type): array {
-            Channel::ensureApprovalStatusColumn();
-            $query = Channel::with(['members.academicProfile', 'announcements.publisher']);
+        $sharedData = Cache::remember($cacheKey, ApiCache::CHANNELS_TTL_SECONDS, function () use (
+            $request,
+            $search,
+            $type,
+            $includeRoster
+        ): array {
+            $query = Channel::query();
+            if ($includeRoster) {
+                $query->with(['members.academicProfile']);
+            }
 
-            $likeOp = \Illuminate\Support\Facades\DB::getDriverName() === 'pgsql' ? 'ilike' : 'like';
+            $likeOp = DB::getDriverName() === 'pgsql' ? 'ilike' : 'like';
 
             if ($search !== '') {
                 $query->where(function ($q) use ($search, $likeOp) {
@@ -54,12 +66,189 @@ class ChannelController
             }
 
             $channels = $query->orderBy('id')->get();
+            if ($channels->isEmpty()) {
+                return [];
+            }
+
+            $channelIds = $channels->pluck('id')->map(fn ($id) => (int) $id)->all();
+
+            // Map parent Course Hub IDs -> child sub-channel IDs in memory from loaded collection + 1 query for any filtered out
+            $subChannelsByParent = [];
+            $allSubChannels = Channel::whereIn('parent_hub_id', $channelIds)
+                ->select(['id', 'parent_hub_id', 'description'])
+                ->get();
+
+            foreach ($allSubChannels as $sub) {
+                $pid = (int) $sub->parent_hub_id;
+                $subChannelsByParent[$pid][] = (int) $sub->id;
+            }
+
+            foreach ($channels as $ch) {
+                $pid = ChannelPolicy::resolveParentHubId($ch);
+                if ($pid !== null) {
+                    $subChannelsByParent[$pid][] = (int) $ch->id;
+                }
+            }
+
+            $allRelevantChannelIds = $channelIds;
+            foreach ($subChannelsByParent as $subs) {
+                $allRelevantChannelIds = array_merge($allRelevantChannelIds, $subs);
+            }
+            $allRelevantChannelIds = array_values(array_unique($allRelevantChannelIds));
+
+            // 1. Grouped open Q&A threads count per channel
+            $openThreadCounts = Message::query()
+                ->selectRaw('channel_id, COUNT(*) as aggregate_count')
+                ->whereIn('channel_id', $channelIds)
+                ->whereNull('parent_id')
+                ->where('is_resolved', false)
+                ->where(function ($q) {
+                    $q->whereNull('subject_hashtag')
+                        ->orWhere('subject_hashtag', '!=', '__CHAT__');
+                })
+                ->groupBy('channel_id')
+                ->pluck('aggregate_count', 'channel_id');
+
+            // 2. Grouped chat messages count per channel (including sub-channels)
+            $chatCountsByChannel = Message::query()
+                ->selectRaw('channel_id, COUNT(*) as aggregate_count')
+                ->whereIn('channel_id', $allRelevantChannelIds)
+                ->whereNull('parent_id')
+                ->where('subject_hashtag', '__CHAT__')
+                ->groupBy('channel_id')
+                ->pluck('aggregate_count', 'channel_id');
+
+            // 3. Grouped approved member counts per channel (when roster is not eager-loaded)
+            $memberCountsByChannel = [];
+            if (! $includeRoster) {
+                $memberCountsByChannel = DB::table('channel_user')
+                    ->join('users', 'users.id', '=', 'channel_user.user_id')
+                    ->whereIn('channel_user.channel_id', $channelIds)
+                    ->where('channel_user.approval_status', 'approved')
+                    ->where('users.verification_status', 'approved')
+                    ->where('users.role', '!=', 'it_admin')
+                    ->selectRaw('channel_user.channel_id, COUNT(*) as aggregate_count')
+                    ->groupBy('channel_user.channel_id')
+                    ->pluck('aggregate_count', 'channel_id')
+                    ->all();
+            }
+
+            // 4. Latest announcement per channel in 1 query
+            $latestAnnIds = Announcement::query()
+                ->selectRaw('MAX(id) as max_id')
+                ->whereIn('channel_id', $channelIds)
+                ->groupBy('channel_id')
+                ->pluck('max_id')
+                ->all();
+
+            $latestAnnouncementsByChannel = empty($latestAnnIds)
+                ? collect()
+                : Announcement::with('publisher:id,name')
+                    ->whereIn('id', $latestAnnIds)
+                    ->get()
+                    ->keyBy('channel_id');
+
+            // 5. Latest message per channel in 1 query
+            $latestMsgIds = Message::query()
+                ->selectRaw('MAX(id) as max_id')
+                ->whereIn('channel_id', $allRelevantChannelIds)
+                ->groupBy('channel_id')
+                ->pluck('max_id')
+                ->all();
+
+            $latestMessagesByChannel = empty($latestMsgIds)
+                ? collect()
+                : Message::with('sender:id,name')
+                    ->whereIn('id', $latestMsgIds)
+                    ->get()
+                    ->keyBy('channel_id');
+
+            foreach ($channels as $ch) {
+                $cid = (int) $ch->id;
+                $parentHubId = ChannelPolicy::resolveParentHubId($ch);
+                $hubChannelIds = [$cid];
+                if ($parentHubId === null && ! empty($subChannelsByParent[$cid])) {
+                    $hubChannelIds = array_values(array_unique(array_merge($hubChannelIds, $subChannelsByParent[$cid])));
+                }
+
+                $totalChatCount = 0;
+                $bestLatestMsg = null;
+                foreach ($hubChannelIds as $hcid) {
+                    $totalChatCount += (int) ($chatCountsByChannel[$hcid] ?? 0);
+                    $candidateMsg = $latestMessagesByChannel->get($hcid);
+                    if ($candidateMsg && (! $bestLatestMsg || $candidateMsg->id > $bestLatestMsg->id)) {
+                        $bestLatestMsg = $candidateMsg;
+                    }
+                }
+
+                $ch->precomputed_include_roster = $includeRoster;
+                $ch->precomputed_open_threads_count = (int) ($openThreadCounts[$cid] ?? 0);
+                $ch->precomputed_chat_messages_count = $totalChatCount;
+                $ch->precomputed_members_count = (int) ($memberCountsByChannel[$cid] ?? 0);
+                $ch->precomputed_latest_announcement = $latestAnnouncementsByChannel->get($cid);
+                $ch->precomputed_latest_message = $bestLatestMsg;
+            }
 
             return ChannelResource::collection($channels)->resolve($request);
         });
 
+        // Overlay current user's membership state when full roster was not requested
+        if ($user && ! $includeRoster && ! empty($sharedData)) {
+            $pivots = DB::table('channel_user')
+                ->where('user_id', $user->id)
+                ->pluck('approval_status', 'channel_id')
+                ->all();
+
+            $userProfile = $user->relationLoaded('academicProfile')
+                ? $user->academicProfile
+                : $user->academicProfile()->first();
+
+            $selfEntry = [
+                'id' => $user->id,
+                'institutional_id' => $user->institutional_id,
+                'name' => $user->name,
+                'role' => $user->role,
+                'section' => $userProfile?->section ?? 'IT3R2',
+                'department' => $userProfile?->department ?? 'CITC',
+            ];
+
+            foreach ($sharedData as &$channelItem) {
+                $cid = (int) ($channelItem['id'] ?? 0);
+                $status = $pivots[$cid] ?? null;
+                if ($status === 'approved') {
+                    $channelItem['roster'] = [$selfEntry];
+                    $channelItem['pending_requests'] = [];
+                } elseif ($status === 'pending') {
+                    $channelItem['roster'] = [];
+                    $channelItem['pending_requests'] = [$selfEntry];
+                }
+            }
+            unset($channelItem);
+        }
+
         return response()->json([
-            'data' => $data,
+            'data' => $sharedData,
+        ]);
+    }
+
+    /**
+     * GET /api/v1/channels/{id}/roster
+     * Returns a single channel with its full approved roster and pending requests loaded.
+     */
+    public function roster(Request $request, int $id): JsonResponse
+    {
+        $channel = Channel::with('members.academicProfile')->findOrFail($id);
+        $user = $request->user();
+
+        if (! $user || ! ChannelPolicy::hasApprovedChannelAccess($user, $channel)) {
+            return response()->json([
+                'status' => 403,
+                'message' => "Access Denied: You are not an approved member of {$channel->name}.",
+            ], 403);
+        }
+
+        return response()->json([
+            'data' => new ChannelResource($channel),
         ]);
     }
 
@@ -78,13 +267,14 @@ class ChannelController
         }
 
         $validated = $request->validate([
+            'parent_hub_id' => ['nullable', 'integer', 'exists:channels,id'],
             'course_code' => ['required', 'string', 'max:32'],
             'name' => ['required', 'string', 'max:150'],
-            'description' => ['nullable', 'string'],
+            'description' => ['nullable', 'string', 'max:1000'],
             'channel_type' => ['required', 'in:university,college,department,course_hub'],
-            'scope_college' => ['nullable', 'string'],
-            'scope_department' => ['nullable', 'string'],
-            'scope_section' => ['nullable', 'string'],
+            'scope_college' => ['nullable', 'string', 'max:64'],
+            'scope_department' => ['nullable', 'string', 'max:64'],
+            'scope_section' => ['nullable', 'string', 'max:64'],
         ], [
             'course_code.required' => 'The course code field is required (e.g., IT315).',
             'name.required' => 'The channel name field is required.',
@@ -95,11 +285,21 @@ class ChannelController
             : '# ' . trim($validated['name']);
 
         $scopeSection = $validated['scope_section'] ?? 'IT3R2';
+        $description = $validated['description'] ?? "{$scopeSection} Scoped Course Hub";
+
+        $parentHubId = isset($validated['parent_hub_id']) ? (int) $validated['parent_hub_id'] : null;
+        if ($parentHubId === null && is_string($description) && preg_match('/^\[HUB:(\d+)\]/i', $description, $matches)) {
+            $candidateParentId = (int) $matches[1];
+            if (Channel::where('id', $candidateParentId)->exists()) {
+                $parentHubId = $candidateParentId;
+            }
+        }
 
         $channel = Channel::create([
+            'parent_hub_id' => $parentHubId,
             'course_code' => strtoupper(trim($validated['course_code'])),
             'name' => $formattedName,
-            'description' => $validated['description'] ?? "{$scopeSection} Scoped Course Hub",
+            'description' => $description,
             'channel_type' => $validated['channel_type'],
             'scope_college' => $validated['scope_college'] ?? 'CITC',
             'scope_department' => $validated['scope_department'] ?? 'CITC',
@@ -108,19 +308,13 @@ class ChannelController
             'created_by' => $user->id,
         ]);
 
-        $hasApprovalCol = Channel::ensureApprovalStatusColumn();
-
         // Only enroll the creator automatically; other users join via Browse Course Hubs
-        $pivotData = [
-            'can_publish' => $user->canPublishOrManage(),
-            'joined_at' => now(),
-        ];
-        if ($hasApprovalCol) {
-            $pivotData['approval_status'] = 'approved';
-        }
-
         $channel->members()->syncWithoutDetaching([
-            $user->id => $pivotData,
+            $user->id => [
+                'can_publish' => $user->canPublishOrManage(),
+                'approval_status' => 'approved',
+                'joined_at' => now(),
+            ],
         ]);
 
         ApiCache::forgetChannels((int) $channel->id);
@@ -130,18 +324,6 @@ class ChannelController
             'message' => 'Scoped channel created successfully.',
             'data' => new ChannelResource($channel->load('members.academicProfile')),
         ], 201);
-    }
-
-    /**
-     * Checks if user is a Course Admin for the given channel (all Faculty/Dept Heads or the channel creator).
-     */
-    private function isCourseAdmin(User $user, Channel $channel): bool
-    {
-        if (in_array($user->role, ['faculty', 'dept_head'], true)) {
-            return true;
-        }
-
-        return $channel->created_by !== null && (int) $channel->created_by === (int) $user->id;
     }
 
     /**
@@ -160,7 +342,7 @@ class ChannelController
 
         $channel = Channel::findOrFail($id);
 
-        if (! $this->isCourseAdmin($user, $channel)) {
+        if (! ChannelPolicy::isCourseAdmin($user, $channel)) {
             return response()->json([
                 'status' => 403,
                 'message' => 'HTTP 403 Forbidden: Only Course Admins (the Course Hub creator or Faculty) can edit this Course Hub.',
@@ -170,10 +352,10 @@ class ChannelController
         $validated = $request->validate([
             'course_code' => ['required', 'string', 'max:32'],
             'name' => ['required', 'string', 'max:150'],
-            'description' => ['nullable', 'string'],
-            'scope_college' => ['nullable', 'string'],
-            'scope_department' => ['nullable', 'string'],
-            'scope_section' => ['nullable', 'string'],
+            'description' => ['nullable', 'string', 'max:1000'],
+            'scope_college' => ['nullable', 'string', 'max:64'],
+            'scope_department' => ['nullable', 'string', 'max:64'],
+            'scope_section' => ['nullable', 'string', 'max:64'],
         ], [
             'course_code.required' => 'The course code field is required.',
             'name.required' => 'The Course Hub name field is required.',
@@ -197,8 +379,10 @@ class ChannelController
         ]);
 
         // Also update scope metadata on any child sub-channels of this Course Hub
-        Channel::where('description', 'like', "[HUB:{$channel->id}]%")
+        Channel::where('parent_hub_id', $channel->id)
+            ->orWhere('description', 'like', "[HUB:{$channel->id}]%")
             ->update([
+                'parent_hub_id' => $channel->id,
                 'course_code' => strtoupper(trim($validated['course_code'])),
                 'scope_college' => $scopeCollege,
                 'scope_department' => $scopeDepartment,
@@ -231,16 +415,7 @@ class ChannelController
 
         $channel = Channel::findOrFail($id);
 
-        // If deleting a sub-channel, check parent Course Hub admin status as well
-        $isAllowed = $this->isCourseAdmin($user, $channel);
-        if (! $isAllowed && preg_match('/^\[HUB:(\d+)\]/', (string) $channel->description, $m)) {
-            $parentHub = Channel::find((int) $m[1]);
-            if ($parentHub && $this->isCourseAdmin($user, $parentHub)) {
-                $isAllowed = true;
-            }
-        }
-
-        if (! $isAllowed) {
+        if (! ChannelPolicy::isCourseAdmin($user, $channel)) {
             return response()->json([
                 'status' => 403,
                 'message' => 'HTTP 403 Forbidden: Only Course Admins (the Course Hub creator or Faculty) can delete this Course Hub.',
@@ -250,7 +425,8 @@ class ChannelController
         $channelName = $channel->name;
 
         // Find any sub-channels belonging to this Course Hub
-        $subChannelIds = Channel::where('description', 'like', "[HUB:{$channel->id}]%")
+        $subChannelIds = Channel::where('parent_hub_id', $channel->id)
+            ->orWhere('description', 'like', "[HUB:{$channel->id}]%")
             ->pluck('id')
             ->all();
 
@@ -258,7 +434,7 @@ class ChannelController
 
         Message::whereIn('channel_id', $allTargetIds)->delete();
         Announcement::whereIn('channel_id', $allTargetIds)->delete();
-        \Illuminate\Support\Facades\DB::table('channel_user')->whereIn('channel_id', $allTargetIds)->delete();
+        DB::table('channel_user')->whereIn('channel_id', $allTargetIds)->delete();
         Channel::whereIn('id', $allTargetIds)->delete();
 
         foreach ($allTargetIds as $targetId) {
@@ -278,39 +454,41 @@ class ChannelController
      */
     public function join(Request $request, int $id): JsonResponse
     {
-        $hasApprovalCol = Channel::ensureApprovalStatusColumn();
         $channel = Channel::findOrFail($id);
         $user = $request->user();
 
-        $isAdmin = $this->isCourseAdmin($user, $channel);
+        if ($user->role === 'it_admin') {
+            return response()->json([
+                'status' => 403,
+                'message' => 'HTTP 403 Forbidden: IT Administrator accounts are restricted to the IT Admin Console.',
+            ], 403);
+        }
+
+        $isAdmin = ChannelPolicy::isCourseAdmin($user, $channel);
         $targetStatus = $isAdmin ? 'approved' : 'pending';
 
-        $existingPivot = \Illuminate\Support\Facades\DB::table('channel_user')
+        $existingPivot = DB::table('channel_user')
             ->where('channel_id', $channel->id)
             ->where('user_id', $user->id)
             ->first();
 
         if ($existingPivot) {
             if ($isAdmin && ($existingPivot->approval_status ?? 'approved') !== 'approved') {
-                $updatePayload = ['can_publish' => true];
-                if ($hasApprovalCol) {
-                    $updatePayload['approval_status'] = 'approved';
-                }
-                \Illuminate\Support\Facades\DB::table('channel_user')
+                DB::table('channel_user')
                     ->where('channel_id', $channel->id)
                     ->where('user_id', $user->id)
-                    ->update($updatePayload);
+                    ->update([
+                        'can_publish' => true,
+                        'approval_status' => 'approved',
+                    ]);
             }
         } else {
-            $pivotPayload = [
-                'can_publish' => $user->canPublishOrManage(),
-                'joined_at' => now(),
-            ];
-            if ($hasApprovalCol) {
-                $pivotPayload['approval_status'] = $targetStatus;
-            }
             $channel->members()->syncWithoutDetaching([
-                $user->id => $pivotPayload,
+                $user->id => [
+                    'can_publish' => $user->canPublishOrManage(),
+                    'approval_status' => $targetStatus,
+                    'joined_at' => now(),
+                ],
             ]);
         }
 
@@ -319,7 +497,9 @@ class ChannelController
         RealtimeStateUpdated::safeDispatch('channel.updated', (int) $channel->id, (int) $user->id);
 
         $fresh = $channel->fresh('members.academicProfile');
-        $isNowApproved = $fresh->members->contains(fn ($m) => (int) $m->id === (int) $user->id && ($m->pivot?->approval_status ?? 'approved') === 'approved');
+        $isNowApproved = $fresh->members->contains(
+            fn ($m) => (int) $m->id === (int) $user->id && ($m->pivot?->approval_status ?? 'approved') === 'approved'
+        );
 
         return response()->json([
             'message' => $isNowApproved
@@ -337,12 +517,20 @@ class ChannelController
         $channel = Channel::findOrFail($id);
         $user = $request->user();
 
-        $subChannelIds = Channel::where('description', 'like', "[HUB:{$channel->id}]%")
+        if ($user->role === 'it_admin') {
+            return response()->json([
+                'status' => 403,
+                'message' => 'HTTP 403 Forbidden: IT Administrator accounts are restricted to the IT Admin Console.',
+            ], 403);
+        }
+
+        $subChannelIds = Channel::where('parent_hub_id', $channel->id)
+            ->orWhere('description', 'like', "[HUB:{$channel->id}]%")
             ->pluck('id')
             ->all();
         $allTargetIds = array_values(array_unique(array_merge([$channel->id], $subChannelIds)));
 
-        \Illuminate\Support\Facades\DB::table('channel_user')
+        DB::table('channel_user')
             ->whereIn('channel_id', $allTargetIds)
             ->where('user_id', $user->id)
             ->delete();
@@ -370,10 +558,9 @@ class ChannelController
             ], 403);
         }
 
-        $hasApprovalCol = Channel::ensureApprovalStatusColumn();
         $channel = Channel::findOrFail($id);
 
-        if (! $this->isCourseAdmin($user, $channel)) {
+        if (! ChannelPolicy::isCourseAdmin($user, $channel)) {
             return response()->json([
                 'status' => 403,
                 'message' => 'HTTP 403 Forbidden: Only Course Admins (the Course Hub creator or Faculty) can add, approve, or remove members in this Course Hub.',
@@ -381,9 +568,9 @@ class ChannelController
         }
 
         $validated = $request->validate([
-            'institutional_id' => ['required', 'string'],
-            'name' => ['nullable', 'string'],
-            'section' => ['nullable', 'string'],
+            'institutional_id' => ['required', 'string', 'max:64'],
+            'name' => ['nullable', 'string', 'max:150'],
+            'section' => ['nullable', 'string', 'max:64'],
             'action' => ['required', 'in:add,remove,approve,reject'],
         ]);
 
@@ -391,7 +578,7 @@ class ChannelController
 
         if ($validated['action'] === 'add') {
             if (! $targetUser) {
-                $targetUser = User::create([
+                $targetUser = new User([
                     'institutional_id' => $validated['institutional_id'],
                     'name' => $validated['name'] ?: "USTP Student ({$validated['institutional_id']})",
                     'email' => "student.{$validated['institutional_id']}@ustp.edu.ph",
@@ -402,32 +589,26 @@ class ChannelController
                 $targetUser->save();
             }
 
-            $addPivot = [
-                'can_publish' => $targetUser->canPublishOrManage(),
-                'joined_at' => now(),
-            ];
-            if ($hasApprovalCol) {
-                $addPivot['approval_status'] = 'approved';
-            }
-
             $channel->members()->syncWithoutDetaching([
-                $targetUser->id => $addPivot,
+                $targetUser->id => [
+                    'can_publish' => $targetUser->canPublishOrManage(),
+                    'approval_status' => 'approved',
+                    'joined_at' => now(),
+                ],
             ]);
-            if ($hasApprovalCol) {
-                \Illuminate\Support\Facades\DB::table('channel_user')
-                    ->where('channel_id', $channel->id)
-                    ->where('user_id', $targetUser->id)
-                    ->update(['approval_status' => 'approved']);
-            }
-        } elseif ($validated['action'] === 'approve' && $targetUser) {
-            $approveUpdate = ['joined_at' => now()];
-            if ($hasApprovalCol) {
-                $approveUpdate['approval_status'] = 'approved';
-            }
-            \Illuminate\Support\Facades\DB::table('channel_user')
+
+            DB::table('channel_user')
                 ->where('channel_id', $channel->id)
                 ->where('user_id', $targetUser->id)
-                ->update($approveUpdate);
+                ->update(['approval_status' => 'approved']);
+        } elseif ($validated['action'] === 'approve' && $targetUser) {
+            DB::table('channel_user')
+                ->where('channel_id', $channel->id)
+                ->where('user_id', $targetUser->id)
+                ->update([
+                    'approval_status' => 'approved',
+                    'joined_at' => now(),
+                ]);
         } elseif ($targetUser) {
             $channel->members()->detach($targetUser->id);
         }
@@ -449,3 +630,4 @@ class ChannelController
         ]);
     }
 }
+

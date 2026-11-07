@@ -23,6 +23,7 @@ import {
   filterAndSortAnnouncements,
   formatSubjectHashtag,
 } from '../lib/domain-logic';
+import { getCurrentRevision } from './realtime-bus';
 
 export interface ApiEngineRequest {
   method: string;
@@ -400,6 +401,21 @@ async function ensurePostgresSchema(pool: Pool): Promise<void> {
       );
     `);
 
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS personal_access_tokens (
+        id BIGSERIAL PRIMARY KEY,
+        tokenable_type VARCHAR(255) NOT NULL DEFAULT 'App\\Models\\User',
+        tokenable_id BIGINT NOT NULL,
+        name VARCHAR(255) NOT NULL DEFAULT 'clarify-session',
+        token VARCHAR(64) UNIQUE NOT NULL,
+        abilities TEXT NULL,
+        last_used_at TIMESTAMP NULL,
+        expires_at TIMESTAMP NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
     // Remove any legacy pre-seeded demo student/faculty accounts so only the IT Admin is seeded
     await client.query(
       "DELETE FROM users WHERE institutional_id IN ('2020202020', '10492', '2023309999')"
@@ -599,25 +615,7 @@ export async function getPostgresStatusInfo(): Promise<{
 }
 
 export async function getPostgresFingerprint(): Promise<string | null> {
-  const pool = await getPostgresPool();
-  if (!pool) return null;
-  try {
-    const res = await pool.query(`
-      SELECT
-        (SELECT COUNT(*) FROM announcements WHERE deleted_at IS NULL) AS a_cnt,
-        (SELECT COALESCE(MAX(updated_at)::text, '') FROM announcements WHERE deleted_at IS NULL) AS a_max,
-        (SELECT COUNT(*) FROM announcement_reads) AS r_cnt,
-        (SELECT COUNT(*) FROM messages) AS m_cnt,
-        (SELECT COALESCE(MAX(updated_at)::text, '') FROM messages) AS m_max,
-        (SELECT COUNT(*) FROM channels) AS c_cnt,
-        (SELECT COUNT(*) FROM users) AS u_cnt,
-        (SELECT COALESCE(MAX(updated_at)::text, '') FROM users) AS u_max
-    `);
-    const r = res.rows[0];
-    return `${r.a_cnt}:${r.a_max}:${r.r_cnt}:${r.m_cnt}:${r.m_max}:${r.c_cnt}:${r.u_cnt}:${r.u_max}`;
-  } catch {
-    return null;
-  }
+  return String(getCurrentRevision());
 }
 
 // ============================================================================
@@ -653,7 +651,7 @@ function mapRowToUser(row: Record<string, unknown>): User {
 async function resolveValidChannel(
   pool: Pool,
   requestedChannelId?: number | null
-): Promise<{ id: number; channel_type: string; name: string }> {
+): Promise<{ id: number; channel_type: string; name: string } | null> {
   if (requestedChannelId && !Number.isNaN(requestedChannelId)) {
     const exact = await pool.query(
       'SELECT id, channel_type, name FROM channels WHERE id = $1 LIMIT 1',
@@ -666,6 +664,7 @@ async function resolveValidChannel(
         name: String(exact.rows[0].name || '# IT314 SoftEng'),
       };
     }
+    return null;
   }
 
   const first = await pool.query(
@@ -679,17 +678,7 @@ async function resolveValidChannel(
     };
   }
 
-  // If channels table is completely empty, create default course hub channel
-  const ins = await pool.query(
-    `INSERT INTO channels (course_code, name, description, channel_type, scope_college, scope_department, scope_section, instructor_name)
-     VALUES ('IT314', '# IT314 SoftEng', 'IT3R2 — Software Engineering Hub', 'course_hub', 'CITC', 'CITC', 'IT3R2', 'Aki Hayakawa')
-     RETURNING id, channel_type, name`
-  );
-  return {
-    id: Number(ins.rows[0].id),
-    channel_type: String(ins.rows[0].channel_type || 'course_hub'),
-    name: String(ins.rows[0].name || '# IT314 SoftEng'),
-  };
+  return null;
 }
 
 async function resolveUserFromRequestHeaders(
@@ -697,80 +686,46 @@ async function resolveUserFromRequestHeaders(
   headers?: Record<string, string | undefined>
 ): Promise<{ user: User | null; pendingUser: User | null }> {
   const authHeader = headers?.authorization || headers?.Authorization;
-  const instHeader =
-    headers?.['x-clarify-institutional-id'] ||
-    headers?.['X-Clarify-Institutional-Id'];
-  const userIdHeader =
-    headers?.['x-clarify-user-id'] || headers?.['X-Clarify-User-Id'];
+  if (!authHeader) {
+    return { user: null, pendingUser: null };
+  }
 
   const state = getPgState();
-  let instId: string | null = instHeader ? instHeader.trim() : null;
-  let userId: number | null =
-    userIdHeader && !Number.isNaN(Number(userIdHeader))
-      ? Number(userIdHeader)
-      : null;
+  let userId: number | null = null;
+  const token = authHeader.replace(/^Bearer\s+/i, '').trim();
 
-  if (authHeader) {
-    const token = authHeader.replace(/^Bearer\s+/i, '').trim();
-    if (token) {
-      if (state.tokens[token]) {
-        userId = state.tokens[token];
-      }
-
-      const jwtMatch = token.match(/^clarify-jwt-([a-z_]+)-([^-]+)(?:-[a-f0-9]+)?$/i);
-      if (jwtMatch) {
-        instId = jwtMatch[2];
-      } else if (token.includes('student-2020202020')) {
-        instId = '2020202020';
-      } else if (token.includes('faculty-10492')) {
-        instId = '10492';
-      } else if (token.includes('admin-90001')) {
-        instId = '90001';
-      } else if (token.includes('|')) {
-        // Laravel Sanctum plainTextToken format: "<tokenId>|<plainText>"
-        const parts = token.split('|');
-        const plainText = parts.slice(1).join('|');
-        if (plainText) {
-          const hashed = crypto
-            .createHash('sha256')
-            .update(plainText)
-            .digest('hex');
-          try {
-            const patRes = await pool.query(
-              'SELECT tokenable_id FROM personal_access_tokens WHERE token = $1 LIMIT 1',
-              [hashed]
-            );
-            if (patRes.rowCount && patRes.rowCount > 0) {
-              userId = Number(patRes.rows[0].tokenable_id);
-            }
-          } catch {
-            // personal_access_tokens table may not exist if Laravel migrations haven't run
+  if (token) {
+    if (state.tokens[token]) {
+      userId = state.tokens[token];
+    } else {
+      const plainText = token.includes('|')
+        ? token.split('|').slice(1).join('|')
+        : token;
+      if (plainText) {
+        const hashed = crypto
+          .createHash('sha256')
+          .update(plainText)
+          .digest('hex');
+        try {
+          const patRes = await pool.query(
+            `SELECT tokenable_id
+             FROM personal_access_tokens
+             WHERE token = $1
+               AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
+             LIMIT 1`,
+            [hashed]
+          );
+          if (patRes.rowCount && patRes.rowCount > 0) {
+            userId = Number(patRes.rows[0].tokenable_id);
+            state.tokens[token] = userId;
           }
+        } catch {
+          // personal_access_tokens table may not exist yet
         }
       }
     }
   }
 
-  // First try matching by institutional_id (most reliable across database resets)
-  if (instId) {
-    const byInst = await pool.query(
-      `SELECT u.*, ap.campus, ap.college, ap.department, ap.program, ap.year_level, ap.section, ap.semester_code
-       FROM users u
-       LEFT JOIN academic_profiles ap ON ap.user_id = u.id
-       WHERE u.institutional_id = $1
-       LIMIT 1`,
-      [instId]
-    );
-    if (byInst.rowCount && byInst.rowCount > 0) {
-      const mapped = mapRowToUser(byInst.rows[0]);
-      if (mapped.verification_status !== 'approved') {
-        return { user: null, pendingUser: mapped };
-      }
-      return { user: mapped, pendingUser: null };
-    }
-  }
-
-  // Next try matching by numeric user ID
   if (userId) {
     const byId = await pool.query(
       `SELECT u.*, ap.campus, ap.college, ap.department, ap.program, ap.year_level, ap.section, ap.semester_code
@@ -1284,8 +1239,8 @@ export async function handlePostgresApiRequest(
       if (!email || !email.includes('@')) {
         errors.email = ['Please enter a valid institutional email address.'];
       }
-      if (!password || password.length < 6) {
-        errors.password = ['Password must be at least 6 characters long.'];
+      if (!password || password.length < 8) {
+        errors.password = ['Password must be at least 8 characters long.'];
       }
       if (role !== 'student' && role !== 'faculty') {
         errors.role = [
@@ -1486,8 +1441,45 @@ export async function handlePostgresApiRequest(
         };
       }
 
-      const sessionSuffix = crypto.randomBytes(6).toString('hex');
-      const token = `clarify-jwt-${matchedUser.role}-${matchedUser.institutional_id}-${sessionSuffix}`;
+      const plainText = crypto.randomBytes(24).toString('hex');
+      const hashedToken = crypto
+        .createHash('sha256')
+        .update(plainText)
+        .digest('hex');
+
+      let tokenId = Date.now();
+      try {
+        // Limit to 5 active tokens per user (delete oldest on login)
+        await pool.query(
+          `DELETE FROM personal_access_tokens
+           WHERE id IN (
+             SELECT id FROM personal_access_tokens
+             WHERE tokenable_id = $1
+             ORDER BY created_at DESC, id DESC
+             OFFSET 4
+           )`,
+          [matchedUser.id]
+        );
+        const patIns = await pool.query(
+          `INSERT INTO personal_access_tokens (
+             tokenable_type, tokenable_id, name, token, abilities, expires_at, created_at, updated_at
+           )
+           VALUES ('App\\Models\\User', $1, $2, $3, '["*"]', CURRENT_TIMESTAMP + INTERVAL '7 days', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+           RETURNING id`,
+          [
+            matchedUser.id,
+            `clarify-${matchedUser.role}-session`,
+            hashedToken,
+          ]
+        );
+        if (patIns.rowCount && patIns.rowCount > 0) {
+          tokenId = Number(patIns.rows[0].id);
+        }
+      } catch {
+        // Fallback if personal_access_tokens table is unavailable
+      }
+
+      const token = `${tokenId}|${plainText}`;
       state.tokens[token] = matchedUser.id;
 
       return {
@@ -1918,9 +1910,32 @@ export async function handlePostgresApiRequest(
       };
     }
 
+    const rosterMatch = cleanPath.match(/^\/channels\/(\d+)\/roster$/);
+    if (method === 'GET' && rosterMatch) {
+      const targetId = Number(rosterMatch[1]);
+      const allChannels = await fetchChannelsFromPg(pool);
+      const found = allChannels.find((c) => c.id === targetId);
+      if (!found) {
+        return {
+          status: 404,
+          body: { status: 404, message: 'Channel not found.' },
+        };
+      }
+      return {
+        status: 200,
+        body: { data: found },
+      };
+    }
+
     const joinMatch = cleanPath.match(/^\/channels\/(\d+)\/join$/);
     if (method === 'POST' && joinMatch) {
       const resolvedCh = await resolveValidChannel(pool, Number(joinMatch[1]));
+      if (!resolvedCh) {
+        return {
+          status: 404,
+          body: { status: 404, message: 'Channel not found.' },
+        };
+      }
       const channelId = resolvedCh.id;
       const chOwnerRes = await pool.query(
         'SELECT created_by FROM channels WHERE id = $1 LIMIT 1',
@@ -2027,6 +2042,12 @@ export async function handlePostgresApiRequest(
         pool,
         Number(membersMatch[1])
       );
+      if (!resolvedCh) {
+        return {
+          status: 404,
+          body: { status: 404, message: 'Channel not found.' },
+        };
+      }
       const channelId = resolvedCh.id;
 
       const chOwnerRes = await pool.query(
@@ -2375,6 +2396,12 @@ export async function handlePostgresApiRequest(
             pool,
             requestedChannelId
           );
+          if (!targetChannel) {
+            return {
+              status: 404,
+              body: { status: 404, message: 'Channel not found.' },
+            };
+          }
           if (
             (targetChannel.channel_type === 'university' ||
               targetChannel.channel_type === 'college') &&
@@ -2684,34 +2711,75 @@ export async function handlePostgresApiRequest(
       };
     }
 
-    // COURSE HUB MESSENGER CHAT: GET & POST /channels/{channelId}/chat
-    const channelChatMatch = cleanPath.match(/^\/channels\/(\d+)\/chat$/);
+    // COURSE HUB MESSENGER CHAT: GET & POST /channels/{channelId}/(chat|messages)
+    const channelChatMatch = cleanPath.match(
+      /^\/channels\/(\d+)\/(chat|messages)$/
+    );
     if (method === 'GET' && channelChatMatch) {
       const resolvedCh = await resolveValidChannel(
         pool,
         Number(channelChatMatch[1])
       );
+      if (!resolvedCh) {
+        return {
+          status: 404,
+          body: { status: 404, message: 'Channel not found.' },
+        };
+      }
       const channelId = resolvedCh.id;
-      const chatRes = await pool.query(
-        `SELECT
-           m.id,
-           m.channel_id,
-           m.content,
-           m.created_at,
-           u.id AS author_id,
-           u.name AS author_name,
-           u.role AS author_role,
-           u.avatar_url AS author_avatar
-         FROM messages m
-         JOIN users u ON u.id = m.sender_id
-         WHERE m.channel_id = $1
-           AND m.parent_id IS NULL
-           AND m.subject_hashtag = '__CHAT__'
-         ORDER BY m.created_at ASC, m.id ASC`,
-        [channelId]
-      );
+      const limit = Math.min(100, Math.max(1, Number(query.limit || 50)));
+      const before =
+        query.before && Number(query.before) > 0
+          ? Number(query.before)
+          : null;
 
-      const messages: ChatMessage[] = chatRes.rows.map((r) => ({
+      const chatRes = before
+        ? await pool.query(
+            `SELECT
+               m.id,
+               m.channel_id,
+               m.content,
+               m.created_at,
+               u.id AS author_id,
+               u.name AS author_name,
+               u.role AS author_role,
+               u.avatar_url AS author_avatar
+             FROM messages m
+             JOIN users u ON u.id = m.sender_id
+             WHERE m.channel_id = $1
+               AND m.parent_id IS NULL
+               AND m.subject_hashtag = '__CHAT__'
+               AND m.id < $2
+             ORDER BY m.id DESC
+             LIMIT $3`,
+            [channelId, before, limit + 1]
+          )
+        : await pool.query(
+            `SELECT
+               m.id,
+               m.channel_id,
+               m.content,
+               m.created_at,
+               u.id AS author_id,
+               u.name AS author_name,
+               u.role AS author_role,
+               u.avatar_url AS author_avatar
+             FROM messages m
+             JOIN users u ON u.id = m.sender_id
+             WHERE m.channel_id = $1
+               AND m.parent_id IS NULL
+               AND m.subject_hashtag = '__CHAT__'
+             ORDER BY m.id DESC
+             LIMIT $2`,
+            [channelId, limit + 1]
+          );
+
+      const hasMore = (chatRes.rowCount || 0) > limit;
+      const slicedRows = chatRes.rows.slice(0, limit).reverse();
+      const nextBefore =
+        hasMore && slicedRows.length > 0 ? Number(slicedRows[0].id) : null;
+
+      const messages: ChatMessage[] = slicedRows.map((r) => ({
         id: Number(r.id),
         channel_id: Number(r.channel_id),
         content: String(r.content),
@@ -2726,7 +2794,13 @@ export async function handlePostgresApiRequest(
 
       return {
         status: 200,
-        body: { data: messages },
+        body: {
+          data: messages,
+          meta: {
+            has_more: hasMore,
+            next_before: nextBefore,
+          },
+        },
       };
     }
 
@@ -2735,6 +2809,12 @@ export async function handlePostgresApiRequest(
         pool,
         Number(channelChatMatch[1])
       );
+      if (!resolvedCh) {
+        return {
+          status: 404,
+          body: { status: 404, message: 'Channel not found.' },
+        };
+      }
       const channelId = resolvedCh.id;
       const content = String(body.content || '').trim();
       if (!content) {
@@ -2744,6 +2824,18 @@ export async function handlePostgresApiRequest(
             status: 422,
             message: 'Message content cannot be empty.',
             errors: { content: ['Please type a message before sending.'] },
+          },
+        };
+      }
+      if (content.length > 2000) {
+        return {
+          status: 422,
+          body: {
+            status: 422,
+            message: 'Chat messages may not exceed 2000 characters.',
+            errors: {
+              content: ['Chat messages may not exceed 2000 characters.'],
+            },
           },
         };
       }
@@ -2764,6 +2856,10 @@ export async function handlePostgresApiRequest(
 
       const createdMsg: ChatMessage = {
         id: Number(insMsg.rows[0].id),
+        temp_id:
+          typeof body.temp_id === 'string' && body.temp_id
+            ? body.temp_id
+            : undefined,
         channel_id: channelId,
         content,
         created_at: new Date(String(insMsg.rows[0].created_at)).toISOString(),
@@ -2791,6 +2887,12 @@ export async function handlePostgresApiRequest(
         pool,
         Number(channelThreadsMatch[1])
       );
+      if (!resolvedCh) {
+        return {
+          status: 404,
+          body: { status: 404, message: 'Channel not found.' },
+        };
+      }
       const channelId = resolvedCh.id;
       const statusFilter = query.status || 'all';
       const allThreads = await fetchThreadsForChannelFromPg(pool, channelId);
@@ -2818,6 +2920,12 @@ export async function handlePostgresApiRequest(
         pool,
         Number(channelThreadsMatch[1])
       );
+      if (!resolvedCh) {
+        return {
+          status: 404,
+          body: { status: 404, message: 'Channel not found.' },
+        };
+      }
       const channelId = resolvedCh.id;
       const formattedHashtag = formatSubjectHashtag(
         String(body.subject_hashtag || '')
@@ -3243,20 +3351,22 @@ export async function handlePostgresApiRequest(
       if (isApproved && updatedUser.role !== 'it_admin') {
         const defaultChannel = await resolveValidChannel(pool, null);
         const userSection = updatedUser.academic_profile?.section || '';
-        await pool.query(
-          `INSERT INTO channel_user (channel_id, user_id, can_publish)
-           SELECT c.id, $1, $2
-           FROM channels c
-           WHERE c.id = $3
-              OR LOWER(TRIM(COALESCE(c.scope_section, ''))) = LOWER(TRIM($4))
-           ON CONFLICT (channel_id, user_id) DO UPDATE SET can_publish = EXCLUDED.can_publish`,
-          [
-            updatedUser.id,
-            updatedUser.role === 'faculty' || updatedUser.role === 'dept_head',
-            defaultChannel.id,
-            userSection,
-          ]
-        );
+        if (defaultChannel) {
+          await pool.query(
+            `INSERT INTO channel_user (channel_id, user_id, can_publish)
+             SELECT c.id, $1, $2
+             FROM channels c
+             WHERE c.id = $3
+                OR LOWER(TRIM(COALESCE(c.scope_section, ''))) = LOWER(TRIM($4))
+             ON CONFLICT (channel_id, user_id) DO UPDATE SET can_publish = EXCLUDED.can_publish`,
+            [
+              updatedUser.id,
+              updatedUser.role === 'faculty' || updatedUser.role === 'dept_head',
+              defaultChannel.id,
+              userSection,
+            ]
+          );
+        }
       }
 
       return {

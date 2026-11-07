@@ -35,6 +35,13 @@ class AnnouncementPolicy
             );
         }
 
+        if ($channel && ! ChannelPolicy::hasApprovedChannelAccess($user, $channel)) {
+            return Response::denyWithStatus(
+                403,
+                "HTTP 403 Forbidden: You are not an approved member or instructor of {$channel->name}."
+            );
+        }
+
         return Response::allow();
     }
 

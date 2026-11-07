@@ -37,8 +37,10 @@ jobs:
             # Run database migrations
             php artisan migrate --force
 
-            # Optimize caches
-            php artisan optimize:clear
+            # Rebuild config/route/view caches without wiping application data cache
+            php artisan config:clear
+            php artisan route:clear
+            php artisan view:clear
             php artisan config:cache
             php artisan route:cache
             php artisan view:cache
@@ -47,8 +49,9 @@ jobs:
             chown -R www-data:www-data storage bootstrap/cache
             chmod -R 775 storage bootstrap/cache
 
-            # Restart queue workers
+            # Restart queue workers and Reverb broadcasting server
             php artisan queue:restart
+            php artisan reverb:restart
 
             # Reload PHP-FPM (adjust to your installed version, e.g., php8.3-fpm or php8.2-fpm)
             sudo systemctl reload php8.3-fpm || sudo systemctl restart php*-fpm

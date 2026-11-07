@@ -4,6 +4,7 @@ namespace App\Http\Resources;
 
 use App\Models\Channel;
 use App\Models\Message;
+use App\Policies\ChannelPolicy;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
@@ -11,38 +12,82 @@ class ChannelResource extends JsonResource
 {
     public function toArray(Request $request): array
     {
-        $rawMembers = $this->relationLoaded('members') ? $this->members : $this->members()->with('academicProfile')->get();
-        $validUsers = $rawMembers->filter(fn ($m) => $m->role !== 'it_admin' && $m->verification_status === 'approved')->values();
-        $members = $validUsers->filter(fn ($m) => ($m->pivot?->approval_status ?? 'approved') !== 'pending')->values();
-        $pendingMembers = $validUsers->filter(fn ($m) => ($m->pivot?->approval_status ?? 'approved') === 'pending')->values();
+        $parentHubId = ChannelPolicy::resolveParentHubId($this->resource);
+        $includeRoster = (bool) ($this->precomputed_include_roster ?? $this->relationLoaded('members'));
 
-        $parentHubId = null;
-        if (is_string($this->description) && preg_match('/^\[HUB:(\d+)\]/i', $this->description, $matches)) {
-            $parentHubId = (int) $matches[1];
+        $roster = [];
+        $pendingRequests = [];
+
+        if ($includeRoster) {
+            $rawMembers = $this->relationLoaded('members')
+                ? $this->members
+                : $this->members()->with('academicProfile')->get();
+
+            $validUsers = $rawMembers
+                ->filter(fn ($m) => $m->role !== 'it_admin' && $m->verification_status === 'approved')
+                ->values();
+
+            $approvedMembers = $validUsers
+                ->filter(fn ($m) => ($m->pivot?->approval_status ?? 'approved') !== 'pending')
+                ->values();
+
+            $pendingMembers = $validUsers
+                ->filter(fn ($m) => ($m->pivot?->approval_status ?? 'approved') === 'pending')
+                ->values();
+
+            $membersCount = $approvedMembers->count();
+
+            $roster = $approvedMembers->map(fn ($member) => [
+                'id' => $member->id,
+                'institutional_id' => $member->institutional_id,
+                'name' => $member->name,
+                'role' => $member->role,
+                'section' => $member->academicProfile?->section ?? $this->scope_section ?? 'IT3R2',
+                'department' => $member->academicProfile?->department ?? $this->scope_department ?? 'CITC',
+            ])->values()->all();
+
+            $pendingRequests = $pendingMembers->map(fn ($member) => [
+                'id' => $member->id,
+                'institutional_id' => $member->institutional_id,
+                'name' => $member->name,
+                'role' => $member->role,
+                'section' => $member->academicProfile?->section ?? $this->scope_section ?? 'IT3R2',
+                'department' => $member->academicProfile?->department ?? $this->scope_department ?? 'CITC',
+            ])->values()->all();
+        } else {
+            $membersCount = (int) ($this->precomputed_members_count ?? 0);
         }
 
-        // Open Q&A threads count (excluding __CHAT__ messages)
-        $openThreadsCount = $this->threads()->where('is_resolved', false)->count();
+        if (isset($this->precomputed_open_threads_count)) {
+            $openThreadsCount = (int) $this->precomputed_open_threads_count;
+            $chatMessagesCount = (int) ($this->precomputed_chat_messages_count ?? 0);
+            $latestAnnouncement = $this->precomputed_latest_announcement ?? null;
+            $latestMessage = $this->precomputed_latest_message ?? null;
+        } else {
+            $openThreadsCount = $this->threads()->where('is_resolved', false)->count();
 
-        // Include child sub-channel IDs when aggregating chat message counts & latest activity for a parent Course Hub
-        $hubChannelIds = [$this->id];
-        if ($parentHubId === null) {
-            $subIds = Channel::where('description', 'like', "[HUB:{$this->id}]%")->pluck('id')->all();
-            if (! empty($subIds)) {
-                $hubChannelIds = array_values(array_unique(array_merge($hubChannelIds, $subIds)));
+            $hubChannelIds = [$this->id];
+            if ($parentHubId === null) {
+                $subIds = Channel::where('parent_hub_id', $this->id)
+                    ->orWhere('description', 'like', "[HUB:{$this->id}]%")
+                    ->pluck('id')
+                    ->all();
+                if (! empty($subIds)) {
+                    $hubChannelIds = array_values(array_unique(array_merge($hubChannelIds, $subIds)));
+                }
             }
+
+            $chatMessagesCount = Message::whereIn('channel_id', $hubChannelIds)
+                ->whereNull('parent_id')
+                ->where('subject_hashtag', '__CHAT__')
+                ->count();
+
+            $latestAnnouncement = $this->announcements()->with('publisher:id,name')->latest('published_at')->first();
+            $latestMessage = Message::with('sender:id,name')
+                ->whereIn('channel_id', $hubChannelIds)
+                ->latest('created_at')
+                ->first();
         }
-
-        $chatMessagesCount = Message::whereIn('channel_id', $hubChannelIds)
-            ->whereNull('parent_id')
-            ->where('subject_hashtag', '__CHAT__')
-            ->count();
-
-        $latestAnnouncement = $this->announcements()->with('publisher')->latest('published_at')->first();
-        $latestMessage = Message::with('sender')
-            ->whereIn('channel_id', $hubChannelIds)
-            ->latest('created_at')
-            ->first();
 
         $latestPreview = "{$this->instructor_name}: Scoped Course Hub active.";
         $latestAt = $this->created_at ? $this->created_at->diffForHumans(null, true, true) . ' ago' : 'Just now';
@@ -79,26 +124,13 @@ class ChannelResource extends JsonResource
             'scope_section' => $this->scope_section,
             'unread_count' => $openThreadsCount,
             'chat_messages_count' => $chatMessagesCount,
-            'members_count' => $members->count(),
+            'members_count' => $membersCount,
             'instructor_name' => $this->instructor_name ?? 'Aki Hayakawa',
             'latest_activity_preview' => $latestPreview,
             'latest_activity_at' => $latestAt,
-            'roster' => $members->map(fn ($member) => [
-                'id' => $member->id,
-                'institutional_id' => $member->institutional_id,
-                'name' => $member->name,
-                'role' => $member->role,
-                'section' => $member->academicProfile?->section ?? $this->scope_section ?? 'IT3R2',
-                'department' => $member->academicProfile?->department ?? $this->scope_department ?? 'CITC',
-            ])->values()->all(),
-            'pending_requests' => $pendingMembers->map(fn ($member) => [
-                'id' => $member->id,
-                'institutional_id' => $member->institutional_id,
-                'name' => $member->name,
-                'role' => $member->role,
-                'section' => $member->academicProfile?->section ?? $this->scope_section ?? 'IT3R2',
-                'department' => $member->academicProfile?->department ?? $this->scope_department ?? 'CITC',
-            ])->values()->all(),
+            'roster' => $roster,
+            'pending_requests' => $pendingRequests,
         ];
     }
 }
+

@@ -14,31 +14,43 @@ class TriggerSmsFallbackBatch implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
+    public int $tries = 3;
+    public int $timeout = 30;
+    public array $backoff = [2, 5, 15];
+    public bool $afterCommit = true;
+
     public function __construct(public Announcement $announcement)
     {
         $this->onQueue('sms-fallback');
     }
 
     /**
-     * Broadcasts low-bandwidth SMS alerts using decrypted RA 10173 contact_number (NFR-02, NFR-05).
+     * Broadcasts low-bandwidth SMS alerts in chunks using decrypted RA 10173 contact_number (NFR-02, NFR-05).
      */
     public function handle(): void
     {
-        $recipients = $this->announcement->channel
-            ->members()
-            ->whereNotNull('contact_number')
-            ->get();
+        if (! $this->announcement->channel) {
+            return;
+        }
 
         $dispatched = 0;
-        foreach ($recipients as $recipient) {
-            // $recipient->contact_number is automatically decrypted by Eloquent 'encrypted' cast
-            if (! empty($recipient->contact_number)) {
-                $dispatched++;
-            }
-        }
+
+        $this->announcement->channel
+            ->members()
+            ->wherePivot('approval_status', 'approved')
+            ->whereNotNull('contact_number')
+            ->select(['users.id', 'users.contact_number'])
+            ->chunkById(100, function ($recipients) use (&$dispatched) {
+                foreach ($recipients as $recipient) {
+                    if (! empty($recipient->contact_number)) {
+                        $dispatched++;
+                    }
+                }
+            }, 'users.id', 'id');
 
         Log::info(
             "SMS Fallback Batch (NFR-02): Dispatched {$dispatched} offline SMS notices for Announcement #{$this->announcement->id}."
         );
     }
 }
+

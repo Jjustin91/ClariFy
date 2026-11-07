@@ -2,15 +2,20 @@
 
 namespace App\Events;
 
-use Illuminate\Broadcasting\Channel;
 use Illuminate\Broadcasting\InteractsWithSockets;
-use Illuminate\Contracts\Broadcasting\ShouldBroadcastNow;
+use Illuminate\Broadcasting\PrivateChannel;
+use Illuminate\Contracts\Broadcasting\ShouldBroadcast;
+use Illuminate\Contracts\Events\ShouldDispatchAfterCommit;
+use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Events\Dispatchable;
 use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Facades\Log;
 
-class RealtimeStateUpdated implements ShouldBroadcastNow
+class RealtimeStateUpdated implements ShouldBroadcast, ShouldQueue, ShouldDispatchAfterCommit
 {
     use Dispatchable, InteractsWithSockets, SerializesModels;
+
+    public string $broadcastQueue = 'broadcasts';
 
     public string $type;
     public ?int $channelId;
@@ -54,23 +59,36 @@ class RealtimeStateUpdated implements ShouldBroadcastNow
         try {
             event(new self($type, $channelId, $actorId, $announcement, $message, $thread));
         } catch (\Throwable $e) {
-            // Gracefully ignore if php artisan reverb:start is not currently running
+            Log::warning('RealtimeStateUpdated broadcast dispatch failed: ' . $e->getMessage(), [
+                'type' => $type,
+                'channel_id' => $channelId,
+                'actor_id' => $actorId,
+            ]);
         }
     }
 
     /**
-     * Get the channels the event should broadcast on.
+     * Get the private channels the event should broadcast on.
+     * Chat messages and scoped threads broadcast strictly on PrivateChannel('clarify.channel.{id}').
+     * Global notices broadcast minimal metadata on PrivateChannel('clarify.global').
      *
-     * @return array<int, \Illuminate\Broadcasting\Channel>
+     * @return array<int, \Illuminate\Broadcasting\PrivateChannel>
      */
     public function broadcastOn(): array
     {
-        $channels = [
-            new Channel('clarify.global'),
-        ];
+        $channels = [];
 
         if ($this->channelId !== null) {
-            $channels[] = new Channel("clarify.channel.{$this->channelId}");
+            $channels[] = new PrivateChannel("clarify.channel.{$this->channelId}");
+        }
+
+        // Only broadcast global notices (not private channel chat messages) on clarify.global
+        if (! str_starts_with($this->type, 'chat.') && ! str_starts_with($this->type, 'thread.')) {
+            $channels[] = new PrivateChannel('clarify.global');
+        }
+
+        if ($this->actorId !== null && $this->type === 'admin.updated') {
+            $channels[] = new PrivateChannel("clarify.user.{$this->actorId}");
         }
 
         return $channels;
@@ -91,14 +109,31 @@ class RealtimeStateUpdated implements ShouldBroadcastNow
      */
     public function broadcastWith(): array
     {
+        // Strip announcement body content on global notices unless on a scoped channel
+        $safeAnnouncement = null;
+        if ($this->announcement !== null) {
+            $safeAnnouncement = [
+                'id' => $this->announcement['id'] ?? null,
+                'channel_id' => $this->announcement['channel_id'] ?? $this->channelId,
+                'channel_type' => $this->announcement['channel_type'] ?? null,
+                'is_urgent' => $this->announcement['is_urgent'] ?? false,
+                'status' => $this->announcement['status'] ?? 'published',
+                'read_reach' => $this->announcement['read_reach'] ?? null,
+                'publisher' => isset($this->announcement['publisher'])
+                    ? ['id' => $this->announcement['publisher']['id'] ?? null]
+                    : null,
+            ];
+        }
+
         return [
             'type' => $this->type,
             'channel_id' => $this->channelId,
             'actor_id' => $this->actorId,
-            'announcement' => $this->announcement,
-            'message' => $this->message,
-            'thread' => $this->thread,
+            'announcement' => $safeAnnouncement,
+            'message' => $this->channelId !== null ? $this->message : null,
+            'thread' => $this->channelId !== null ? $this->thread : null,
             'timestamp' => $this->timestamp,
         ];
     }
 }
+

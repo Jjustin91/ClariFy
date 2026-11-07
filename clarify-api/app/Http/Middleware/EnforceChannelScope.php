@@ -3,6 +3,7 @@
 namespace App\Http\Middleware;
 
 use App\Models\Channel;
+use App\Policies\ChannelPolicy;
 use Closure;
 use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\Response;
@@ -10,12 +11,14 @@ use Symfony\Component\HttpFoundation\Response;
 class EnforceChannelScope
 {
     /**
-     * Enforces CITC/CEA/Course Hub boundaries (FR-01_REV).
+     * Enforces CITC/CEA/Course Hub membership and department boundaries (FR-01_REV).
      */
     public function handle(Request $request, Closure $next): Response
     {
         $user = $request->user();
-        $channelParam = $request->route('channel') ?? $request->route('id');
+        $channelParam = $request->route('channel')
+            ?? $request->route('channelId')
+            ?? $request->route('id');
 
         if (! $user || ! $channelParam) {
             return $next($request);
@@ -32,23 +35,14 @@ class EnforceChannelScope
             ], 404);
         }
 
-        if (in_array($user->role, ['it_admin', 'dept_head'], true)) {
-            return $next($request);
-        }
-
-        $userDept = $user->academicProfile?->department;
-        if (
-            $channel->scope_department &&
-            $userDept &&
-            strcasecmp($channel->scope_department, $userDept) !== 0 &&
-            ! $channel->members()->where('users.id', $user->id)->exists()
-        ) {
+        if (! ChannelPolicy::hasApprovedChannelAccess($user, $channel)) {
             return response()->json([
                 'status' => 403,
-                'message' => "Access Denied: You are outside the {$channel->scope_department} channel scope (FR-01_REV).",
+                'message' => "Access Denied: You are outside the {$channel->scope_department} channel scope or not an approved member (FR-01_REV).",
             ], 403);
         }
 
         return $next($request);
     }
 }
+

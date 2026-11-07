@@ -188,15 +188,6 @@ async function tryProxyToLaravel(
         ...(headers.authorization
           ? { Authorization: headers.authorization }
           : {}),
-        ...(headers['x-clarify-institutional-id']
-          ? {
-              'X-Clarify-Institutional-Id':
-                headers['x-clarify-institutional-id'],
-            }
-          : {}),
-        ...(headers['x-clarify-user-id']
-          ? { 'X-Clarify-User-Id': headers['x-clarify-user-id'] }
-          : {}),
       },
       body:
         method === 'GET' || method === 'HEAD'
@@ -206,7 +197,7 @@ async function tryProxyToLaravel(
     });
     clearTimeout(timeout);
 
-    if (res.status >= 500 || res.status === 404) {
+    if (res.status >= 500) {
       return null;
     }
 
@@ -256,34 +247,29 @@ async function handleRoute(
   });
 
   const authHeader = req.headers.get('authorization') || undefined;
-  const instHeader =
-    req.headers.get('x-clarify-institutional-id') || undefined;
-  const userIdHeader = req.headers.get('x-clarify-user-id') || undefined;
 
   const headers: Record<string, string | undefined> = {
     authorization: authHeader,
-    'x-clarify-institutional-id': instHeader,
-    'x-clarify-user-id': userIdHeader,
   };
 
-  // 1. Direct PostgreSQL execution (persists immediately into PostgreSQL database)
-  let result = await handlePostgresApiRequest({
-    method: effectiveMethod,
-    path: apiPath,
-    query,
+  // 1. Proxy to Laravel Backend first so all Sanctum auth & ChannelPolicy rules apply authoritatively
+  let result = await tryProxyToLaravel(
+    effectiveMethod,
+    apiPath,
+    req.nextUrl.searchParams,
     headers,
-    body,
-  });
+    body
+  );
 
-  // 2. If direct PostgreSQL is not reachable, proxy to Laravel 13 Backend if configured
+  // 2. Fallback to direct PostgreSQL adapter when local Laravel daemon is not running
   if (!result) {
-    result = await tryProxyToLaravel(
-      effectiveMethod,
-      apiPath,
-      req.nextUrl.searchParams,
+    result = await handlePostgresApiRequest({
+      method: effectiveMethod,
+      path: apiPath,
+      query,
       headers,
-      body
-    );
+      body,
+    });
   }
 
   // 3. If neither PostgreSQL nor Laravel is reachable, return explicit 503 error (no mock fallback)

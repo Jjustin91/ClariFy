@@ -1,11 +1,9 @@
 import { NextRequest } from 'next/server';
 import {
-  checkAndRecordDbFingerprint,
   getCurrentRevision,
   getEventsSinceRevision,
   subscribeRealtime,
 } from '@/src/server/realtime-bus';
-import { getPostgresFingerprint } from '@/src/server/postgres-adapter';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -14,12 +12,8 @@ export async function GET(req: NextRequest) {
   const sinceParam = req.nextUrl.searchParams.get('since_revision');
   const sinceRevision = sinceParam ? Number(sinceParam) : 0;
 
-  // If polled with ?poll=1, return JSON immediately for environments where SSE is buffered
+  // If polled with ?poll=1, return in-memory revision immediately (no full-table COUNT/MAX DB polling)
   if (req.nextUrl.searchParams.get('poll') === '1') {
-    const fp = await getPostgresFingerprint();
-    if (fp) {
-      checkAndRecordDbFingerprint(fp);
-    }
     const events = getEventsSinceRevision(sinceRevision);
     return Response.json({
       revision: getCurrentRevision(),
@@ -63,15 +57,6 @@ export async function GET(req: NextRequest) {
         sendEvent(event);
       });
 
-      // Poll PostgreSQL fingerprint every 2s so external DB / Laravel mutations also push live
-      const dbPollTimer = setInterval(async () => {
-        if (closed) return;
-        const fp = await getPostgresFingerprint();
-        if (fp) {
-          checkAndRecordDbFingerprint(fp);
-        }
-      }, 2000);
-
       // Keepalive comment every 15s
       const keepAliveTimer = setInterval(() => {
         if (closed) return;
@@ -84,7 +69,6 @@ export async function GET(req: NextRequest) {
 
       req.signal.addEventListener('abort', () => {
         closed = true;
-        clearInterval(dbPollTimer);
         clearInterval(keepAliveTimer);
         unsubscribe();
         try {
