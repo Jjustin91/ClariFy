@@ -1,34 +1,41 @@
-# Implementation Plan: Differentiate Course Hub vs. Campus-Wide Announcements
+# Implementation Plan: Real Image & Document Attachments in Announcements
 
 ## 1. Overview & Goals
-- **Visual Origin Differentiation**: Clearly distinguish **Course Hub** announcements from **Campus-Wide** announcements on the **All Announcements** (`/announcements`) and **Dashboard** (`/`) views by displaying the Course Hub badge/subtitle (e.g., `COURSE HUB` badge and Course Hub name/code) instead of generic department memo labels.
-- **Remove `"USTP Official Memo"` from Course Hub Announcements**: In the announcement card left box, replace the default `"USTP Official Memo"` fallback label with **`"Course Hub Announcement"`** whenever an announcement belongs to a Course Hub (`channel_type !== 'university'`) and has no file attachment.
-- **Add `COURSE HUB` Filter Tag**: Add a **`COURSE HUB`** filter button to the **All Announcements** tag filter bar (`All Tags`, `COURSE HUB`, `URGENT NOTICE`, `OFFICIAL MEMO`, `CDO CAMPUS`, `CITC`, `CEA`, `MEMORANDUM`) and support filtering by `COURSE HUB` across both the Laravel API and the frontend/PostgreSQL adapter.
+- **Real File Upload in Create & Edit Announcement Modal**: Replace the simulated placeholder buttons in `AnnouncementFormModal.tsx` with real file pickers for **Images** (`image/*`) and **Documents** (`.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.txt,.csv,.zip`).
+- **Add, Replace, or Remove Attachments When Creating or Editing**: Allow Instructors and Department Heads to attach a new file, preview the selected image or document before saving, replace an existing attachment, or remove an attachment in both **Create** and **Edit** modes.
+- **Rich Card Previews, Lightbox & Document Downloads**:
+  - **Image Attachments**: Render a live thumbnail preview directly inside the announcement card (both the 2-column Grid Card on All Announcements/Dashboard and the Noticeboard Feed Card inside Course Hubs). Clicking the image opens a full-size **Image Lightbox Modal** with a download button.
+  - **Document Attachments**: Render the document's filename and type badge on the card with a clickable **Download / Open Document** action that downloads or opens the attached file directly.
 
 ---
 
 ## 2. Planned Changes
 
-### A. Backend API & Data Resource (`clarify-api` & `postgres-adapter.ts`)
-1. **`/clarify-api/app/Http/Resources/AnnouncementResource.php` & `/clarify-web/src/server/postgres-adapter.ts`**:
-   - Include `course_code` and `channel_name` from the announcement's associated `channel` in the serialized announcement payload (`src/types/api.ts`).
-   - When an announcement belongs to a Course Hub (`channel_type === 'course_hub'`), format its `subtitle` with the Course Hub's name/course code (e.g., `IT314 SoftEng • CITC Department` or the Course Hub title) so users can immediately see which Course Hub it came from.
-2. **`/clarify-api/app/Http/Controllers/Api/V1/AnnouncementController.php` & `/clarify-web/src/lib/domain-logic.ts`**:
-   - Update tag filtering in `AnnouncementController::index` and `filterAndSortAnnouncements` so selecting `tag=COURSE HUB` filters announcements where `channel_type === 'course_hub'` (or `tags` contains `COURSE HUB`), while Campus-Wide tags (`OFFICIAL MEMO`, `CDO CAMPUS`, etc.) continue matching Campus-Wide announcements.
+### A. Attachment Encoding & API Client (`src/lib/domain-logic.ts` & `src/lib/api-client.ts`)
+1. **`/clarify-web/src/lib/domain-logic.ts`**:
+   - Add helper utilities (`encodeAnnouncementContentWithAttachment` and `parseAnnouncementAttachment`) that seamlessly resolve `attachment_url`, `attachment_name`, and `attachment_type` whether stored in dedicated columns or embedded in the announcement payload, ensuring 100% persistence even before backend schema migrations run.
+2. **`/clarify-web/src/lib/api-client.ts`**:
+   - Update `createAnnouncementApi` and `updateAnnouncementApi` to accept attachment data (`attachment`, `attachment_url`, `attachment_name`, `attachment_type`, or `remove_attachment`) so both creating and editing announcements persist attachments reliably.
 
-### B. All Announcements Filter Bar & Card UI (`clarify-web`)
-1. **`/clarify-web/app/announcements/page.tsx`**:
-   - Add `'COURSE HUB'` to `FILTER_TAGS` right after `'ALL'` so users can filter the All Announcements feed to Course Hub announcements in one click.
-2. **`/clarify-web/src/components/ui/StateViews.tsx` (`TagBadge`)**:
-   - Add styling support for the `COURSE HUB` badge using the USTP palette (`bg-ustp-navy/10 text-ustp-navy border-ustp-navy/25`).
-3. **`/clarify-web/src/components/announcements/AnnouncementCard.tsx`**:
-   - Differentiate the card header and badges between Campus-Wide (`OFFICIAL MEMO` / department tags) and Course Hub announcements (`COURSE HUB` badge + course code pill if available, and Course Hub name in the subtitle).
-   - In the grid card's left box, when `announcement.attachment_url` is not present:
-     - Render **`"USTP Official Memo"`** only for Campus-Wide announcements (`channel_type === 'university'`).
-     - Render **`"Course Hub Announcement"`** (with the Course Hub's course code or department in the badge icon) for Course Hub announcements.
+### B. Backend Controllers & PostgreSQL Adapter (`clarify-api` & `postgres-adapter.ts`)
+1. **`/clarify-api/app/Http/Controllers/Api/V1/AnnouncementController.php` & `/clarify-api/app/Http/Resources/AnnouncementResource.php`**:
+   - Support file upload, data URL storage, replacement, and removal (`remove_attachment`) in both `store()` and `update()`.
+   - Ensure `attachment_url` resolves to a valid downloadable/renderable URL or data URL.
+2. **`/clarify-web/src/server/postgres-adapter.ts` & `/clarify-web/app/api/v1/[...slug]/route.ts`**:
+   - Widen `announcements.attachment_url` to `TEXT` so data URLs and long file URLs never truncate.
+   - Parse uploaded `File` objects from `multipart/form-data` into data URLs and persist `attachment_url`, `attachment_name`, and `attachment_type` in both `POST /announcements` and `PATCH /announcements/{id}`.
+
+### C. Modal & Announcement Card UI (`AnnouncementFormModal.tsx` & `AnnouncementCard.tsx`)
+1. **`/clarify-web/src/components/modals/AnnouncementFormModal.tsx`**:
+   - Add hidden `<input type="file">` elements for **Image** and **Document** buttons.
+   - Read the selected file(s) with client-side image compression (for fast upload) or document data URL reading, and display an interactive attachment preview bar with file size and a **Remove (`X`)** button.
+2. **`/clarify-web/src/components/announcements/AnnouncementCard.tsx`**:
+   - **Grid Card**: When an image is attached, display the image thumbnail inside the left card box with a zoom indicator on hover; when a document is attached, make the left box a clickable document download/open trigger.
+   - **Feed Card**: When an image is attached, display a crisp inline image preview below the announcement text that opens in full size on click; when a document is attached, render an interactive download pill button.
+   - Include an accessible **Full-Size Image Lightbox Modal** when clicking any attached announcement image.
 
 ---
 
 ## 3. Verification Plan
-- Run `compile_applet` and `lint_applet` to verify zero TypeScript or build errors across `clarify-web`.
-- Verify that Course Hub announcements on `/announcements` and `/` display `"Course Hub Announcement"` instead of `"USTP Official Memo"`, show their Course Hub origin badge/subtitle, and filter accurately when clicking the `COURSE HUB` tag button.
+- Run `compile_applet` and `lint_applet` to verify zero TypeScript or build errors.
+- Verify that attaching an image or document when creating or editing an announcement displays the preview in the modal, renders properly on both Grid and Feed announcement cards, opens images in full size on click, and downloads documents on click.

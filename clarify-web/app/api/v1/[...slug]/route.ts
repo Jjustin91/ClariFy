@@ -24,16 +24,33 @@ async function parseRequestBody(
     if (contentType.includes('multipart/form-data')) {
       const formData = await req.formData();
       const obj: Record<string, unknown> = {};
-      formData.forEach((value, key) => {
+      for (const [key, value] of formData.entries()) {
         if (typeof value === 'string') {
           obj[key] = value;
-        } else if (value && typeof value === 'object' && 'name' in value) {
-          obj[key] = value.name;
+        } else if (
+          value &&
+          typeof value === 'object' &&
+          'name' in value &&
+          'arrayBuffer' in value
+        ) {
+          const fileObj = value as File;
+          obj[key] = fileObj.name;
           if (!obj.attachment_name) {
-            obj.attachment_name = value.name;
+            obj.attachment_name = fileObj.name;
+          }
+          if (!obj.attachment_type && fileObj.type) {
+            obj.attachment_type = fileObj.type.startsWith('image/')
+              ? 'image'
+              : 'document';
+          }
+          if (!obj.attachment_url && fileObj.size > 0) {
+            const ab = await fileObj.arrayBuffer();
+            const b64 = Buffer.from(ab).toString('base64');
+            const mime = fileObj.type || 'application/octet-stream';
+            obj.attachment_url = `data:${mime};base64,${b64}`;
           }
         }
-      });
+      }
       return obj;
     }
     return (await req.json()) as Record<string, unknown>;

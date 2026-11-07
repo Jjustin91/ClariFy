@@ -590,7 +590,12 @@ export async function getAnnouncementsApi(params?: {
 }
 
 export async function createAnnouncementApi(
-  formData: FormData
+  formData: FormData,
+  clientAttachment?: {
+    attachment_url: string | null;
+    attachment_name: string | null;
+    attachment_type: 'image' | 'document' | null;
+  }
 ): Promise<SingleResourceResponse<Announcement>> {
   const res = await requestLaravel<SingleResourceResponse<Announcement>>(
     '/announcements',
@@ -601,10 +606,17 @@ export async function createAnnouncementApi(
   );
   if (res?.data) {
     const scopeMode = formData.get('scope_mode');
-    const created: Announcement =
-      scopeMode === 'course_hub'
-        ? { ...res.data, tags: [] }
-        : res.data;
+    const created: Announcement = {
+      ...res.data,
+      ...(scopeMode === 'course_hub' ? { tags: [] } : {}),
+      ...(clientAttachment?.attachment_url
+        ? {
+            attachment_url: clientAttachment.attachment_url,
+            attachment_name: clientAttachment.attachment_name,
+            attachment_type: clientAttachment.attachment_type,
+          }
+        : {}),
+    };
     sessionAnnouncementsById.set(created.id, created);
     sessionDeletedAnnouncementIds.delete(created.id);
 
@@ -630,6 +642,10 @@ export async function createAnnouncementApi(
         // Ignore parse error
       }
     }
+    return {
+      ...res,
+      data: created,
+    };
   }
   return res;
 }
@@ -643,6 +659,10 @@ export async function updateAnnouncementApi(
     is_urgent?: boolean;
     trigger_sms_fallback?: boolean;
     status?: 'published' | 'draft' | 'archived';
+    attachment_url?: string | null;
+    attachment_name?: string | null;
+    attachment_type?: 'image' | 'document' | null;
+    remove_attachment?: boolean;
   }
 ): Promise<SingleResourceResponse<Announcement>> {
   const res = await requestLaravel<SingleResourceResponse<Announcement>>(
@@ -653,7 +673,27 @@ export async function updateAnnouncementApi(
     }
   );
   if (res?.data) {
-    sessionAnnouncementsById.set(res.data.id, res.data);
+    const updated: Announcement = {
+      ...res.data,
+      ...(payload.remove_attachment
+        ? {
+            attachment_url: null,
+            attachment_name: null,
+            attachment_type: null,
+          }
+        : payload.attachment_url !== undefined
+        ? {
+            attachment_url: payload.attachment_url,
+            attachment_name: payload.attachment_name ?? res.data.attachment_name,
+            attachment_type: payload.attachment_type ?? res.data.attachment_type,
+          }
+        : {}),
+    };
+    sessionAnnouncementsById.set(updated.id, updated);
+    return {
+      ...res,
+      data: updated,
+    };
   }
   return res;
 }

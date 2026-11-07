@@ -312,7 +312,7 @@ async function ensurePostgresSchema(pool: Pool): Promise<void> {
         title VARCHAR(255) NOT NULL,
         subtitle VARCHAR(255) NOT NULL DEFAULT 'USTP Digital Transformation',
         content TEXT NOT NULL,
-        attachment_url VARCHAR(255) NULL,
+        attachment_url TEXT NULL,
         attachment_name VARCHAR(255) NULL,
         attachment_type VARCHAR(32) NULL,
         tags JSONB NOT NULL DEFAULT '[]'::jsonb,
@@ -327,6 +327,10 @@ async function ensurePostgresSchema(pool: Pool): Promise<void> {
         deleted_at TIMESTAMP NULL
       );
     `);
+
+    await client.query(`
+      ALTER TABLE announcements ALTER COLUMN attachment_url TYPE TEXT;
+    `).catch(() => {});
 
     await client.query(`
       CREATE TABLE IF NOT EXISTS announcement_reads (
@@ -2411,7 +2415,9 @@ export async function handlePostgresApiRequest(
         }
       }
 
-      const attachmentUrl = attachmentName
+      const attachmentUrl = body.attachment_url
+        ? String(body.attachment_url)
+        : attachmentName
         ? `/storage/memos/${attachmentName}`
         : null;
       const publisherDeptSubtitle = `${
@@ -2544,6 +2550,31 @@ export async function handlePostgresApiRequest(
         ? JSON.stringify(body.tags.map(String))
         : JSON.stringify(prev.tags || []);
 
+      const removeAttachment =
+        body.remove_attachment === true ||
+        String(body.remove_attachment) === 'true';
+      const nextAttachmentUrl = removeAttachment
+        ? null
+        : body.attachment_url !== undefined
+        ? body.attachment_url
+          ? String(body.attachment_url)
+          : null
+        : prev.attachment_url || null;
+      const nextAttachmentName = removeAttachment
+        ? null
+        : body.attachment_name !== undefined
+        ? body.attachment_name
+          ? String(body.attachment_name)
+          : null
+        : prev.attachment_name || null;
+      const nextAttachmentType = removeAttachment
+        ? null
+        : body.attachment_type !== undefined
+        ? body.attachment_type
+          ? String(body.attachment_type)
+          : null
+        : prev.attachment_type || null;
+
       await pool.query(
         `UPDATE announcements
          SET title = $1,
@@ -2553,9 +2584,12 @@ export async function handlePostgresApiRequest(
              is_pinned = $5,
              trigger_sms_fallback = $6,
              status = $7,
+             attachment_url = $8,
+             attachment_name = $9,
+             attachment_type = $10,
              is_edited = TRUE,
              updated_at = CURRENT_TIMESTAMP
-         WHERE id = $8`,
+         WHERE id = $11`,
         [
           title,
           content,
@@ -2564,6 +2598,9 @@ export async function handlePostgresApiRequest(
           isPinned,
           triggerSms,
           nextStatus,
+          nextAttachmentUrl,
+          nextAttachmentName,
+          nextAttachmentType,
           id,
         ]
       );

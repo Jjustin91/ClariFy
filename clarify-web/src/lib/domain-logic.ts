@@ -298,6 +298,101 @@ export function parseChatMessageContent(rawContent: string): {
   return { text: rawContent, attachment: null };
 }
 
+export interface AnnouncementAttachmentMeta {
+  name: string;
+  type: 'image' | 'document';
+  dataUrl: string;
+}
+
+const ANNOUNCEMENT_MEDIA_PREFIX = '__CLARIFY_ANN_MEDIA__';
+
+/**
+ * Encodes an announcement content string with an optional self-contained attachment (image or document)
+ * so that attachments persist reliably in the TEXT `content` column even before database migrations run.
+ */
+export function encodeAnnouncementContentWithAttachment(
+  text: string,
+  attachment: AnnouncementAttachmentMeta | null
+): string {
+  const trimmed = text.trim();
+  if (!attachment || !attachment.dataUrl) {
+    return trimmed;
+  }
+  const metaJson = JSON.stringify(attachment);
+  return `${ANNOUNCEMENT_MEDIA_PREFIX}${metaJson}\n${trimmed}`;
+}
+
+/**
+ * Parses an announcement's text content and attachment metadata, resolving either dedicated
+ * `attachment_url` / `attachment_name` / `attachment_type` columns or an embedded attachment header.
+ */
+export function parseAnnouncementAttachment(announcement: {
+  content: string;
+  attachment_url?: string | null;
+  attachment_name?: string | null;
+  attachment_type?: 'image' | 'document' | null;
+}): {
+  cleanContent: string;
+  attachmentUrl: string | null;
+  attachmentName: string | null;
+  attachmentType: 'image' | 'document' | null;
+} {
+  const rawContent = announcement.content || '';
+  let cleanContent = rawContent;
+  let embeddedMeta: AnnouncementAttachmentMeta | null = null;
+
+  if (rawContent.startsWith(ANNOUNCEMENT_MEDIA_PREFIX)) {
+    const newlineIdx = rawContent.indexOf('\n');
+    const jsonPart =
+      newlineIdx === -1
+        ? rawContent.slice(ANNOUNCEMENT_MEDIA_PREFIX.length)
+        : rawContent.slice(ANNOUNCEMENT_MEDIA_PREFIX.length, newlineIdx);
+    cleanContent =
+      newlineIdx === -1 ? '' : rawContent.slice(newlineIdx + 1).trim();
+    try {
+      const parsed = JSON.parse(jsonPart) as AnnouncementAttachmentMeta;
+      if (parsed && parsed.dataUrl) {
+        embeddedMeta = parsed;
+      }
+    } catch {
+      cleanContent = rawContent;
+    }
+  }
+
+  const rawUrl = announcement.attachment_url || null;
+  // Prefer a real data URL or absolute URL over a synthetic /storage/memos/ placeholder path
+  const isSyntheticStoragePath =
+    rawUrl && rawUrl.startsWith('/storage/memos/') && embeddedMeta?.dataUrl;
+
+  const attachmentUrl = isSyntheticStoragePath
+    ? embeddedMeta!.dataUrl
+    : embeddedMeta?.dataUrl || rawUrl;
+
+  const attachmentName =
+    announcement.attachment_name || embeddedMeta?.name || null;
+
+  const inferType = (): 'image' | 'document' | null => {
+    if (announcement.attachment_type) return announcement.attachment_type;
+    if (embeddedMeta?.type) return embeddedMeta.type;
+    if (attachmentUrl?.startsWith('data:image/')) return 'image';
+    if (
+      attachmentName &&
+      /\.(png|jpe?g|gif|webp|svg|bmp)$/i.test(attachmentName)
+    ) {
+      return 'image';
+    }
+    if (attachmentUrl || attachmentName) return 'document';
+    return null;
+  };
+
+  return {
+    cleanContent,
+    attachmentUrl,
+    attachmentName,
+    attachmentType: inferType(),
+  };
+}
+
 
 /**
  * Computes the updated ReadReach state when a student acknowledges an announcement.

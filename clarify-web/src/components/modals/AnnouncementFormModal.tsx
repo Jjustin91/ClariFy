@@ -16,10 +16,12 @@ import {
   updateAnnouncementApi,
 } from '../../lib/api-client';
 import {
+  encodeAnnouncementContentWithAttachment,
   formatCourseHubName,
   getFieldValidationError,
   getJoinedCourseHubs,
   getTopLevelCourseHubs,
+  parseAnnouncementAttachment,
 } from '../../lib/domain-logic';
 import type { LaravelValidationError } from '../../types/api';
 import { TagBadge } from '../ui/StateViews';
@@ -37,6 +39,58 @@ const AVAILABLE_TAGS = [
 ];
 
 const CAMPUS_DEPARTMENTS = ['CITC', 'CEA', 'COT', 'CSM'];
+
+function readImageAsCompressedDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const rawDataUrl = String(reader.result || '');
+      const img = new window.Image();
+      img.onload = () => {
+        try {
+          const maxDim = 1280;
+          let { width, height } = img;
+          if (width > maxDim || height > maxDim) {
+            if (width >= height) {
+              height = Math.round((height * maxDim) / width);
+              width = maxDim;
+            } else {
+              width = Math.round((width * maxDim) / height);
+              height = maxDim;
+            }
+          }
+          const canvas = document.createElement('canvas');
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) {
+            resolve(rawDataUrl);
+            return;
+          }
+          ctx.drawImage(img, 0, 0, width, height);
+          const outMime =
+            file.type === 'image/png' ? 'image/png' : 'image/jpeg';
+          resolve(canvas.toDataURL(outMime, 0.85));
+        } catch {
+          resolve(rawDataUrl);
+        }
+      };
+      img.onerror = () => resolve(rawDataUrl);
+      img.src = rawDataUrl;
+    };
+    reader.onerror = () => reject(new Error('Failed to read image file.'));
+    reader.readAsDataURL(file);
+  });
+}
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(new Error('Failed to read document file.'));
+    reader.readAsDataURL(file);
+  });
+}
 
 export function AnnouncementFormModal() {
   const {
@@ -74,13 +128,20 @@ export function AnnouncementFormModal() {
   const [isUrgent, setIsUrgent] = useState(false);
   const [triggerSmsFallback, setTriggerSmsFallback] = useState(false);
   const [status, setStatus] = useState<'published' | 'draft'>('published');
+  const [attachmentUrl, setAttachmentUrl] = useState<string | null>(null);
   const [attachmentName, setAttachmentName] = useState<string | null>(null);
   const [attachmentType, setAttachmentType] = useState<'image' | 'document' | null>(
     null
   );
+  const [removeExistingAttachment, setRemoveExistingAttachment] =
+    useState(false);
+  const [isReadingFile, setIsReadingFile] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string[]>>({});
   const [generalError, setGeneralError] = useState<string | null>(null);
+
+  const imageInputRef = React.useRef<HTMLInputElement | null>(null);
+  const documentInputRef = React.useRef<HTMLInputElement | null>(null);
 
   const wasOpenRef = React.useRef(false);
   const lastEditingIdRef = React.useRef<number | null>(null);
@@ -110,9 +171,11 @@ export function AnnouncementFormModal() {
     setFieldErrors({});
     setGeneralError(null);
     setShowTagPicker(false);
+    setRemoveExistingAttachment(false);
     if (editingAnnouncement) {
+      const parsed = parseAnnouncementAttachment(editingAnnouncement);
       setTitle(editingAnnouncement.title);
-      setContent(editingAnnouncement.content);
+      setContent(parsed.cleanContent);
       setSelectedChannelIds([editingAnnouncement.channel_id]);
       setSelectedTags(
         editingAnnouncement.channel_type === 'university'
@@ -124,8 +187,9 @@ export function AnnouncementFormModal() {
       setStatus(
         editingAnnouncement.status === 'draft' ? 'draft' : 'published'
       );
-      setAttachmentName(editingAnnouncement.attachment_name || null);
-      setAttachmentType(editingAnnouncement.attachment_type || null);
+      setAttachmentUrl(parsed.attachmentUrl);
+      setAttachmentName(parsed.attachmentName);
+      setAttachmentType(parsed.attachmentType);
     } else {
       setTitle('');
       setContent('');
@@ -139,6 +203,7 @@ export function AnnouncementFormModal() {
       setIsUrgent(false);
       setTriggerSmsFallback(false);
       setStatus('published');
+      setAttachmentUrl(null);
       setAttachmentName(null);
       setAttachmentType(null);
     }
@@ -169,33 +234,94 @@ export function AnnouncementFormModal() {
     });
   };
 
-  const handleSimulatedFileSelect = (type: 'image' | 'document') => {
-    if (type === 'image') {
-      setAttachmentName('USTP_CITC_Room302_Floorplan.png');
-      setAttachmentType('image');
-    } else {
-      setAttachmentName('Official_CITC_Memorandum_2026.pdf');
-      setAttachmentType('document');
+  const handleFileChange = async (
+    e: React.ChangeEvent<HTMLInputElement>,
+    kind: 'image' | 'document'
+  ) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+
+    if (file.size > 10 * 1024 * 1024) {
+      setGeneralError('Attachment file size must not exceed 10 MB.');
+      return;
     }
+
+    setGeneralError(null);
+    setIsReadingFile(true);
+    try {
+      const isImg =
+        kind === 'image' ||
+        file.type.startsWith('image/') ||
+        /\.(png|jpe?g|gif|webp|svg|bmp)$/i.test(file.name);
+      const dataUrl = isImg
+        ? await readImageAsCompressedDataUrl(file)
+        : await readFileAsDataUrl(file);
+      setAttachmentUrl(dataUrl);
+      setAttachmentName(file.name);
+      setAttachmentType(isImg ? 'image' : 'document');
+      setRemoveExistingAttachment(false);
+    } catch {
+      setGeneralError('Unable to read the selected file. Please try another file.');
+    } finally {
+      setIsReadingFile(false);
+    }
+  };
+
+  const handleRemoveAttachment = () => {
+    setAttachmentUrl(null);
+    setAttachmentName(null);
+    setAttachmentType(null);
+    setRemoveExistingAttachment(true);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setIsSubmitting(true);
     setFieldErrors({});
     setGeneralError(null);
 
+    const trimmedTitle = title.trim();
+    const trimmedContent = content.trim();
+    const localErrors: Record<string, string[]> = {};
+    if (!trimmedTitle) {
+      localErrors.title = ['The title field is required.'];
+    }
+    if (!trimmedContent) {
+      localErrors.content = ['The announcement content field is required.'];
+    }
+    if (Object.keys(localErrors).length > 0) {
+      setFieldErrors(localErrors);
+      return;
+    }
+
+    setIsSubmitting(true);
     const outgoingTags = isCampusWideMode ? selectedTags : [];
+    const hasActiveAttachment = Boolean(
+      !removeExistingAttachment && attachmentUrl && attachmentName
+    );
+    const encodedContent = hasActiveAttachment
+      ? encodeAnnouncementContentWithAttachment(trimmedContent, {
+          name: attachmentName!,
+          type: attachmentType || 'document',
+          dataUrl: attachmentUrl!,
+        })
+      : trimmedContent;
 
     try {
       if (editingAnnouncement) {
         const res = await updateAnnouncementApi(editingAnnouncement.id, {
-          title,
-          content,
+          title: trimmedTitle,
+          content: encodedContent,
           tags: outgoingTags,
           is_urgent: isUrgent,
           trigger_sms_fallback: triggerSmsFallback,
           status,
+          attachment_url: hasActiveAttachment ? attachmentUrl : null,
+          attachment_name: hasActiveAttachment ? attachmentName : null,
+          attachment_type: hasActiveAttachment
+            ? attachmentType || 'document'
+            : null,
+          remove_attachment: !hasActiveAttachment,
         });
         showToast(res.message || 'Announcement updated.', 'success');
       } else {
@@ -212,20 +338,29 @@ export function AnnouncementFormModal() {
           formData.set('channel_id', String(primaryId));
           formData.set('channel_ids', JSON.stringify(targetIds));
         }
-        formData.set('title', title);
-        formData.set('content', content);
+        formData.set('title', trimmedTitle);
+        formData.set('content', encodedContent);
         formData.set('tags', JSON.stringify(outgoingTags));
         formData.set('is_urgent', String(isUrgent));
         formData.set('trigger_sms_fallback', String(triggerSmsFallback));
         formData.set('status', status);
-        if (attachmentName) {
+        if (hasActiveAttachment && attachmentName) {
           formData.set('attachment_name', attachmentName);
         }
-        if (attachmentType) {
+        if (hasActiveAttachment && attachmentType) {
           formData.set('attachment_type', attachmentType);
         }
 
-        const res = await createAnnouncementApi(formData);
+        const res = await createAnnouncementApi(
+          formData,
+          hasActiveAttachment
+            ? {
+                attachment_url: attachmentUrl,
+                attachment_name: attachmentName,
+                attachment_type: attachmentType || 'document',
+              }
+            : undefined
+        );
         showToast(res.message || 'Announcement posted.', 'success');
       }
       triggerAnnouncementRefresh();
@@ -488,30 +623,102 @@ export function AnnouncementFormModal() {
             </div>
           </div>
 
+          {/* Active Attachment Preview Bar */}
+          {!removeExistingAttachment && attachmentName && (
+            <div className="p-2.5 bg-slate-50 border border-slate-200 rounded-md flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3 min-w-0">
+                {attachmentType === 'image' &&
+                attachmentUrl &&
+                (attachmentUrl.startsWith('data:image/') ||
+                  attachmentUrl.startsWith('http')) ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={attachmentUrl}
+                    alt={attachmentName}
+                    className="w-12 h-12 rounded object-cover border border-slate-300 shrink-0 bg-white"
+                  />
+                ) : (
+                  <div className="w-10 h-10 rounded bg-ustp-navy text-ustp-gold flex items-center justify-center shrink-0">
+                    {attachmentType === 'image' ? (
+                      <ImageIcon className="w-5 h-5" />
+                    ) : (
+                      <FileText className="w-5 h-5" />
+                    )}
+                  </div>
+                )}
+                <div className="min-w-0">
+                  <p className="text-xs font-bold text-ustp-text truncate">
+                    {attachmentName}
+                  </p>
+                  <p className="text-[11px] font-semibold text-slate-500 uppercase">
+                    {attachmentType === 'image'
+                      ? 'Attached Image'
+                      : 'Attached Document'}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={handleRemoveAttachment}
+                aria-label="Remove attachment"
+                className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-bold text-red-700 bg-red-50 hover:bg-red-100 border border-red-200 rounded shrink-0 cursor-pointer"
+              >
+                <X className="w-3.5 h-3.5" />
+                <span>Remove</span>
+              </button>
+            </div>
+          )}
+
+          {/* Hidden File Inputs for Image and Document */}
+          <input
+            ref={imageInputRef}
+            type="file"
+            accept="image/*"
+            onChange={(e) => handleFileChange(e, 'image')}
+            className="hidden"
+          />
+          <input
+            ref={documentInputRef}
+            type="file"
+            accept=".pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.txt,.csv,.zip,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation,text/plain,text/csv"
+            onChange={(e) => handleFileChange(e, 'document')}
+            className="hidden"
+          />
+
           {/* Bottom Action Row matching Wireframe Page 6 (Bottom-left Image & File icons, Bottom-right Navy "Post" button) */}
           <div className="flex items-center justify-between pt-3 border-t border-slate-200">
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <button
                 type="button"
-                onClick={() => handleSimulatedFileSelect('image')}
+                disabled={isReadingFile || isSubmitting}
+                onClick={() => imageInputRef.current?.click()}
                 aria-label="Attach image"
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-ustp-text bg-slate-100 hover:bg-slate-200 rounded border border-slate-300 cursor-pointer"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-ustp-text bg-slate-100 hover:bg-slate-200 rounded border border-slate-300 disabled:opacity-50 cursor-pointer"
               >
                 <ImageIcon className="w-4 h-4 text-ustp-navy" />
-                <span>Image</span>
+                <span>
+                  {attachmentName && attachmentType === 'image'
+                    ? 'Replace Image'
+                    : 'Image'}
+                </span>
               </button>
               <button
                 type="button"
-                onClick={() => handleSimulatedFileSelect('document')}
+                disabled={isReadingFile || isSubmitting}
+                onClick={() => documentInputRef.current?.click()}
                 aria-label="Attach document"
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-ustp-text bg-slate-100 hover:bg-slate-200 rounded border border-slate-300 cursor-pointer"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-ustp-text bg-slate-100 hover:bg-slate-200 rounded border border-slate-300 disabled:opacity-50 cursor-pointer"
               >
                 <FileText className="w-4 h-4 text-ustp-navy" />
-                <span>Document</span>
+                <span>
+                  {attachmentName && attachmentType === 'document'
+                    ? 'Replace Document'
+                    : 'Document'}
+                </span>
               </button>
-              {attachmentName && (
-                <span className="text-xs text-slate-600 font-mono truncate max-w-[180px]">
-                  {attachmentName}
+              {isReadingFile && (
+                <span className="text-xs text-slate-600 font-semibold">
+                  Reading file...
                 </span>
               )}
             </div>
@@ -526,7 +733,7 @@ export function AnnouncementFormModal() {
               </button>
               <button
                 type="submit"
-                disabled={isSubmitting}
+                disabled={isSubmitting || isReadingFile}
                 className="px-6 py-2 text-xs font-bold bg-ustp-navy text-white rounded hover:opacity-95 disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-ustp-gold cursor-pointer"
               >
                 {isSubmitting

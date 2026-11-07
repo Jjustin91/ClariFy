@@ -1,6 +1,6 @@
 {
-  "summary":  "Implementation plan to differentiate Course Hub announcements from Campus-Wide announcements, add a COURSE HUB tag filter in All Announcements, and replace USTP Official Memo on Course Hub announcement cards with Course Hub Announcement.",
-  "updatedAt":  "2026-11-07T09:54:49.726356097Z",
+  "summary":  "Implementation plan to enable real image and document file uploads, previews, full-size image lightbox, document downloads, and edit-mode attachment management in Announcements.",
+  "updatedAt":  "2026-11-07T11:58:59.647799655Z",
   "requestFeedback":  true,
   "userFacing":  true
 }

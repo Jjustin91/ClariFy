@@ -216,12 +216,19 @@ class AnnouncementController
             'trigger_sms_fallback' => ['nullable'],
             'status' => ['nullable', 'in:published,draft,archived'],
             'attachment' => ['nullable', 'file', 'max:10240'],
+            'attachment_url' => ['nullable', 'string'],
             'attachment_name' => ['nullable', 'string'],
             'attachment_type' => ['nullable', 'in:image,document'],
         ], [
             'title.required' => 'The title field is required.',
             'content.required' => 'The announcement content field is required.',
         ]);
+
+        try {
+            \Illuminate\Support\Facades\DB::statement('ALTER TABLE announcements ALTER COLUMN attachment_url TYPE TEXT');
+        } catch (\Throwable $e) {
+            // Ignore if already TEXT or SQLite
+        }
 
         $pubDept = $user->academicProfile?->department ?? 'CITC';
         $tags = $isCampusWide ? ['OFFICIAL MEMO', 'CDO CAMPUS', $pubDept] : [];
@@ -246,17 +253,25 @@ class AnnouncementController
             array_unshift($tags, 'URGENT NOTICE');
         }
 
-        $attachmentUrl = null;
+        $attachmentUrl = $validated['attachment_url'] ?? null;
         $attachmentName = $validated['attachment_name'] ?? null;
         $attachmentType = $validated['attachment_type'] ?? null;
 
         if ($request->hasFile('attachment')) {
             $file = $request->file('attachment');
-            $path = $file->store('memos', 'public');
-            $attachmentUrl = Storage::url($path);
+            $mime = (string) ($file->getMimeType() ?: 'application/octet-stream');
             $attachmentName = $file->getClientOriginalName();
-            $attachmentType = str_starts_with((string) $file->getMimeType(), 'image/') ? 'image' : 'document';
-        } elseif ($attachmentName) {
+            $attachmentType = str_starts_with($mime, 'image/') ? 'image' : 'document';
+            if (! $attachmentUrl) {
+                $rawBytes = @file_get_contents($file->getRealPath());
+                if ($rawBytes !== false && strlen($rawBytes) <= 5 * 1024 * 1024) {
+                    $attachmentUrl = 'data:' . $mime . ';base64,' . base64_encode($rawBytes);
+                } else {
+                    $path = $file->store('memos', 'public');
+                    $attachmentUrl = url(Storage::url($path));
+                }
+            }
+        } elseif (! $attachmentUrl && $attachmentName) {
             $attachmentUrl = "/storage/memos/{$attachmentName}";
         }
 
@@ -340,6 +355,12 @@ class AnnouncementController
             ], 403);
         }
 
+        try {
+            \Illuminate\Support\Facades\DB::statement('ALTER TABLE announcements ALTER COLUMN attachment_url TYPE TEXT');
+        } catch (\Throwable $e) {
+            // Ignore if already TEXT or SQLite
+        }
+
         $validated = $request->validate([
             'title' => ['required', 'string', 'max:255'],
             'content' => ['required', 'string'],
@@ -347,7 +368,22 @@ class AnnouncementController
             'is_urgent' => ['nullable', 'boolean'],
             'trigger_sms_fallback' => ['nullable', 'boolean'],
             'status' => ['nullable', 'in:published,draft,archived'],
+            'attachment_url' => ['nullable', 'string'],
+            'attachment_name' => ['nullable', 'string'],
+            'attachment_type' => ['nullable', 'in:image,document'],
+            'remove_attachment' => ['nullable', 'boolean'],
         ]);
+
+        $removeAttachment = filter_var($request->input('remove_attachment', false), FILTER_VALIDATE_BOOLEAN);
+        $nextAttachmentUrl = $removeAttachment
+            ? null
+            : ($request->exists('attachment_url') ? $validated['attachment_url'] : $announcement->attachment_url);
+        $nextAttachmentName = $removeAttachment
+            ? null
+            : ($request->exists('attachment_name') ? $validated['attachment_name'] : $announcement->attachment_name);
+        $nextAttachmentType = $removeAttachment
+            ? null
+            : ($request->exists('attachment_type') ? $validated['attachment_type'] : $announcement->attachment_type);
 
         $announcement->update([
             'title' => trim($validated['title']),
@@ -357,10 +393,14 @@ class AnnouncementController
             'is_pinned' => $validated['is_urgent'] ?? $announcement->is_pinned,
             'trigger_sms_fallback' => $validated['trigger_sms_fallback'] ?? $announcement->trigger_sms_fallback,
             'status' => $validated['status'] ?? $announcement->status,
+            'attachment_url' => $nextAttachmentUrl,
+            'attachment_name' => $nextAttachmentName,
+            'attachment_type' => $nextAttachmentType,
             'is_edited' => true,
         ]);
 
         ApiCache::forgetChannelAnnouncements((int) $announcement->channel_id);
+        ApiCache::forgetChannelAnnouncements(null);
         ApiCache::forgetChannels((int) $announcement->channel_id);
 
         $freshAnnouncement = $announcement->fresh(['publisher.academicProfile', 'channel', 'reads']);

@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { useClarify } from '../../context/ClarifyContext';
 import { acknowledgeAnnouncementApi } from '../../lib/api-client';
+import { parseAnnouncementAttachment } from '../../lib/domain-logic';
 import { formatShortTime } from '../announcements/AnnouncementCard';
 import { TagBadge } from '../ui/StateViews';
 
@@ -33,6 +34,8 @@ export function UrgentAnnouncementModal() {
   const hasAcknowledged =
     urgentPopupAnnouncement.read_reach.has_current_user_acknowledged;
   const timeFormatted = formatShortTime(urgentPopupAnnouncement.published_at);
+  const { cleanContent, attachmentUrl, attachmentName, attachmentType } =
+    parseAnnouncementAttachment(urgentPopupAnnouncement);
 
   const handleAcknowledge = async () => {
     if (isAckLoading) return;
@@ -119,17 +122,30 @@ export function UrgentAnnouncementModal() {
           </div>
 
           <div className="p-4 bg-red-50/70 border border-red-200 rounded-lg text-sm text-ustp-text leading-relaxed whitespace-pre-wrap">
-            {urgentPopupAnnouncement.content}
+            {cleanContent}
           </div>
 
-          {urgentPopupAnnouncement.attachment_url && (
-            <div className="inline-flex items-center gap-2 px-3 py-1.5 bg-slate-50 border border-slate-200 rounded text-xs font-semibold text-ustp-blue">
-              <FileText className="w-3.5 h-3.5 shrink-0" />
-              <span className="font-mono">
-                {urgentPopupAnnouncement.attachment_name ||
-                  'Official_USTP_Attachment.pdf'}
-              </span>
+          {attachmentType === 'image' &&
+          attachmentUrl &&
+          (attachmentUrl.startsWith('data:image/') ||
+            attachmentUrl.startsWith('http')) ? (
+            <div className="rounded-lg overflow-hidden border border-slate-200 bg-slate-50 max-h-56 flex items-center justify-center">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={attachmentUrl}
+                alt={attachmentName || urgentPopupAnnouncement.title}
+                className="max-h-52 w-auto object-contain"
+              />
             </div>
+          ) : (
+            (attachmentUrl || attachmentName) && (
+              <div className="inline-flex items-center gap-2 px-3 py-1.5 bg-slate-50 border border-slate-200 rounded text-xs font-semibold text-ustp-blue">
+                <FileText className="w-3.5 h-3.5 shrink-0" />
+                <span className="font-mono">
+                  {attachmentName || 'Official_USTP_Attachment.pdf'}
+                </span>
+              </div>
+            )
           )}
 
           {/* Live Acknowledgment Counter Bar */}
