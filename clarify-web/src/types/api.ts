@@ -64,6 +64,8 @@ export interface Announcement {
   id: number;
   channel_id: number;
   channel_type?: Channel['channel_type'];
+  course_code?: string | null;
+  channel_name?: string | null;
   title: string;
   content: string;
   subtitle?: string;

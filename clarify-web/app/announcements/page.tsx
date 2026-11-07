@@ -21,6 +21,7 @@ import type {
 
 const FILTER_TAGS = [
   'ALL',
+  'COURSE HUB',
   'URGENT NOTICE',
   'OFFICIAL MEMO',
   'CDO CAMPUS',

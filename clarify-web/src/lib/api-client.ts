@@ -452,7 +452,13 @@ function matchesAnnouncementFilters(
     return false;
   }
   if (params?.tag && params.tag !== 'ALL') {
-    if (!ann.tags.includes(params.tag)) return false;
+    if (params.tag.trim().toUpperCase() === 'COURSE HUB') {
+      const isCourseHub =
+        !ann.channel_type || ann.channel_type === 'course_hub';
+      if (!isCourseHub) return false;
+    } else if (!ann.tags.includes(params.tag)) {
+      return false;
+    }
   }
   if (params?.department && params.department !== 'ALL') {
     const deptMatch =
@@ -462,7 +468,9 @@ function matchesAnnouncementFilters(
   }
   if (params?.search && params.search.trim() !== '') {
     const q = params.search.trim().toLowerCase();
-    const hay = `${ann.title} ${ann.content} ${ann.subtitle || ''} ${ann.publisher?.name || ''}`.toLowerCase();
+    const hay = `${ann.title} ${ann.content} ${ann.subtitle || ''} ${
+      ann.course_code || ''
+    } ${ann.channel_name || ''} ${ann.publisher?.name || ''}`.toLowerCase();
     if (!hay.includes(q)) return false;
   }
   return true;
@@ -477,18 +485,57 @@ export async function getAnnouncementsApi(params?: {
   page?: number;
   per_page?: number;
 }): Promise<PaginatedResponse<Announcement>> {
+  const isCourseHubTag =
+    Boolean(params?.tag) && params?.tag?.trim().toUpperCase() === 'COURSE HUB';
   const qs = new URLSearchParams();
   if (params?.channel_id) qs.set('channel_id', String(params.channel_id));
   if (params?.search) qs.set('search', params.search);
   if (params?.department && params.department !== 'ALL')
     qs.set('department', params.department);
-  if (params?.tag && params.tag !== 'ALL') qs.set('tag', params.tag);
+  if (params?.tag && params.tag !== 'ALL' && !isCourseHubTag) {
+    qs.set('tag', params.tag);
+  } else if (isCourseHubTag) {
+    qs.set('tag', 'COURSE HUB');
+  }
   if (params?.sort) qs.set('sort', params.sort);
   if (params?.page) qs.set('page', String(params.page));
   if (params?.per_page) qs.set('per_page', String(params.per_page));
-  const res = await requestLaravel<PaginatedResponse<Announcement>>(
+  let res = await requestLaravel<PaginatedResponse<Announcement>>(
     `/announcements?${qs.toString()}`
   );
+
+  // Fallback client-side filtering if remote backend has not yet updated its COURSE HUB tag query
+  if (isCourseHubTag && (!res.data || res.data.length === 0)) {
+    const fallbackQs = new URLSearchParams();
+    if (params?.channel_id) fallbackQs.set('channel_id', String(params.channel_id));
+    if (params?.search) fallbackQs.set('search', params.search);
+    if (params?.department && params.department !== 'ALL')
+      fallbackQs.set('department', params.department);
+    if (params?.sort) fallbackQs.set('sort', params.sort);
+    fallbackQs.set('page', '1');
+    fallbackQs.set('per_page', '50');
+    const allRes = await requestLaravel<PaginatedResponse<Announcement>>(
+      `/announcements?${fallbackQs.toString()}`
+    );
+    const courseHubItems = (allRes.data || []).filter(
+      (item) => !item.channel_type || item.channel_type === 'course_hub'
+    );
+    const pageNum = Math.max(1, params?.page || 1);
+    const perPageNum = Math.max(1, params?.per_page || 4);
+    const total = courseHubItems.length;
+    const lastPage = Math.max(1, Math.ceil(total / perPageNum));
+    const safePage = Math.min(pageNum, lastPage);
+    const start = (safePage - 1) * perPageNum;
+    res = {
+      data: courseHubItems.slice(start, start + perPageNum),
+      meta: {
+        current_page: safePage,
+        last_page: lastPage,
+        per_page: perPageNum,
+        total,
+      },
+    };
+  }
 
   // Merge session-created/updated announcements so Course Hub feeds immediately reflect new/edited posts
   // even if the remote backend's file cache was not yet cleared for this channel_id query.
@@ -496,7 +543,10 @@ export async function getAnnouncementsApi(params?: {
   const mergedMap = new Map<number, Announcement>();
 
   for (const item of res.data || []) {
-    if (!sessionDeletedAnnouncementIds.has(item.id)) {
+    if (
+      !sessionDeletedAnnouncementIds.has(item.id) &&
+      matchesAnnouncementFilters(item, params)
+    ) {
       const sessionOverride = sessionAnnouncementsById.get(item.id);
       mergedMap.set(item.id, sessionOverride || item);
     }

@@ -86,7 +86,11 @@ class AnnouncementController
             }
 
             if ($tag && strtoupper((string) $tag) !== 'ALL') {
-                $query->whereJsonContains('tags', $tag);
+                if (strtoupper(trim((string) $tag)) === 'COURSE HUB') {
+                    $query->whereHas('channel', fn ($cq) => $cq->where('channel_type', 'course_hub'));
+                } else {
+                    $query->whereJsonContains('tags', $tag);
+                }
             }
 
             if ($department && strtoupper((string) $department) !== 'ALL') {

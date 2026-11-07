@@ -22,6 +22,8 @@ export function TagBadge({
 
   if (upper.includes('URGENT') || upper.includes('MEMORANDUM')) {
     colorClass = 'bg-red-100 text-red-700 border-red-300';
+  } else if (upper.includes('COURSE HUB')) {
+    colorClass = 'bg-ustp-navy/10 text-ustp-navy border-ustp-navy/30';
   } else if (
     upper.includes('OFFICIAL MEMO') ||
     upper.includes('CDO CAMPUS') ||

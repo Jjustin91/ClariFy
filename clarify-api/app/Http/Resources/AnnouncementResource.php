@@ -21,15 +21,26 @@ class AnnouncementResource extends JsonResource
             : false;
 
         $pubDept = $this->publisher?->academicProfile?->department ?? 'CITC';
+        $channelType = $this->channel?->channel_type ?? 'course_hub';
+        $courseCode = $this->channel?->course_code;
+        $rawChannelName = $this->channel?->name ?? '';
+        $cleanChannelName = trim((string) preg_replace('/^#\s*/', '', $rawChannelName));
+
         $rawSubtitle = $this->subtitle ?? '';
-        $displaySubtitle = ($rawSubtitle !== '' && $rawSubtitle !== 'USTP Digital Transformation')
-            ? $rawSubtitle
-            : "{$pubDept} Department";
+        if ($channelType === 'course_hub' && $cleanChannelName !== '') {
+            $displaySubtitle = "{$cleanChannelName} • {$pubDept} Department";
+        } else {
+            $displaySubtitle = ($rawSubtitle !== '' && $rawSubtitle !== 'USTP Digital Transformation')
+                ? $rawSubtitle
+                : "{$pubDept} Department";
+        }
 
         return [
             'id' => $this->id,
             'channel_id' => $this->channel_id,
-            'channel_type' => $this->channel?->channel_type ?? 'course_hub',
+            'channel_type' => $channelType,
+            'course_code' => $courseCode,
+            'channel_name' => $cleanChannelName !== '' ? $cleanChannelName : null,
             'title' => $this->title,
             'subtitle' => $displaySubtitle,
             'content' => $this->content,

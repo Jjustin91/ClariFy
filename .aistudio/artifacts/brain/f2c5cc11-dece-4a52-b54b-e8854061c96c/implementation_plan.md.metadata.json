@@ -1,6 +1,6 @@
 {
-  "summary":  "Implementation plan to remove automatic #general chat creation from Course Hubs (defaulting to Noticeboard Feed until custom channels are added) and apply the ClariFy C speech-bubble logo to the browser tab favicon and the Login screen badge.",
-  "updatedAt":  "2026-11-07T09:14:27.078908568Z",
+  "summary":  "Implementation plan to differentiate Course Hub announcements from Campus-Wide announcements, add a COURSE HUB tag filter in All Announcements, and replace USTP Official Memo on Course Hub announcement cards with Course Hub Announcement.",
+  "updatedAt":  "2026-11-07T09:54:49.726356097Z",
   "requestFeedback":  true,
   "userFacing":  true
 }

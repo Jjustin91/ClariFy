@@ -796,6 +796,8 @@ async function fetchAnnouncementsFromPg(
     SELECT
       a.*,
       c.channel_type AS ch_type,
+      c.course_code AS ch_course_code,
+      c.name AS ch_name,
       u.id AS pub_id,
       u.name AS pub_name,
       u.role AS pub_role,
@@ -855,17 +857,26 @@ async function fetchAnnouncementsFromPg(
     }
 
     const pubDept = String(row.pub_department || 'CITC');
+    const channelType =
+      (row.ch_type as Channel['channel_type']) || 'course_hub';
+    const courseCode = row.ch_course_code ? String(row.ch_course_code) : null;
+    const rawChannelName = row.ch_name ? String(row.ch_name) : '';
+    const cleanChannelName = rawChannelName.replace(/^#\s*/, '').trim();
+
     const rawSubtitle = row.subtitle ? String(row.subtitle) : '';
     const displaySubtitle =
-      rawSubtitle && rawSubtitle !== 'USTP Digital Transformation'
+      channelType === 'course_hub' && cleanChannelName
+        ? `${cleanChannelName} • ${pubDept} Department`
+        : rawSubtitle && rawSubtitle !== 'USTP Digital Transformation'
         ? rawSubtitle
         : `${pubDept} Department`;
 
     return {
       id,
       channel_id: Number(row.channel_id),
-      channel_type:
-        (row.ch_type as Channel['channel_type']) || 'course_hub',
+      channel_type: channelType,
+      course_code: courseCode,
+      channel_name: cleanChannelName || null,
       title: String(row.title),
       subtitle: displaySubtitle,
       content: String(row.content),

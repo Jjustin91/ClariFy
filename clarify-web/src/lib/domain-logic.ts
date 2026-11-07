@@ -433,8 +433,16 @@ export function filterAndSortAnnouncements(
       return false;
     }
     if (tag && tag !== 'ALL') {
-      const hasTag = item.tags.some((t) => t.toLowerCase() === tag.toLowerCase());
-      if (!hasTag) return false;
+      if (tag.trim().toUpperCase() === 'COURSE HUB') {
+        const isCourseHub =
+          !item.channel_type || item.channel_type === 'course_hub';
+        if (!isCourseHub) return false;
+      } else {
+        const hasTag = item.tags.some(
+          (t) => t.toLowerCase() === tag.toLowerCase()
+        );
+        if (!hasTag) return false;
+      }
     }
     if (department && department !== 'ALL') {
       const matchesDept =
@@ -446,6 +454,8 @@ export function filterAndSortAnnouncements(
       const haystack = [
         item.title,
         item.subtitle || '',
+        item.course_code || '',
+        item.channel_name || '',
         item.content,
         item.publisher.name,
         item.publisher.department,

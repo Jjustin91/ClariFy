@@ -43,6 +43,7 @@ export function AnnouncementCard({
 }) {
   const {
     user,
+    channels,
     openAnnouncementModal,
     triggerAnnouncementRefresh,
     showToast,
@@ -51,16 +52,52 @@ export function AnnouncementCard({
   const [isAckLoading, setIsAckLoading] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
 
-  const isCampusWideMemo = announcement.channel_type === 'university';
+  const matchedChannel = channels.find(
+    (c) => Number(c.id) === Number(announcement.channel_id)
+  );
+  const isCampusWideMemo =
+    announcement.channel_type === 'university' ||
+    matchedChannel?.channel_type === 'university';
   const canManage = isCampusWideMemo
     ? user.role === 'dept_head'
     : canPublishOrManageAnnouncements(user.role);
   const isStudent = user.role === 'student';
   const timeFormatted = formatShortTime(announcement.published_at);
   const editedTimeFormatted = formatShortTime(announcement.updated_at);
-  const departmentSubtitle = `${
-    announcement.publisher.department || 'CITC'
-  } Department`;
+
+  const courseCode =
+    announcement.course_code ||
+    (!isCampusWideMemo ? matchedChannel?.course_code : null) ||
+    null;
+  const courseHubName =
+    announcement.channel_name ||
+    (!isCampusWideMemo && matchedChannel?.name
+      ? matchedChannel.name.replace(/^#\s*/, '').trim()
+      : null);
+
+  const departmentSubtitle =
+    !isCampusWideMemo && courseHubName
+      ? `${courseHubName} • ${announcement.publisher.department || 'CITC'} Department`
+      : announcement.subtitle &&
+        announcement.subtitle !== 'USTP Digital Transformation'
+      ? announcement.subtitle
+      : `${announcement.publisher.department || 'CITC'} Department`;
+
+  const defaultAttachmentLabel = isCampusWideMemo
+    ? 'USTP Official Memo'
+    : 'Course Hub Announcement';
+  const badgeBoxCode =
+    !isCampusWideMemo && courseCode
+      ? courseCode
+      : announcement.publisher.department || 'CITC';
+
+  const displayTags: string[] = isCampusWideMemo
+    ? announcement.tags
+    : [
+        ...(announcement.is_urgent ? ['URGENT NOTICE'] : []),
+        'COURSE HUB',
+        ...(courseCode ? [courseCode] : []),
+      ];
 
   const handleAcknowledge = async () => {
     if (announcement.read_reach.has_current_user_acknowledged || isAckLoading) {
@@ -130,10 +167,10 @@ export function AnnouncementCard({
               {departmentSubtitle}
             </p>
 
-            {/* Tag Pills Row (Campus-Wide Memos Only) */}
-            {isCampusWideMemo && announcement.tags.length > 0 && (
+            {/* Tag Pills Row */}
+            {displayTags.length > 0 && (
               <div className="flex flex-wrap items-center gap-1.5 mt-2">
-                {announcement.tags.map((tag) => (
+                {displayTags.map((tag) => (
                   <TagBadge key={tag} tag={tag} size="xs" />
                 ))}
               </div>
@@ -190,7 +227,10 @@ export function AnnouncementCard({
           <div className="mt-3 inline-flex items-center gap-2 px-3 py-1.5 bg-slate-50 border border-slate-200 rounded text-xs font-semibold text-ustp-blue">
             <FileText className="w-3.5 h-3.5 shrink-0" />
             <span className="font-mono">
-              {announcement.attachment_name || 'Official_USTP_Attachment.pdf'}
+              {announcement.attachment_name ||
+                (isCampusWideMemo
+                  ? 'Official_USTP_Attachment.pdf'
+                  : 'Course_Hub_Attachment.pdf')}
             </span>
           </div>
         )}
@@ -254,7 +294,7 @@ export function AnnouncementCard({
   return (
     <article className="bg-white border border-slate-200/90 rounded-lg p-5 shadow-xs hover:shadow-md transition-shadow flex flex-col justify-between">
       <div>
-        {/* Top Row: Title + Department Subtitle on Left, Timestamp + Faculty Actions on Right */}
+        {/* Top Row: Title + Department/Course Hub Subtitle on Left, Timestamp + Faculty Actions on Right */}
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="flex items-center gap-1.5 flex-wrap">
@@ -309,26 +349,26 @@ export function AnnouncementCard({
           </div>
         </div>
 
-        {/* Colored Tag Pills Row matching Wireframe (Campus-Wide Memos Only) */}
-        {isCampusWideMemo && announcement.tags.length > 0 && (
+        {/* Colored Tag Pills Row differentiating Campus-Wide Memos vs Course Hub Announcements */}
+        {displayTags.length > 0 && (
           <div className="flex flex-wrap items-center gap-1.5 mt-2.5">
-            {announcement.tags.map((tag) => (
+            {displayTags.map((tag) => (
               <TagBadge key={tag} tag={tag} size="xs" />
             ))}
           </div>
         )}
 
-        {/* 2-Column Body matching Wireframes Pages 2, 5, 6: Left photo/memo box, Right text excerpt */}
+        {/* 2-Column Body matching Wireframes Pages 2, 5, 6: Left photo/notice box, Right text excerpt */}
         <div className="grid grid-cols-12 gap-4 mt-3.5 items-stretch">
           <div className="col-span-5 bg-slate-100 border border-slate-200 rounded-md p-3 flex flex-col items-center justify-center text-center min-h-[116px] overflow-hidden">
-            <div className="w-9 h-9 rounded bg-ustp-navy text-ustp-gold flex items-center justify-center font-extrabold text-xs mb-1.5 shrink-0">
-              {announcement.publisher.department}
+            <div className="px-2 h-9 min-w-[36px] rounded bg-ustp-navy text-ustp-gold flex items-center justify-center font-extrabold text-xs mb-1.5 shrink-0">
+              {badgeBoxCode}
             </div>
             <p
-              title={announcement.attachment_name || 'USTP Official Memo'}
+              title={announcement.attachment_name || defaultAttachmentLabel}
               className="text-[11px] font-bold text-ustp-text w-full truncate px-1"
             >
-              {announcement.attachment_name || 'USTP Official Memo'}
+              {announcement.attachment_name || defaultAttachmentLabel}
             </p>
             <span className="text-[10px] font-mono text-slate-500 mt-0.5 tabular-nums w-full truncate">
               By {announcement.publisher.name}
