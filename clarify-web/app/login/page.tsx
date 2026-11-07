@@ -128,13 +128,15 @@ export default function LoginPage() {
       <div className="w-full lg:w-[30%] bg-ustp-orange text-ustp-text p-8 sm:p-10 flex flex-col items-center justify-center border-l border-amber-700/30">
         <div className="w-full max-w-xs space-y-6">
           <div className="flex flex-col items-center">
-            <div className="w-20 h-20 rounded-full bg-ustp-navy border-4 border-ustp-gold flex flex-col items-center justify-center shadow-md">
-              <span className="text-2xl font-extrabold text-ustp-gold tracking-tight">
-                C
-              </span>
-              <span className="text-[10px] font-bold text-white uppercase tracking-widest">
-                USTP
-              </span>
+            <div className="w-20 h-20 rounded-full bg-[#000b3d] border-4 border-ustp-gold flex items-center justify-center shadow-md overflow-hidden p-2.5">
+              <Image
+                src="/assets/aistudio/image_87b1a0fe.png"
+                alt="ClariFy Logo"
+                width={64}
+                height={64}
+                unoptimized
+                className="w-full h-full object-contain"
+              />
             </div>
             <h2 className="mt-4 text-lg font-extrabold text-ustp-navy">
               Institutional Sign In

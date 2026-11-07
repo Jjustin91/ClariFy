@@ -253,7 +253,7 @@ export function ChannelRosterModal() {
         name: formattedHubName,
         description:
           description.trim() ||
-          `${scopeSection} Scoped Course Hub with built-in Noticeboard Feed, Isolated Q&A Threads, and #general chat.`,
+          `${scopeSection} Scoped Course Hub with built-in Noticeboard Feed and Isolated Q&A Threads.`,
         channel_type: 'course_hub',
         scope_college: scopeDepartment,
         scope_department: scopeDepartment,
@@ -261,7 +261,7 @@ export function ChannelRosterModal() {
       });
       await refreshChannels();
       showToast(
-        'Course Hub created with Noticeboard Feed, Q&A Threads, and #general!',
+        'Course Hub created with Noticeboard Feed and Isolated Q&A Threads!',
         'success'
       );
       setCourseCode('');
@@ -269,7 +269,7 @@ export function ChannelRosterModal() {
       setDescription('');
       setIsChannelModalOpen(false);
       if (res.data?.id) {
-        router.push(`/channels/${res.data.id}`);
+        router.push(`/channels/${res.data.id}?tab=feed`);
       }
     } catch (err) {
       const apiErr = err as LaravelValidationError;
@@ -303,7 +303,7 @@ export function ChannelRosterModal() {
         name: formattedHubName,
         description:
           description.trim() ||
-          `${scopeSection} Scoped Course Hub with built-in Noticeboard Feed, Isolated Q&A Threads, and #general chat.`,
+          `${scopeSection} Scoped Course Hub with built-in Noticeboard Feed and Isolated Q&A Threads.`,
         scope_college: scopeDepartment,
         scope_department: scopeDepartment,
         scope_section: scopeSection,
@@ -463,17 +463,13 @@ export function ChannelRosterModal() {
                     Every new Course Hub automatically includes{' '}
                     <span className="font-bold text-ustp-navy">
                       Noticeboard Feed
-                    </span>
-                    ,{' '}
+                    </span>{' '}
+                    and{' '}
                     <span className="font-bold text-ustp-navy">
                       Isolated Q&amp;A Threads
                     </span>
-                    , and a default{' '}
-                    <span className="font-mono font-bold text-ustp-navy">
-                      # general
-                    </span>{' '}
-                    chat channel. You can then add custom sub-channels inside the
-                    Course Hub anytime.
+                    . You can add custom chat channels inside the Course Hub
+                    anytime using <span className="font-bold">+ Add Channel</span>.
                   </p>
                 </div>
               )}

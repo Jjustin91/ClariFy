@@ -128,7 +128,7 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
   >('create_hub');
   const [activeHubTab, setActiveHubTab] = useState<
     'messenger' | 'feed' | 'threads' | 'send_inquiry'
-  >('messenger');
+  >('feed');
 
   const openCourseHubModal = useCallback(
     (defaultTab: 'browse' | 'create_hub' = 'create_hub') => {

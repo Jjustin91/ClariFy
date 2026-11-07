@@ -187,8 +187,8 @@ export default function DashboardPage() {
               </p>
               <p className="text-xs text-slate-500 max-w-md mx-auto">
                 Browse existing Course Hubs to join your classes or create a new
-                Course Hub with built-in Noticeboard Feed, Isolated Q&amp;A
-                Threads, and #general chat.
+                Course Hub with built-in Noticeboard Feed and Isolated Q&amp;A
+                Threads.
               </p>
               <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
                 <button

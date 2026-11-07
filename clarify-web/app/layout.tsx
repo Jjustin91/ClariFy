@@ -5,6 +5,11 @@ import { ClarifyProvider } from "@/src/context/ClarifyContext";
 export const metadata: Metadata = {
   title: "ClariFy",
   description: "Official Academic Communication Hub & Broadcast Portal",
+  icons: {
+    icon: "/assets/aistudio/image_87b1a0fe.png",
+    shortcut: "/assets/aistudio/image_87b1a0fe.png",
+    apple: "/assets/aistudio/image_87b1a0fe.png",
+  },
 };
 
 export default function RootLayout({
@@ -15,6 +20,11 @@ export default function RootLayout({
   return (
     <html lang="en">
       <head>
+        <link
+          rel="icon"
+          href="/assets/aistudio/image_87b1a0fe.png"
+          type="image/png"
+        />
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link
           rel="preconnect"
