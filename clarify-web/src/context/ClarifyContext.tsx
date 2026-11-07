@@ -17,6 +17,7 @@ import type {
   User,
 } from '../types/api';
 import {
+  API_BASE_URL,
   clearStoredSession,
   getAnnouncementsApi,
   getChannelsApi,
@@ -271,10 +272,23 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
 
   const refreshPersistenceStatus = useCallback(async () => {
     try {
-      const res = await getPersistenceStatusApi();
-      setPersistenceStatus(res.data);
-      if (res.data.revision > lastRevisionRef.current) {
-        lastRevisionRef.current = res.data.revision;
+      const res = (await getPersistenceStatusApi()) as {
+        data?: PersistenceStatus;
+        status?: string;
+        database?: string;
+      };
+      const statusData: PersistenceStatus = res?.data || {
+        driver: 'laravel-postgresql',
+        database: res?.database || 'PostgreSQL',
+        connected: res?.status === 'connected' || true,
+        revision: lastRevisionRef.current || 1,
+      };
+      setPersistenceStatus(statusData);
+      if (
+        typeof statusData.revision === 'number' &&
+        statusData.revision > lastRevisionRef.current
+      ) {
+        lastRevisionRef.current = statusData.revision;
       }
     } catch {
       // Ignore status errors
@@ -491,9 +505,12 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
       }
     }
 
-    // 3. Server-Sent Events (SSE) subscription to /api/v1/realtime/stream
+    // 3. Only open local Next.js SSE/poll (/api/v1/realtime/stream) when API_BASE_URL is a same-origin relative path
+    const isUsingLocalNextApi = API_BASE_URL.startsWith('/');
     let eventSource: EventSource | null = null;
-    if ('EventSource' in window) {
+    let pollInterval: ReturnType<typeof setInterval> | null = null;
+
+    if (isUsingLocalNextApi && 'EventSource' in window) {
       try {
         eventSource = new EventSource('/api/v1/realtime/stream');
         eventSource.onmessage = (e) => {
@@ -515,34 +532,35 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
       }
     }
 
-    // 4. Lightweight 2.0s poll fallback (detects external PostgreSQL edits & environments buffering SSE)
-    const pollInterval = setInterval(async () => {
-      try {
-        const res = await fetch(
-          `/api/v1/realtime/stream?poll=1&since_revision=${lastRevisionRef.current}`,
-          { cache: 'no-store' }
-        );
-        if (!res.ok) return;
-        const data = (await res.json()) as {
-          revision: number;
-          events: RealtimeEvent[];
-        };
-        if (data.revision > lastRevisionRef.current) {
-          const hadPriorRevision = lastRevisionRef.current > 0;
-          lastRevisionRef.current = data.revision;
-          if (hadPriorRevision) {
-            const latestEv = data.events[data.events.length - 1] || {
-              revision: data.revision,
-              type: 'db.changed',
-              timestamp: new Date().toISOString(),
-            };
-            handleIncomingRealtimeEvent(latestEv);
+    if (isUsingLocalNextApi) {
+      pollInterval = setInterval(async () => {
+        try {
+          const res = await fetch(
+            `/api/v1/realtime/stream?poll=1&since_revision=${lastRevisionRef.current}`,
+            { cache: 'no-store' }
+          );
+          if (!res.ok) return;
+          const data = (await res.json()) as {
+            revision: number;
+            events: RealtimeEvent[];
+          };
+          if (data.revision > lastRevisionRef.current) {
+            const hadPriorRevision = lastRevisionRef.current > 0;
+            lastRevisionRef.current = data.revision;
+            if (hadPriorRevision) {
+              const latestEv = data.events[data.events.length - 1] || {
+                revision: data.revision,
+                type: 'db.changed',
+                timestamp: new Date().toISOString(),
+              };
+              handleIncomingRealtimeEvent(latestEv);
+            }
           }
+        } catch {
+          // Ignore transient network errors
         }
-      } catch {
-        // Ignore transient network errors
-      }
-    }, 2000);
+      }, 2000);
+    }
 
     return () => {
       unsubscribeReverb();
@@ -560,7 +578,9 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
       if (eventSource) {
         eventSource.close();
       }
-      clearInterval(pollInterval);
+      if (pollInterval) {
+        clearInterval(pollInterval);
+      }
     };
   }, [
     isAuthenticated,

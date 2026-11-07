@@ -142,11 +142,12 @@ export default function RegisterPage() {
                 status.
               </li>
               <li>
-                Sign in as the seeded{' '}
+                An{' '}
                 <span className="font-bold text-ustp-navy">
-                  IT Administrator (ID: 90001)
+                  IT Administrator
                 </span>{' '}
-                to approve the pending registration in the Admin Console.
+                reviews and approves your pending registration in the Admin
+                Console before you can sign in.
               </li>
             </ol>
           </div>

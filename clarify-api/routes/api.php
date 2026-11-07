@@ -22,8 +22,15 @@ Route::prefix('v1')->group(function () {
     Route::get('/persistence/status', function () {
         return response()->json([
             'status' => 'connected',
-            'database' => 'PostgreSQL (Supabase)',
+            'database' => config('database.connections.pgsql.database', 'PostgreSQL'),
             'timestamp' => now()->toISOString(),
+            'data' => [
+                'driver' => 'laravel-postgresql',
+                'database' => config('database.connections.pgsql.database', 'clarify'),
+                'host' => config('database.connections.pgsql.host', '127.0.0.1'),
+                'connected' => true,
+                'revision' => now()->timestamp,
+            ],
         ]);
     });
 

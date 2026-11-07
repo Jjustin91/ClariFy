@@ -1,7 +1,0 @@
-vendor/
-node_modules/
-.env
-.git
-storage/*.key
-.phpunit.cache
-bootstrap/cache/*.php

@@ -15,11 +15,13 @@ return [
     'allowed_origins' => [
         'http://localhost:3000',
         'http://127.0.0.1:3000',
-        rtrim(env('FRONTEND_URL', 'https://clarify-web.vercel.app'), '/'),
+        'https://ustpclarify.tech',
+        'https://www.ustpclarify.tech',
+        rtrim(env('FRONTEND_URL', 'https://ustpclarify.tech'), '/'),
     ],
 
     'allowed_origins_patterns' => [
-        '#^https://.*\.vercel\.app$#',
+        '#^https?://([a-z0-9-]+\.)?ustpclarify\.tech(:\d+)?$#',
         '#^https?://localhost(:\d+)?$#',
     ],
 

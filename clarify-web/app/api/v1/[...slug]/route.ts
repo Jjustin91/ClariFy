@@ -147,11 +147,16 @@ async function tryProxyToLaravel(
   headers: Record<string, string | undefined>,
   body: Record<string, unknown>
 ): Promise<{ status: number; body: Record<string, unknown> } | null> {
-  const laravelBase = process.env.LARAVEL_BACKEND_URL?.trim();
+  const rawBase =
+    process.env.LARAVEL_BACKEND_URL?.trim() ||
+    process.env.NEXT_PUBLIC_API_URL?.trim() ||
+    process.env.NEXT_PUBLIC_API_BASE_URL?.trim() ||
+    'https://api.ustpclarify.tech';
+  const laravelBase = rawBase.replace(/\/api\/v1\/?$/, '').replace(/\/+$/, '');
   if (!laravelBase) return null;
 
   const qs = searchParams.toString();
-  const targetUrl = `${laravelBase.replace(/\/$/, '')}/api/v1${apiPath}${
+  const targetUrl = `${laravelBase}/api/v1${apiPath}${
     qs ? `?${qs}` : ''
   }`;
 

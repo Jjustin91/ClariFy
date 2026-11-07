@@ -7,7 +7,6 @@ import { useRouter } from 'next/navigation';
 import {
   AlertCircle,
   ShieldAlert,
-  UserCheck,
   UserPlus,
 } from 'lucide-react';
 import { loginApi } from '@/src/lib/api-client';
@@ -19,8 +18,8 @@ export default function LoginPage() {
   const router = useRouter();
   const { setUser, showToast } = useClarify();
 
-  const [institutionalId, setInstitutionalId] = useState('90001');
-  const [password, setPassword] = useState('ustp2026');
+  const [institutionalId, setInstitutionalId] = useState('');
+  const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string[]>>({});
   const [pendingNotice, setPendingNotice] = useState<string | null>(null);
@@ -77,14 +76,6 @@ export default function LoginPage() {
     await authenticateWithCredentials(institutionalId, password);
   };
 
-  const fillDemoAccount = (id: string, pass: string) => {
-    setInstitutionalId(id);
-    setPassword(pass);
-    setFieldErrors({});
-    setPendingNotice(null);
-    setGeneralError(null);
-  };
-
   const idError = getFieldValidationError(fieldErrors, 'institutional_id');
   const passwordError = getFieldValidationError(fieldErrors, 'password');
 
@@ -110,36 +101,9 @@ export default function LoginPage() {
             University of Science and Technology of Southern Philippines — Cagayan de Oro Campus (IT314 Software Engineering • IT3R2 Group 5)
           </p>
 
-          {/* Seeded IT Admin Quick-Fill & Student/Faculty Registration Link */}
-          <div className="mt-8 pt-6 border-t border-slate-300 text-left space-y-4">
-            <div>
-              <p className="text-xs font-extrabold uppercase tracking-wider text-slate-600 mb-2 flex items-center gap-1.5">
-                <UserCheck className="w-4 h-4 text-ustp-navy" />
-                Seeded System Administrator Account
-              </p>
-              <button
-                type="button"
-                onClick={() => {
-                  fillDemoAccount('90001', 'ustp2026');
-                  void authenticateWithCredentials('90001', 'ustp2026');
-                }}
-                className="w-full px-4 py-3 text-left text-xs bg-white hover:bg-amber-50 border border-slate-300 rounded flex items-center justify-between cursor-pointer"
-              >
-                <div>
-                  <span className="block font-extrabold text-ustp-navy">
-                    IT Admin Domain (Pre-Seeded)
-                  </span>
-                  <span className="text-[11px] text-slate-600">
-                    Engr. Makima Cruz (ICTO Registrar &amp; Admin Console)
-                  </span>
-                </div>
-                <span className="font-mono text-slate-700 tabular-nums font-bold">
-                  ID: 90001
-                </span>
-              </button>
-            </div>
-
-            <div className="pt-2 border-t border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          {/* Student/Faculty Registration Link */}
+          <div className="mt-8 pt-6 border-t border-slate-300 text-left">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
                 <p className="text-xs font-extrabold text-ustp-navy">
                   Student or Faculty Member?
@@ -214,7 +178,7 @@ export default function LoginPage() {
                 type="text"
                 value={institutionalId}
                 onChange={(e) => setInstitutionalId(e.target.value)}
-                placeholder="ID Number e.g., 90001"
+                placeholder="Institutional ID Number"
                 className="w-full px-3.5 py-2.5 text-sm font-mono tabular-nums bg-white text-ustp-text placeholder:text-slate-400 border-2 border-white focus:border-ustp-navy rounded focus:outline-none"
               />
               {idError && (
