@@ -204,4 +204,221 @@ class ChannelAuthorizationTest extends TestCase
             'content' => 'Lab quiz on Friday.',
         ])->assertStatus(201);
     }
+
+    public function test_approve_pending_request_and_student_sees_hub_as_joined_in_get_channels(): void
+    {
+        $admin = $this->createVerifiedUser('faculty', '10492', 'CITC');
+        $student = $this->createVerifiedUser('student', '2020555555', 'CITC');
+        $hub = $this->createCourseHub($admin, 'CITC');
+
+        DB::table('channel_user')->insert([
+            'channel_id' => $hub->id,
+            'user_id' => $admin->id,
+            'can_publish' => true,
+            'approval_status' => 'approved',
+            'joined_at' => now(),
+        ]);
+
+        // Student submits join request
+        Sanctum::actingAs($student);
+        $this->postJson("/api/v1/channels/{$hub->id}/join")
+            ->assertStatus(200);
+
+        // Before approval, student sees themselves in pending_requests, not roster
+        $beforeChannels = $this->getJson('/api/v1/channels')
+            ->assertStatus(200)
+            ->json('data');
+        $hubBefore = collect($beforeChannels)->firstWhere('id', $hub->id);
+        $this->assertNotNull($hubBefore);
+        $this->assertEmpty($hubBefore['roster']);
+        $this->assertCount(1, $hubBefore['pending_requests']);
+        $this->assertSame($student->institutional_id, $hubBefore['pending_requests'][0]['institutional_id']);
+
+        // Course Admin approves the pending join request
+        Sanctum::actingAs($admin);
+        $approveResponse = $this->postJson("/api/v1/channels/{$hub->id}/members", [
+            'institutional_id' => $student->institutional_id,
+            'action' => 'approve',
+        ])->assertStatus(200);
+
+        $this->assertEmpty($approveResponse->json('data.pending_requests'));
+        $rosterIds = collect($approveResponse->json('data.roster'))->pluck('institutional_id')->all();
+        $this->assertContains($student->institutional_id, $rosterIds);
+
+        // Student immediately sees the Course Hub as joined in GET /channels
+        Sanctum::actingAs($student);
+        $afterChannels = $this->getJson('/api/v1/channels')
+            ->assertStatus(200)
+            ->json('data');
+        $hubAfter = collect($afterChannels)->firstWhere('id', $hub->id);
+        $this->assertNotNull($hubAfter);
+        $this->assertEmpty($hubAfter['pending_requests']);
+        $this->assertCount(1, $hubAfter['roster']);
+        $this->assertSame($student->institutional_id, $hubAfter['roster'][0]['institutional_id']);
+    }
+
+    public function test_approve_again_returns_409_with_fresh_channel_resource(): void
+    {
+        $adminA = $this->createVerifiedUser('faculty', '10492', 'CITC');
+        $adminB = $this->createVerifiedUser('dept_head', '10400', 'CITC');
+        $student = $this->createVerifiedUser('student', '2020666666', 'CITC');
+        $hub = $this->createCourseHub($adminA, 'CITC');
+
+        DB::table('channel_user')->insert([
+            'channel_id' => $hub->id,
+            'user_id' => $student->id,
+            'can_publish' => false,
+            'approval_status' => 'pending',
+            'joined_at' => now(),
+        ]);
+
+        // Admin A approves first -> 200 OK
+        Sanctum::actingAs($adminA);
+        $this->postJson("/api/v1/channels/{$hub->id}/members", [
+            'institutional_id' => $student->institutional_id,
+            'action' => 'approve',
+        ])->assertStatus(200);
+
+        // Admin B approves the already-approved request -> 409 Conflict with fresh ChannelResource
+        Sanctum::actingAs($adminB);
+        $conflictResponse = $this->postJson("/api/v1/channels/{$hub->id}/members", [
+            'institutional_id' => $student->institutional_id,
+            'action' => 'approve',
+        ])->assertStatus(409)
+          ->assertJsonPath('status', 409)
+          ->assertJsonPath('message', 'This request was already approved/declined by another Course Admin.');
+
+        $this->assertEmpty($conflictResponse->json('data.pending_requests'));
+        $rosterIds = collect($conflictResponse->json('data.roster'))->pluck('institutional_id')->all();
+        $this->assertContains($student->institutional_id, $rosterIds);
+    }
+
+    public function test_reject_after_approve_returns_409_and_member_stays_approved(): void
+    {
+        $adminA = $this->createVerifiedUser('faculty', '10492', 'CITC');
+        $adminB = $this->createVerifiedUser('dept_head', '10400', 'CITC');
+        $student = $this->createVerifiedUser('student', '2020777777', 'CITC');
+        $hub = $this->createCourseHub($adminA, 'CITC');
+
+        DB::table('channel_user')->insert([
+            'channel_id' => $hub->id,
+            'user_id' => $student->id,
+            'can_publish' => false,
+            'approval_status' => 'pending',
+            'joined_at' => now(),
+        ]);
+
+        // Admin A approves
+        Sanctum::actingAs($adminA);
+        $this->postJson("/api/v1/channels/{$hub->id}/members", [
+            'institutional_id' => $student->institutional_id,
+            'action' => 'approve',
+        ])->assertStatus(200);
+
+        // Admin B clicks Decline on stale UI -> 409 Conflict and student stays approved
+        Sanctum::actingAs($adminB);
+        $conflictResponse = $this->postJson("/api/v1/channels/{$hub->id}/members", [
+            'institutional_id' => $student->institutional_id,
+            'action' => 'reject',
+        ])->assertStatus(409)
+          ->assertJsonPath('status', 409)
+          ->assertJsonPath('message', 'This request was already approved/declined by another Course Admin.');
+
+        $pivotRow = DB::table('channel_user')
+            ->where('channel_id', $hub->id)
+            ->where('user_id', $student->id)
+            ->first();
+        $this->assertNotNull($pivotRow);
+        $this->assertSame('approved', $pivotRow->approval_status);
+
+        $rosterIds = collect($conflictResponse->json('data.roster'))->pluck('institutional_id')->all();
+        $this->assertContains($student->institutional_id, $rosterIds);
+    }
+
+    public function test_non_admin_gets_403_when_approving_or_rejecting_join_requests(): void
+    {
+        $admin = $this->createVerifiedUser('faculty', '10492', 'CITC');
+        $approvedStudent = $this->createVerifiedUser('student', '2020111111', 'CITC');
+        $pendingStudent = $this->createVerifiedUser('student', '2020222222', 'CITC');
+        $hub = $this->createCourseHub($admin, 'CITC');
+
+        DB::table('channel_user')->insert([
+            [
+                'channel_id' => $hub->id,
+                'user_id' => $approvedStudent->id,
+                'can_publish' => false,
+                'approval_status' => 'approved',
+                'joined_at' => now(),
+            ],
+            [
+                'channel_id' => $hub->id,
+                'user_id' => $pendingStudent->id,
+                'can_publish' => false,
+                'approval_status' => 'pending',
+                'joined_at' => now(),
+            ],
+        ]);
+
+        Sanctum::actingAs($approvedStudent);
+
+        $this->postJson("/api/v1/channels/{$hub->id}/members", [
+            'institutional_id' => $pendingStudent->institutional_id,
+            'action' => 'approve',
+        ])->assertStatus(403);
+
+        $this->postJson("/api/v1/channels/{$hub->id}/members", [
+            'institutional_id' => $pendingStudent->institutional_id,
+            'action' => 'reject',
+        ])->assertStatus(403);
+    }
+
+    public function test_pending_requests_are_hidden_from_non_admins_in_roster_endpoint(): void
+    {
+        $admin = $this->createVerifiedUser('faculty', '10492', 'CITC');
+        $approvedStudent = $this->createVerifiedUser('student', '2020111111', 'CITC');
+        $pendingStudent = $this->createVerifiedUser('student', '2020222222', 'CITC');
+        $hub = $this->createCourseHub($admin, 'CITC');
+
+        DB::table('channel_user')->insert([
+            [
+                'channel_id' => $hub->id,
+                'user_id' => $admin->id,
+                'can_publish' => true,
+                'approval_status' => 'approved',
+                'joined_at' => now(),
+            ],
+            [
+                'channel_id' => $hub->id,
+                'user_id' => $approvedStudent->id,
+                'can_publish' => false,
+                'approval_status' => 'approved',
+                'joined_at' => now(),
+            ],
+            [
+                'channel_id' => $hub->id,
+                'user_id' => $pendingStudent->id,
+                'can_publish' => false,
+                'approval_status' => 'pending',
+                'joined_at' => now(),
+            ],
+        ]);
+
+        // Course Admin receives both roster and pending_requests
+        Sanctum::actingAs($admin);
+        $adminRosterRes = $this->getJson("/api/v1/channels/{$hub->id}/roster")
+            ->assertStatus(200);
+        $this->assertCount(2, $adminRosterRes->json('data.roster'));
+        $this->assertCount(1, $adminRosterRes->json('data.pending_requests'));
+        $this->assertSame(
+            $pendingStudent->institutional_id,
+            $adminRosterRes->json('data.pending_requests.0.institutional_id')
+        );
+
+        // Non-admin approved student receives roster, but pending_requests is empty
+        Sanctum::actingAs($approvedStudent);
+        $studentRosterRes = $this->getJson("/api/v1/channels/{$hub->id}/roster")
+            ->assertStatus(200);
+        $this->assertCount(2, $studentRosterRes->json('data.roster'));
+        $this->assertSame([], $studentRosterRes->json('data.pending_requests'));
+    }
 }

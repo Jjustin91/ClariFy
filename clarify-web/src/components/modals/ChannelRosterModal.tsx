@@ -793,9 +793,11 @@ export function ChannelRosterModal() {
               ) : (
                 filteredBrowseHubs.map((hub) => {
                   const enrolledCount =
-                    hub.roster !== undefined
+                    hub.members_count !== undefined
+                      ? hub.members_count
+                      : hub.roster !== undefined
                       ? hub.roster.length
-                      : hub.members_count ?? 0;
+                      : 0;
                   const hubSubChannels = getSubChannelsForHub(channels, hub.id);
                   const isJoined = isUserEnrolledInCourseHub(hub, user);
                   const isPending = isUserPendingInCourseHub(hub, user);

@@ -224,9 +224,12 @@ export interface RealtimeEvent {
     | 'thread.faq_pinned'
     | 'channel.created'
     | 'channel.updated'
+    | 'membership.changed'
     | 'admin.updated'
     | 'db.changed';
   channel_id?: number;
+  target_user_id?: number;
+  action?: 'requested' | 'approved' | 'rejected' | 'removed' | 'added';
   actor_id?: number;
   announcement?: Announcement;
   message?: ChatMessage;
@@ -246,5 +249,6 @@ export interface LaravelValidationError {
   status: number;
   message: string;
   errors?: Record<string, string[]>;
+  data?: unknown;
 }
 

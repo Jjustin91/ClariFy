@@ -220,6 +220,7 @@ async function requestLaravel<T>(
           ? 'Access Denied: You do not have permission for this action.'
           : 'An unexpected server error occurred.'),
       errors: json.errors,
+      data: json.data,
     };
     throw err;
   }
@@ -230,10 +231,19 @@ async function requestLaravel<T>(
     method !== 'HEAD' &&
     typeof window !== 'undefined'
   ) {
+    let parsedBody: Record<string, unknown> | undefined;
+    if (typeof options.body === 'string') {
+      try {
+        parsedBody = JSON.parse(options.body) as Record<string, unknown>;
+      } catch {
+        parsedBody = undefined;
+      }
+    }
     const mutationPayload = {
       type: 'mutation',
       endpoint,
       data: json?.data,
+      requestBody: parsedBody,
       timestamp: Date.now(),
     };
     try {

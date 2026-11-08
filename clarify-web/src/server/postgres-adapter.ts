@@ -1921,9 +1921,23 @@ export async function handlePostgresApiRequest(
           body: { status: 404, message: 'Channel not found.' },
         };
       }
+      const isCourseAdmin =
+        activeUser.role === 'faculty' ||
+        activeUser.role === 'dept_head' ||
+        (found.created_by !== null &&
+          found.created_by !== undefined &&
+          Number(found.created_by) === Number(activeUser.id));
+
       return {
         status: 200,
-        body: { data: found },
+        body: {
+          data: {
+            ...found,
+            pending_requests: isCourseAdmin
+              ? found.pending_requests || []
+              : [],
+          },
+        },
       };
     }
 
@@ -1999,6 +2013,7 @@ export async function handlePostgresApiRequest(
           message: isNowApproved
             ? `Joined ${updated.name} successfully.`
             : `Join request sent for ${updated.name}! Waiting for Course Admin approval.`,
+          target_user_id: activeUser.id,
           data: updated,
         },
       };
@@ -2083,82 +2098,142 @@ export async function handlePostgresApiRequest(
         | 'approve'
         | 'reject';
 
-      if (action === 'add') {
-        if (!institutionalId) {
-          return {
+      if (!institutionalId) {
+        return {
+          status: 422,
+          body: {
             status: 422,
+            message: 'Institutional ID is required.',
+            errors: {
+              institutional_id: [
+                'Please enter a valid student or faculty Institutional ID.',
+              ],
+            },
+          },
+        };
+      }
+
+      const targetUserRes = await pool.query(
+        'SELECT id, role FROM users WHERE institutional_id = $1 LIMIT 1',
+        [institutionalId]
+      );
+      let targetUserId: number;
+      let targetCanPublish = false;
+
+      if (!targetUserRes.rowCount || targetUserRes.rowCount === 0) {
+        if (action !== 'add') {
+          const allChannels = await fetchChannelsFromPg(pool);
+          const fresh =
+            allChannels.find((c) => c.id === channelId) || allChannels[0];
+          return {
+            status: 409,
             body: {
-              status: 422,
-              message: 'Institutional ID is required.',
-              errors: {
-                institutional_id: [
-                  'Please enter a valid student or faculty Institutional ID.',
-                ],
-              },
+              status: 409,
+              message:
+                'This request was already approved/declined by another Course Admin.',
+              data: fresh,
             },
           };
         }
-
-        const targetUserRes = await pool.query(
-          'SELECT id, role FROM users WHERE institutional_id = $1 LIMIT 1',
-          [institutionalId]
+        const displayName =
+          String(body.name || '').trim() ||
+          `USTP Student (${institutionalId})`;
+        const insU = await pool.query(
+          `INSERT INTO users (institutional_id, name, email, password, role, verification_status, verified_at)
+           VALUES ($1, $2, $3, 'ustp2026', 'student', 'approved', CURRENT_TIMESTAMP)
+           RETURNING id`,
+          [
+            institutionalId,
+            displayName,
+            `student.${institutionalId}@ustp.edu.ph`,
+          ]
         );
-        let targetUserId: number;
-        let targetCanPublish = false;
-
-        if (!targetUserRes.rowCount || targetUserRes.rowCount === 0) {
-          const displayName =
-            String(body.name || '').trim() ||
-            `USTP Student (${institutionalId})`;
-          const insU = await pool.query(
-            `INSERT INTO users (institutional_id, name, email, password, role, verification_status, verified_at)
-             VALUES ($1, $2, $3, 'ustp2026', 'student', 'approved', CURRENT_TIMESTAMP)
-             RETURNING id`,
-            [
-              institutionalId,
-              displayName,
-              `student.${institutionalId}@ustp.edu.ph`,
-            ]
-          );
-          targetUserId = Number(insU.rows[0].id);
-          await pool.query(
-            `INSERT INTO academic_profiles (user_id, campus, college, department, section, semester_code)
-             VALUES ($1, 'CDO Campus', 'CITC', 'CITC', $2, '2026-1ST-SEM')
-             ON CONFLICT (user_id) DO NOTHING`,
-            [targetUserId, String(body.section || 'IT3R2')]
-          );
-        } else {
-          targetUserId = Number(targetUserRes.rows[0].id);
-          const roleStr = String(targetUserRes.rows[0].role || 'student');
-          targetCanPublish = roleStr === 'faculty' || roleStr === 'dept_head';
-        }
-
+        targetUserId = Number(insU.rows[0].id);
         await pool.query(
-          `INSERT INTO channel_user (channel_id, user_id, can_publish, approval_status)
-           VALUES ($1, $2, $3, 'approved')
-           ON CONFLICT (channel_id, user_id) DO UPDATE SET approval_status = 'approved'`,
-          [channelId, targetUserId, targetCanPublish]
-        );
-      } else if (action === 'approve') {
-        await pool.query(
-          `UPDATE channel_user
-           SET approval_status = 'approved', joined_at = CURRENT_TIMESTAMP
-           WHERE channel_id = $1
-             AND user_id IN (SELECT id FROM users WHERE institutional_id = $2)`,
-          [channelId, institutionalId]
+          `INSERT INTO academic_profiles (user_id, campus, college, department, section, semester_code)
+           VALUES ($1, 'CDO Campus', 'CITC', 'CITC', $2, '2026-1ST-SEM')
+           ON CONFLICT (user_id) DO NOTHING`,
+          [targetUserId, String(body.section || 'IT3R2')]
         );
       } else {
-        await pool.query(
-          `DELETE FROM channel_user
-           WHERE channel_id = $1
-             AND user_id IN (SELECT id FROM users WHERE institutional_id = $2)`,
-          [channelId, institutionalId]
+        targetUserId = Number(targetUserRes.rows[0].id);
+        const roleStr = String(targetUserRes.rows[0].role || 'student');
+        targetCanPublish = roleStr === 'faculty' || roleStr === 'dept_head';
+      }
+
+      const client = await pool.connect();
+      let isConflict = false;
+      try {
+        await client.query('BEGIN');
+        const pivotRes = await client.query(
+          `SELECT approval_status
+           FROM channel_user
+           WHERE channel_id = $1 AND user_id = $2
+           FOR UPDATE`,
+          [channelId, targetUserId]
         );
+
+        if (action === 'add') {
+          await client.query(
+            `INSERT INTO channel_user (channel_id, user_id, can_publish, approval_status)
+             VALUES ($1, $2, $3, 'approved')
+             ON CONFLICT (channel_id, user_id) DO UPDATE SET approval_status = 'approved'`,
+            [channelId, targetUserId, targetCanPublish]
+          );
+        } else if (action === 'approve' || action === 'reject') {
+          const currentStatus =
+            pivotRes.rowCount && pivotRes.rowCount > 0
+              ? String(pivotRes.rows[0].approval_status || 'approved')
+              : null;
+          if (currentStatus !== 'pending') {
+            isConflict = true;
+          } else if (action === 'approve') {
+            await client.query(
+              `UPDATE channel_user
+               SET approval_status = 'approved', joined_at = CURRENT_TIMESTAMP
+               WHERE channel_id = $1 AND user_id = $2 AND approval_status = 'pending'`,
+              [channelId, targetUserId]
+            );
+          } else {
+            // Never detach an approved member through 'reject'
+            await client.query(
+              `DELETE FROM channel_user
+               WHERE channel_id = $1 AND user_id = $2 AND approval_status = 'pending'`,
+              [channelId, targetUserId]
+            );
+          }
+        } else {
+          // action === 'remove'
+          await client.query(
+            `DELETE FROM channel_user
+             WHERE channel_id = $1 AND user_id = $2`,
+            [channelId, targetUserId]
+          );
+        }
+
+        await client.query('COMMIT');
+      } catch (txErr) {
+        await client.query('ROLLBACK');
+        throw txErr;
+      } finally {
+        client.release();
       }
 
       const allChannels = await fetchChannelsFromPg(pool);
       const updated =
         allChannels.find((c) => c.id === channelId) || allChannels[0];
+
+      if (isConflict) {
+        return {
+          status: 409,
+          body: {
+            status: 409,
+            message:
+              'This request was already approved/declined by another Course Admin.',
+            data: updated,
+          },
+        };
+      }
 
       const actionMessages: Record<string, string> = {
         add: 'Member added to channel roster.',
@@ -2171,6 +2246,7 @@ export async function handlePostgresApiRequest(
         status: 200,
         body: {
           message: actionMessages[action] || 'Roster updated.',
+          target_user_id: targetUserId,
           data: updated,
         },
       };

@@ -9,6 +9,7 @@ class ApiCache
     public const ANNOUNCEMENTS_TTL_SECONDS = 600; // 10 minutes
     public const CHANNELS_TTL_SECONDS = 600;      // 10 minutes
     public const INSTRUCTORS_TTL_SECONDS = 1800;  // 30 minutes
+    public const VERSION_TTL_SECONDS = 604800;    // 7 days (volatile-lru safe)
 
     /**
      * Reads the current generation counter for a namespace (initializes to 1 if absent).
@@ -18,7 +19,7 @@ class ApiCache
         $versionKey = "ver:{$namespace}";
         $ver = Cache::get($versionKey);
         if (! is_numeric($ver) || (int) $ver < 1) {
-            Cache::forever($versionKey, 1);
+            Cache::put($versionKey, 1, self::VERSION_TTL_SECONDS);
             return 1;
         }
 
@@ -32,11 +33,14 @@ class ApiCache
     {
         $versionKey = "ver:{$namespace}";
         if (! Cache::has($versionKey)) {
-            Cache::forever($versionKey, 2);
+            Cache::put($versionKey, 2, self::VERSION_TTL_SECONDS);
             return 2;
         }
 
-        return (int) Cache::increment($versionKey);
+        $next = (int) Cache::increment($versionKey);
+        Cache::put($versionKey, $next, self::VERSION_TTL_SECONDS);
+
+        return $next;
     }
 
     /**

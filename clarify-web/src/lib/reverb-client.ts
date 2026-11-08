@@ -16,6 +16,8 @@ declare global {
 export interface ReverbBroadcastPayload {
   type: RealtimeEvent['type'];
   channel_id?: number;
+  target_user_id?: number;
+  action?: RealtimeEvent['action'];
   actor_id?: number;
   announcement?: RealtimeEvent['announcement'];
   message?: RealtimeEvent['message'];
@@ -103,11 +105,12 @@ export function getReverbEcho(): Echo<'reverb'> | null {
 
 /**
  * Subscribes to the private global ClariFy Reverb channel (`clarify.global`) for
- * minimal notice metadata (type + IDs only) and optional per-user channel (`clarify.user.{userId}`).
+ * minimal notice metadata (type + IDs only) and private per-user channel (`clarify.user.{userId}`).
  */
 export function subscribeGlobalReverb(
   onEvent: (payload: ReverbBroadcastPayload) => void,
-  userId?: number
+  userId?: number,
+  onReconnect?: () => void
 ): () => void {
   const echo = getReverbEcho();
   if (!echo) {
@@ -128,8 +131,45 @@ export function subscribeGlobalReverb(
       });
     }
 
+    const pusherConnection = (
+      echo.connector as unknown as {
+        pusher?: {
+          connection?: {
+            bind?: (
+              eventName: string,
+              cb: (states: { previous?: string; current?: string }) => void
+            ) => void;
+            unbind?: (
+              eventName: string,
+              cb: (states: { previous?: string; current?: string }) => void
+            ) => void;
+          };
+        };
+      }
+    )?.pusher?.connection;
+
+    let hasConnectedOnce = false;
+    const handleStateChange = (states: {
+      previous?: string;
+      current?: string;
+    }) => {
+      if (states?.current === 'connected') {
+        if (hasConnectedOnce && states.previous !== 'initialized') {
+          onReconnect?.();
+        }
+        hasConnectedOnce = true;
+      }
+    };
+
+    if (pusherConnection && typeof pusherConnection.bind === 'function') {
+      pusherConnection.bind('state_change', handleStateChange);
+    }
+
     return () => {
       try {
+        if (pusherConnection && typeof pusherConnection.unbind === 'function') {
+          pusherConnection.unbind('state_change', handleStateChange);
+        }
         globalChannel.stopListening('.realtime.updated');
         if (userChannel) {
           userChannel.stopListening('.realtime.updated');

@@ -864,9 +864,11 @@ export default function CourseHubPage() {
                 {(() => {
                   const members = activeChannel.roster || [];
                   const enrolledCount =
-                    activeChannel.roster !== undefined
+                    activeChannel.members_count !== undefined
+                      ? activeChannel.members_count
+                      : activeChannel.roster !== undefined
                       ? activeChannel.roster.length
-                      : activeChannel.members_count ?? 0;
+                      : 0;
                   const facultyMembers = members.filter(
                     (m) => m.role === 'faculty' || m.role === 'dept_head'
                   );

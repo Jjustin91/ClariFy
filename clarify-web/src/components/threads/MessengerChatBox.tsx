@@ -31,7 +31,6 @@ import { formatShortTime } from '../announcements/AnnouncementCard';
 import { useClarify } from '../../context/ClarifyContext';
 import {
   getChannelChatMessagesApi,
-  getChannelRosterApi,
   joinChannelApi,
   leaveChannelApi,
   manageChannelMemberApi,
@@ -241,6 +240,10 @@ export function MessengerChatBox({
     announcementVersion,
     triggerAnnouncementRefresh,
     refreshChannels,
+    rosterChannelById,
+    isLoadingRosterById,
+    refreshChannelRoster,
+    setRosterChannelSnapshot,
     openCourseHubModal,
     openEditCourseHubModal,
     subscribeRealtimeEvents,
@@ -270,9 +273,6 @@ export function MessengerChatBox({
   const [isLoadingOlderByChannel, setIsLoadingOlderByChannel] = useState<
     Record<number, boolean>
   >({});
-  const [rosterChannelById, setRosterChannelById] = useState<
-    Record<number, Channel>
-  >({});
   const [loadedChannelKeys, setLoadedChannelKeys] = useState<
     Record<number, boolean>
   >({});
@@ -300,6 +300,9 @@ export function MessengerChatBox({
     Record<string, string[]>
   >({});
   const [isManagingRoster, setIsManagingRoster] = useState(false);
+  const [processingMemberIds, setProcessingMemberIds] = useState<
+    Record<string, boolean>
+  >({});
 
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -336,26 +339,17 @@ export function MessengerChatBox({
     };
   }, [cleanupRecordingTimersAndStream]);
 
-  const fetchFullChannelRoster = useCallback(async (targetHubId: number) => {
-    if (!targetHubId) return;
-    try {
-      const res = await getChannelRosterApi(targetHubId);
-      if (res?.data) {
-        setRosterChannelById((prev) => ({
-          ...prev,
-          [targetHubId]: res.data,
-        }));
-      }
-    } catch {
-      // Fallback to existing channel data
-    }
-  }, []);
+  // Always load fresh roster & pending_requests when a Course Hub opens AND whenever the settings/pending-requests view opens
+  useEffect(() => {
+    if (!isAuthReady || !isAuthenticated || !hubKey) return;
+    void refreshChannelRoster(hubKey);
+  }, [isAuthReady, isAuthenticated, hubKey, refreshChannelRoster]);
 
   useEffect(() => {
-    if (showSettingsMenu && channel?.id) {
-      void fetchFullChannelRoster(channel.id);
+    if (showSettingsMenu && hubKey) {
+      void refreshChannelRoster(hubKey);
     }
-  }, [showSettingsMenu, channel?.id, fetchFullChannelRoster]);
+  }, [showSettingsMenu, hubKey, refreshChannelRoster]);
 
   /**
    * Appends an incoming real-time message or reconciles it with an in-flight optimistic message
@@ -576,6 +570,18 @@ export function MessengerChatBox({
     const handleRealtimeChatEvent = (
       event: RealtimeEvent | ReverbBroadcastPayload
     ) => {
+      if (
+        event.type === 'membership.changed' ||
+        event.type === 'channel.updated'
+      ) {
+        if (
+          hubKey &&
+          (!event.channel_id || Number(event.channel_id) === Number(hubKey))
+        ) {
+          void refreshChannelRoster(hubKey);
+        }
+        return;
+      }
       if (event.type !== 'chat.message') return;
       if (event.channel_id && Number(event.channel_id) !== Number(channelKey)) {
         return;
@@ -689,6 +695,7 @@ export function MessengerChatBox({
       }
     };
   }, [
+    hubKey,
     channelKey,
     channel?.roster,
     currentUser.id,
@@ -699,6 +706,7 @@ export function MessengerChatBox({
     isAuthenticated,
     appendMessageIdempotently,
     loadChatMessages,
+    refreshChannelRoster,
     scrollToBottomSmooth,
     subscribeRealtimeEvents,
   ]);
@@ -1171,14 +1179,15 @@ export function MessengerChatBox({
   };
 
   const detailedChannel =
-    (channel?.id ? rosterChannelById[channel.id] : undefined) || channel;
+    (hubKey ? rosterChannelById[hubKey] : undefined) || channel;
+  const isLoadingHubRoster = Boolean(hubKey && isLoadingRosterById[hubKey]);
   const channelRoster = detailedChannel?.roster || channel?.roster || [];
   const enrolledCount =
     detailedChannel?.members_count !== undefined
       ? detailedChannel.members_count
-      : channelRoster.length > 0
-      ? channelRoster.length
-      : channel?.members_count ?? 0;
+      : channel?.members_count !== undefined
+      ? channel.members_count
+      : channelRoster.length;
   const facultyInRoster = channelRoster.filter(
     (m) => m.role === 'faculty' || m.role === 'dept_head'
   );
@@ -1195,12 +1204,13 @@ export function MessengerChatBox({
       : instructorFallback || 'No Faculty Assigned Yet';
 
   const handleSyncRosterAccess = async () => {
-    if (!channelKey) return;
+    const targetHubId = hubKey || channelKey;
+    if (!targetHubId) return;
     setIsManagingRoster(true);
     try {
-      const res = await joinChannelApi(channelKey);
-      if (res?.data && channel?.id) {
-        setRosterChannelById((prev) => ({ ...prev, [channel.id]: res.data }));
+      const res = await joinChannelApi(targetHubId);
+      if (res?.data) {
+        setRosterChannelSnapshot(targetHubId, res.data);
       }
       await refreshChannels();
       showToast(res.message || 'Course Hub roster synced.', 'success');
@@ -1217,7 +1227,7 @@ export function MessengerChatBox({
     setIsManagingRoster(true);
     try {
       const res = await leaveChannelApi(channel.id);
-      await refreshChannels();
+      await refreshChannels({ forceImmediate: true });
       setShowSettingsMenu(false);
       showToast(
         res.message || `Left ${formatCourseHubName(channel)}.`,
@@ -1241,18 +1251,19 @@ export function MessengerChatBox({
 
   const handleAddMemberToRoster = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!channelKey) return;
+    const targetHubId = hubKey || channelKey;
+    if (!targetHubId) return;
     setRosterFieldErrors({});
     setIsManagingRoster(true);
     try {
-      const res = await manageChannelMemberApi(channelKey, {
+      const res = await manageChannelMemberApi(targetHubId, {
         institutional_id: newMemberId,
         name: newMemberName,
         section: channel?.scope_section || 'IT3R2',
         action: 'add',
       });
-      if (res?.data && channel?.id) {
-        setRosterChannelById((prev) => ({ ...prev, [channel.id]: res.data }));
+      if (res?.data) {
+        setRosterChannelSnapshot(targetHubId, res.data);
       }
       await refreshChannels();
       setNewMemberId('');
@@ -1271,15 +1282,16 @@ export function MessengerChatBox({
   };
 
   const handleRemoveMemberFromRoster = async (institutionalId: string) => {
-    if (!channelKey) return;
+    const targetHubId = hubKey || channelKey;
+    if (!targetHubId) return;
     setIsManagingRoster(true);
     try {
-      const res = await manageChannelMemberApi(channelKey, {
+      const res = await manageChannelMemberApi(targetHubId, {
         institutional_id: institutionalId,
         action: 'remove',
       });
-      if (res?.data && channel?.id) {
-        setRosterChannelById((prev) => ({ ...prev, [channel.id]: res.data }));
+      if (res?.data) {
+        setRosterChannelSnapshot(targetHubId, res.data);
       }
       await refreshChannels();
       showToast(res.message || 'Member removed from roster.', 'info');
@@ -1291,45 +1303,127 @@ export function MessengerChatBox({
     }
   };
 
+  const removeStalePendingMemberFromSnapshot = (
+    targetHubId: number,
+    institutionalId: string,
+    replacementChannel?: Channel
+  ) => {
+    const base = replacementChannel || detailedChannel;
+    if (!base) return;
+    const filteredPending = (base.pending_requests || []).filter(
+      (req) => req.institutional_id !== institutionalId
+    );
+    setRosterChannelSnapshot(targetHubId, {
+      ...base,
+      pending_requests: filteredPending,
+    });
+  };
+
   const handleApprovePendingMember = async (institutionalId: string) => {
-    if (!channelKey) return;
-    setIsManagingRoster(true);
+    const targetHubId = hubKey || channelKey;
+    if (!targetHubId || processingMemberIds[institutionalId]) return;
+    setProcessingMemberIds((prev) => ({ ...prev, [institutionalId]: true }));
     try {
-      const res = await manageChannelMemberApi(channelKey, {
+      const res = await manageChannelMemberApi(targetHubId, {
         institutional_id: institutionalId,
         action: 'approve',
       });
-      if (res?.data && channel?.id) {
-        setRosterChannelById((prev) => ({ ...prev, [channel.id]: res.data }));
+      if (res?.data) {
+        removeStalePendingMemberFromSnapshot(
+          targetHubId,
+          institutionalId,
+          res.data
+        );
+      } else {
+        removeStalePendingMemberFromSnapshot(targetHubId, institutionalId);
       }
       await refreshChannels();
       showToast(res.message || 'Join request approved!', 'success');
     } catch (err) {
       const apiErr = err as LaravelValidationError;
-      showToast(apiErr.message || 'Failed to approve join request.', 'error');
+      if (apiErr.status === 409) {
+        showToast(
+          apiErr.message ||
+            'This request was already approved/declined by another Course Admin.',
+          'info'
+        );
+        if (apiErr.data && typeof apiErr.data === 'object') {
+          removeStalePendingMemberFromSnapshot(
+            targetHubId,
+            institutionalId,
+            apiErr.data as Channel
+          );
+        } else {
+          removeStalePendingMemberFromSnapshot(targetHubId, institutionalId);
+          void refreshChannelRoster(targetHubId);
+        }
+        void refreshChannels();
+      } else {
+        showToast(
+          apiErr.message || 'Failed to approve join request.',
+          'error'
+        );
+      }
     } finally {
-      setIsManagingRoster(false);
+      setProcessingMemberIds((prev) => {
+        const next = { ...prev };
+        delete next[institutionalId];
+        return next;
+      });
     }
   };
 
   const handleRejectPendingMember = async (institutionalId: string) => {
-    if (!channelKey) return;
-    setIsManagingRoster(true);
+    const targetHubId = hubKey || channelKey;
+    if (!targetHubId || processingMemberIds[institutionalId]) return;
+    setProcessingMemberIds((prev) => ({ ...prev, [institutionalId]: true }));
     try {
-      const res = await manageChannelMemberApi(channelKey, {
+      const res = await manageChannelMemberApi(targetHubId, {
         institutional_id: institutionalId,
         action: 'reject',
       });
-      if (res?.data && channel?.id) {
-        setRosterChannelById((prev) => ({ ...prev, [channel.id]: res.data }));
+      if (res?.data) {
+        removeStalePendingMemberFromSnapshot(
+          targetHubId,
+          institutionalId,
+          res.data
+        );
+      } else {
+        removeStalePendingMemberFromSnapshot(targetHubId, institutionalId);
       }
       await refreshChannels();
       showToast(res.message || 'Join request declined.', 'info');
     } catch (err) {
       const apiErr = err as LaravelValidationError;
-      showToast(apiErr.message || 'Failed to decline join request.', 'error');
+      if (apiErr.status === 409) {
+        showToast(
+          apiErr.message ||
+            'This request was already approved/declined by another Course Admin.',
+          'info'
+        );
+        if (apiErr.data && typeof apiErr.data === 'object') {
+          removeStalePendingMemberFromSnapshot(
+            targetHubId,
+            institutionalId,
+            apiErr.data as Channel
+          );
+        } else {
+          removeStalePendingMemberFromSnapshot(targetHubId, institutionalId);
+          void refreshChannelRoster(targetHubId);
+        }
+        void refreshChannels();
+      } else {
+        showToast(
+          apiErr.message || 'Failed to decline join request.',
+          'error'
+        );
+      }
     } finally {
-      setIsManagingRoster(false);
+      setProcessingMemberIds((prev) => {
+        const next = { ...prev };
+        delete next[institutionalId];
+        return next;
+      });
     }
   };
 
@@ -1542,68 +1636,91 @@ export function MessengerChatBox({
               </div>
 
               {/* Pending Join Requests (Course Admin Approval Queue) */}
-              {isCurrentUserCourseAdmin && pendingJoinRequests.length > 0 && (
+              {isCurrentUserCourseAdmin && (
                 <div className="p-2.5 bg-amber-50 border border-amber-300 rounded-md space-y-2">
                   <div className="flex items-center justify-between">
-                    <p className="text-[11px] font-extrabold text-amber-950 flex items-center gap-1.5">
+                    <p className="text-[11px] font-extrabold text-amber-950 flex items-center gap-1.5 tabular-nums">
                       <Clock className="w-3.5 h-3.5 text-amber-700" />
                       <span>
                         Pending Join Requests ({pendingJoinRequests.length})
                       </span>
                     </p>
                     <span className="text-[10px] font-bold text-amber-800">
-                      Requires Approval
+                      {isLoadingHubRoster
+                        ? 'Refreshing...'
+                        : pendingJoinRequests.length > 0
+                        ? 'Requires Approval'
+                        : 'Up to date'}
                     </span>
                   </div>
-                  <div className="divide-y divide-amber-200/80 max-h-36 overflow-y-auto bg-white rounded border border-amber-200">
-                    {pendingJoinRequests.map((reqMember) => (
-                      <div
-                        key={reqMember.institutional_id}
-                        className="flex items-center justify-between gap-2 px-2.5 py-2 text-xs"
-                      >
-                        <div className="min-w-0">
-                          <p className="font-bold text-ustp-text truncate">
-                            {reqMember.name}{' '}
-                            <span className="text-slate-500 font-mono font-normal text-[10px]">
-                              ({reqMember.institutional_id})
-                            </span>
-                          </p>
-                          <p className="text-[10px] font-semibold text-slate-500 uppercase">
-                            {reqMember.role.replace('_', ' ')} •{' '}
-                            {reqMember.section}
-                          </p>
-                        </div>
-                        <div className="flex items-center gap-1 shrink-0">
-                          <button
-                            type="button"
-                            disabled={isManagingRoster}
-                            onClick={() =>
-                              handleApprovePendingMember(
-                                reqMember.institutional_id
-                              )
-                            }
-                            className="inline-flex items-center gap-1 px-2 py-1 rounded bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-extrabold disabled:opacity-50 cursor-pointer"
+                  {isLoadingHubRoster && pendingJoinRequests.length === 0 ? (
+                    <div className="px-3 py-3 text-center text-[11px] font-semibold text-amber-900 bg-white rounded border border-amber-200">
+                      Loading pending join requests...
+                    </div>
+                  ) : pendingJoinRequests.length === 0 ? (
+                    <div className="px-3 py-2.5 text-center text-[11px] text-slate-500 bg-white rounded border border-amber-200">
+                      No pending join requests right now.
+                    </div>
+                  ) : (
+                    <div className="divide-y divide-amber-200/80 max-h-36 overflow-y-auto bg-white rounded border border-amber-200">
+                      {pendingJoinRequests.map((reqMember) => {
+                        const isRowProcessing = Boolean(
+                          processingMemberIds[reqMember.institutional_id]
+                        );
+                        return (
+                          <div
+                            key={reqMember.institutional_id}
+                            className="flex items-center justify-between gap-2 px-2.5 py-2 text-xs"
                           >
-                            <Check className="w-3 h-3" />
-                            <span>Approve</span>
-                          </button>
-                          <button
-                            type="button"
-                            disabled={isManagingRoster}
-                            onClick={() =>
-                              handleRejectPendingMember(
-                                reqMember.institutional_id
-                              )
-                            }
-                            className="inline-flex items-center gap-1 px-2 py-1 rounded border border-red-300 bg-red-50 hover:bg-red-100 text-red-700 text-[10px] font-bold disabled:opacity-50 cursor-pointer"
-                          >
-                            <X className="w-3 h-3" />
-                            <span>Decline</span>
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
+                            <div className="min-w-0">
+                              <p className="font-bold text-ustp-text truncate">
+                                {reqMember.name}{' '}
+                                <span className="text-slate-500 font-mono tabular-nums font-normal text-[10px]">
+                                  ({reqMember.institutional_id})
+                                </span>
+                              </p>
+                              <p className="text-[10px] font-semibold text-slate-500 uppercase">
+                                {reqMember.role.replace('_', ' ')} •{' '}
+                                {reqMember.section}
+                              </p>
+                            </div>
+                            <div className="flex items-center gap-1 shrink-0">
+                              <button
+                                type="button"
+                                disabled={isRowProcessing || isManagingRoster}
+                                onClick={() =>
+                                  handleApprovePendingMember(
+                                    reqMember.institutional_id
+                                  )
+                                }
+                                className="inline-flex items-center gap-1 px-2 py-1 rounded bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-extrabold disabled:opacity-50 cursor-pointer"
+                              >
+                                <Check className="w-3 h-3" />
+                                <span>
+                                  {isRowProcessing ? 'Working...' : 'Approve'}
+                                </span>
+                              </button>
+                              <button
+                                type="button"
+                                disabled={isRowProcessing || isManagingRoster}
+                                onClick={() =>
+                                  handleRejectPendingMember(
+                                    reqMember.institutional_id
+                                  )
+                                }
+                                className="inline-flex items-center gap-1 px-2 py-1 rounded border border-red-300 bg-red-50 hover:bg-red-100 text-red-700 text-[10px] font-bold disabled:opacity-50 cursor-pointer"
+                              >
+                                <X className="w-3 h-3" />
+                                <span>
+                                  {isRowProcessing ? 'Working...' : 'Decline'}
+                                </span>
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
               )}
 

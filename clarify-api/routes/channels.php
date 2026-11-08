@@ -25,7 +25,8 @@ Broadcast::channel('clarify.channel.{channelId}', function (User $user, int $cha
         return false;
     }
 
-    return ChannelPolicy::hasApprovedChannelAccess($user, $channel);
+    return ChannelPolicy::hasApprovedChannelAccess($user, $channel)
+        || ChannelPolicy::isCourseAdmin($user, $channel);
 });
 
 Broadcast::channel('clarify.user.{userId}', function (User $user, int $userId) {

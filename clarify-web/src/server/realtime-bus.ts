@@ -33,6 +33,8 @@ export function emitRealtimeEvent(
   type: RealtimeEvent['type'],
   options?: {
     channel_id?: number;
+    target_user_id?: number;
+    action?: RealtimeEvent['action'];
     actor_id?: number;
     announcement?: RealtimeEvent['announcement'];
     message?: RealtimeEvent['message'];
@@ -45,6 +47,8 @@ export function emitRealtimeEvent(
     revision: bus.revision,
     type,
     channel_id: options?.channel_id,
+    target_user_id: options?.target_user_id,
+    action: options?.action,
     actor_id: options?.actor_id,
     announcement: options?.announcement,
     message: options?.message,

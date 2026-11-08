@@ -20,6 +20,8 @@ class RealtimeStateUpdated implements ShouldBroadcast, ShouldQueue, ShouldDispat
     public string $type;
     public ?int $channelId;
     public ?int $actorId;
+    public ?int $targetUserId;
+    public ?string $action;
     public ?array $announcement;
     public ?array $message;
     public ?array $thread;
@@ -34,7 +36,9 @@ class RealtimeStateUpdated implements ShouldBroadcast, ShouldQueue, ShouldDispat
         ?int $actorId = null,
         ?array $announcement = null,
         ?array $message = null,
-        ?array $thread = null
+        ?array $thread = null,
+        ?int $targetUserId = null,
+        ?string $action = null
     ) {
         $this->type = $type;
         $this->channelId = $channelId;
@@ -42,6 +46,8 @@ class RealtimeStateUpdated implements ShouldBroadcast, ShouldQueue, ShouldDispat
         $this->announcement = $announcement;
         $this->message = $message;
         $this->thread = $thread;
+        $this->targetUserId = $targetUserId;
+        $this->action = $action;
         $this->timestamp = now()->toIso8601String();
     }
 
@@ -54,22 +60,57 @@ class RealtimeStateUpdated implements ShouldBroadcast, ShouldQueue, ShouldDispat
         ?int $actorId = null,
         ?array $announcement = null,
         ?array $message = null,
-        ?array $thread = null
+        ?array $thread = null,
+        ?int $targetUserId = null,
+        ?string $action = null
     ): void {
         try {
-            event(new self($type, $channelId, $actorId, $announcement, $message, $thread));
+            event(new self(
+                $type,
+                $channelId,
+                $actorId,
+                $announcement,
+                $message,
+                $thread,
+                $targetUserId,
+                $action
+            ));
         } catch (\Throwable $e) {
             Log::warning('RealtimeStateUpdated broadcast dispatch failed: ' . $e->getMessage(), [
                 'type' => $type,
                 'channel_id' => $channelId,
                 'actor_id' => $actorId,
+                'target_user_id' => $targetUserId,
+                'action' => $action,
             ]);
         }
     }
 
     /**
+     * Dispatch a lightweight membership.changed event (IDs only, no names or content).
+     */
+    public static function dispatchMembershipChanged(
+        int $channelId,
+        int $targetUserId,
+        string $action,
+        int $actorId
+    ): void {
+        self::safeDispatch(
+            'membership.changed',
+            $channelId,
+            $actorId,
+            null,
+            null,
+            null,
+            $targetUserId,
+            $action
+        );
+    }
+
+    /**
      * Get the private channels the event should broadcast on.
      * Chat messages and scoped threads broadcast strictly on PrivateChannel('clarify.channel.{id}').
+     * Membership changes broadcast on PrivateChannel('clarify.channel.{channel_id}') and PrivateChannel('clarify.user.{target_user_id}').
      * Global notices broadcast minimal metadata on PrivateChannel('clarify.global').
      *
      * @return array<int, \Illuminate\Broadcasting\PrivateChannel>
@@ -82,12 +123,20 @@ class RealtimeStateUpdated implements ShouldBroadcast, ShouldQueue, ShouldDispat
             $channels[] = new PrivateChannel("clarify.channel.{$this->channelId}");
         }
 
-        // Only broadcast global notices (not private channel chat messages) on clarify.global
-        if (! str_starts_with($this->type, 'chat.') && ! str_starts_with($this->type, 'thread.')) {
+        if ($this->targetUserId !== null) {
+            $channels[] = new PrivateChannel("clarify.user.{$this->targetUserId}");
+        }
+
+        // Only broadcast global notices (not private channel chat messages, threads, or user-scoped membership events) on clarify.global
+        if (
+            ! str_starts_with($this->type, 'chat.') &&
+            ! str_starts_with($this->type, 'thread.') &&
+            $this->type !== 'membership.changed'
+        ) {
             $channels[] = new PrivateChannel('clarify.global');
         }
 
-        if ($this->actorId !== null && $this->type === 'admin.updated') {
+        if ($this->actorId !== null && $this->type === 'admin.updated' && $this->targetUserId === null) {
             $channels[] = new PrivateChannel("clarify.user.{$this->actorId}");
         }
 
@@ -109,6 +158,17 @@ class RealtimeStateUpdated implements ShouldBroadcast, ShouldQueue, ShouldDispat
      */
     public function broadcastWith(): array
     {
+        if ($this->type === 'membership.changed') {
+            return [
+                'type' => 'membership.changed',
+                'channel_id' => $this->channelId,
+                'target_user_id' => $this->targetUserId,
+                'action' => $this->action,
+                'actor_id' => $this->actorId,
+                'timestamp' => $this->timestamp,
+            ];
+        }
+
         // Strip announcement body content on global notices unless on a scoped channel
         $safeAnnouncement = null;
         if ($this->announcement !== null) {
@@ -128,6 +188,8 @@ class RealtimeStateUpdated implements ShouldBroadcast, ShouldQueue, ShouldDispat
         return [
             'type' => $this->type,
             'channel_id' => $this->channelId,
+            'target_user_id' => $this->targetUserId,
+            'action' => $this->action,
             'actor_id' => $this->actorId,
             'announcement' => $safeAnnouncement,
             'message' => $this->channelId !== null ? $this->message : null,

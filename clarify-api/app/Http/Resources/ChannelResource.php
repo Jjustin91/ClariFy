@@ -46,14 +46,19 @@ class ChannelResource extends JsonResource
                 'department' => $member->academicProfile?->department ?? $this->scope_department ?? 'CITC',
             ])->values()->all();
 
-            $pendingRequests = $pendingMembers->map(fn ($member) => [
-                'id' => $member->id,
-                'institutional_id' => $member->institutional_id,
-                'name' => $member->name,
-                'role' => $member->role,
-                'section' => $member->academicProfile?->section ?? $this->scope_section ?? 'IT3R2',
-                'department' => $member->academicProfile?->department ?? $this->scope_department ?? 'CITC',
-            ])->values()->all();
+            $reqUser = $request->user();
+            $canViewPending = $reqUser && ChannelPolicy::isCourseAdmin($reqUser, $this->resource);
+
+            $pendingRequests = $canViewPending
+                ? $pendingMembers->map(fn ($member) => [
+                    'id' => $member->id,
+                    'institutional_id' => $member->institutional_id,
+                    'name' => $member->name,
+                    'role' => $member->role,
+                    'section' => $member->academicProfile?->section ?? $this->scope_section ?? 'IT3R2',
+                    'department' => $member->academicProfile?->department ?? $this->scope_department ?? 'CITC',
+                ])->values()->all()
+                : [];
         } else {
             $membersCount = (int) ($this->precomputed_members_count ?? 0);
         }

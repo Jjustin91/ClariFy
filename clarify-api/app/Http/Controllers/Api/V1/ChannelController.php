@@ -32,19 +32,15 @@ class ChannelController
         $cacheParams = array_filter([
             'search' => $search,
             'type' => $type,
-            'include_roster' => $includeRoster ? '1' : '',
         ], fn ($value) => $value !== '');
 
-        $cacheKey = ApiCache::channelsKey(null, $cacheParams);
-
-        $sharedData = Cache::remember($cacheKey, ApiCache::CHANNELS_TTL_SECONDS, function () use (
+        $buildChannelsList = function (bool $withFullRoster) use (
             $request,
             $search,
-            $type,
-            $includeRoster
+            $type
         ): array {
             $query = Channel::query();
-            if ($includeRoster) {
+            if ($withFullRoster) {
                 $query->with(['members.academicProfile']);
             }
 
@@ -120,7 +116,7 @@ class ChannelController
 
             // 3. Grouped approved member counts per channel (when roster is not eager-loaded)
             $memberCountsByChannel = [];
-            if (! $includeRoster) {
+            if (! $withFullRoster) {
                 $memberCountsByChannel = DB::table('channel_user')
                     ->join('users', 'users.id', '=', 'channel_user.user_id')
                     ->whereIn('channel_user.channel_id', $channelIds)
@@ -181,7 +177,7 @@ class ChannelController
                     }
                 }
 
-                $ch->precomputed_include_roster = $includeRoster;
+                $ch->precomputed_include_roster = $withFullRoster;
                 $ch->precomputed_open_threads_count = (int) ($openThreadCounts[$cid] ?? 0);
                 $ch->precomputed_chat_messages_count = $totalChatCount;
                 $ch->precomputed_members_count = (int) ($memberCountsByChannel[$cid] ?? 0);
@@ -190,9 +186,21 @@ class ChannelController
             }
 
             return ChannelResource::collection($channels)->resolve($request);
-        });
+        };
 
-        // Overlay current user's membership state when full roster was not requested
+        // Never serve rosters/pending_requests from a shared cache key
+        if ($includeRoster) {
+            $sharedData = $buildChannelsList(true);
+        } else {
+            $cacheKey = ApiCache::channelsKey(null, $cacheParams);
+            $sharedData = Cache::remember(
+                $cacheKey,
+                ApiCache::CHANNELS_TTL_SECONDS,
+                fn (): array => $buildChannelsList(false)
+            );
+        }
+
+        // Overlay current user's membership state fresh from DB on every request when full roster was not requested
         if ($user && ! $includeRoster && ! empty($sharedData)) {
             $pivots = DB::table('channel_user')
                 ->where('user_id', $user->id)
@@ -221,6 +229,9 @@ class ChannelController
                 } elseif ($status === 'pending') {
                     $channelItem['roster'] = [];
                     $channelItem['pending_requests'] = [$selfEntry];
+                } else {
+                    $channelItem['roster'] = [];
+                    $channelItem['pending_requests'] = [];
                 }
             }
             unset($channelItem);
@@ -233,19 +244,26 @@ class ChannelController
 
     /**
      * GET /api/v1/channels/{id}/roster
-     * Returns a single channel with its full approved roster and pending requests loaded.
+     * Returns a single channel with its full approved roster loaded (and pending_requests for Course Admins only).
+     * Never served from a shared cache.
      */
     public function roster(Request $request, int $id): JsonResponse
     {
         $channel = Channel::with('members.academicProfile')->findOrFail($id);
         $user = $request->user();
 
-        if (! $user || ! ChannelPolicy::hasApprovedChannelAccess($user, $channel)) {
+        if (
+            ! $user ||
+            (! ChannelPolicy::hasApprovedChannelAccess($user, $channel) &&
+             ! ChannelPolicy::isCourseAdmin($user, $channel))
+        ) {
             return response()->json([
                 'status' => 403,
                 'message' => "Access Denied: You are not an approved member of {$channel->name}.",
             ], 403);
         }
+
+        $channel->precomputed_include_roster = true;
 
         return response()->json([
             'data' => new ChannelResource($channel),
@@ -494,6 +512,12 @@ class ChannelController
 
         ApiCache::forgetChannels((int) $channel->id);
         ApiCache::forgetChannelAnnouncements((int) $channel->id);
+        RealtimeStateUpdated::dispatchMembershipChanged(
+            (int) $channel->id,
+            (int) $user->id,
+            'requested',
+            (int) $user->id
+        );
         RealtimeStateUpdated::safeDispatch('channel.updated', (int) $channel->id, (int) $user->id);
 
         $fresh = $channel->fresh('members.academicProfile');
@@ -574,47 +598,130 @@ class ChannelController
             'action' => ['required', 'in:add,remove,approve,reject'],
         ]);
 
-        $targetUser = User::where('institutional_id', $validated['institutional_id'])->first();
+        $action = $validated['action'];
 
-        if ($validated['action'] === 'add') {
-            if (! $targetUser) {
-                $targetUser = new User([
-                    'institutional_id' => $validated['institutional_id'],
-                    'name' => $validated['name'] ?: "USTP Student ({$validated['institutional_id']})",
-                    'email' => "student.{$validated['institutional_id']}@ustp.edu.ph",
-                    'password' => 'ustp2026',
-                ]);
-                $targetUser->role = 'student';
-                $targetUser->verification_status = 'approved';
-                $targetUser->save();
+        $txResult = DB::transaction(function () use ($channel, $validated, $action): array {
+            $targetUser = User::where('institutional_id', $validated['institutional_id'])->first();
+
+            if (in_array($action, ['approve', 'reject'], true)) {
+                if (! $targetUser) {
+                    return [
+                        'conflict' => true,
+                        'target_user' => null,
+                    ];
+                }
+
+                $pivotRow = DB::table('channel_user')
+                    ->where('channel_id', $channel->id)
+                    ->where('user_id', $targetUser->id)
+                    ->lockForUpdate()
+                    ->first();
+
+                if (! $pivotRow || ($pivotRow->approval_status ?? 'approved') !== 'pending') {
+                    return [
+                        'conflict' => true,
+                        'target_user' => $targetUser,
+                    ];
+                }
+
+                if ($action === 'approve') {
+                    DB::table('channel_user')
+                        ->where('channel_id', $channel->id)
+                        ->where('user_id', $targetUser->id)
+                        ->where('approval_status', 'pending')
+                        ->update([
+                            'approval_status' => 'approved',
+                            'joined_at' => now(),
+                        ]);
+                } else {
+                    // 'reject' only deletes a pending join request row — never detaches an approved member
+                    DB::table('channel_user')
+                        ->where('channel_id', $channel->id)
+                        ->where('user_id', $targetUser->id)
+                        ->where('approval_status', 'pending')
+                        ->delete();
+                }
+
+                return [
+                    'conflict' => false,
+                    'target_user' => $targetUser,
+                ];
             }
 
-            $channel->members()->syncWithoutDetaching([
-                $targetUser->id => [
-                    'can_publish' => $targetUser->canPublishOrManage(),
-                    'approval_status' => 'approved',
-                    'joined_at' => now(),
-                ],
-            ]);
+            if ($action === 'add') {
+                if (! $targetUser) {
+                    $targetUser = new User([
+                        'institutional_id' => $validated['institutional_id'],
+                        'name' => $validated['name'] ?: "USTP Student ({$validated['institutional_id']})",
+                        'email' => "student.{$validated['institutional_id']}@ustp.edu.ph",
+                        'password' => 'ustp2026',
+                    ]);
+                    $targetUser->role = 'student';
+                    $targetUser->verification_status = 'approved';
+                    $targetUser->save();
+                }
 
-            DB::table('channel_user')
-                ->where('channel_id', $channel->id)
-                ->where('user_id', $targetUser->id)
-                ->update(['approval_status' => 'approved']);
-        } elseif ($validated['action'] === 'approve' && $targetUser) {
-            DB::table('channel_user')
-                ->where('channel_id', $channel->id)
-                ->where('user_id', $targetUser->id)
-                ->update([
-                    'approval_status' => 'approved',
-                    'joined_at' => now(),
+                $channel->members()->syncWithoutDetaching([
+                    $targetUser->id => [
+                        'can_publish' => $targetUser->canPublishOrManage(),
+                        'approval_status' => 'approved',
+                        'joined_at' => now(),
+                    ],
                 ]);
-        } elseif ($targetUser) {
-            $channel->members()->detach($targetUser->id);
+
+                DB::table('channel_user')
+                    ->where('channel_id', $channel->id)
+                    ->where('user_id', $targetUser->id)
+                    ->update(['approval_status' => 'approved']);
+
+                return [
+                    'conflict' => false,
+                    'target_user' => $targetUser,
+                ];
+            }
+
+            // Explicit 'remove' action
+            if ($targetUser) {
+                $channel->members()->detach($targetUser->id);
+            }
+
+            return [
+                'conflict' => false,
+                'target_user' => $targetUser,
+            ];
+        });
+
+        $freshChannel = $channel->fresh('members.academicProfile');
+        $freshChannel->precomputed_include_roster = true;
+
+        if ($txResult['conflict']) {
+            return response()->json([
+                'status' => 409,
+                'message' => 'This request was already approved/declined by another Course Admin.',
+                'data' => new ChannelResource($freshChannel),
+            ], 409);
         }
 
         ApiCache::forgetChannels((int) $channel->id);
         ApiCache::forgetChannelAnnouncements((int) $channel->id);
+
+        /** @var \App\Models\User|null $targetUser */
+        $targetUser = $txResult['target_user'];
+        $broadcastActionMap = [
+            'add' => 'added',
+            'approve' => 'approved',
+            'reject' => 'rejected',
+            'remove' => 'removed',
+        ];
+        if ($targetUser && isset($broadcastActionMap[$action])) {
+            RealtimeStateUpdated::dispatchMembershipChanged(
+                (int) $channel->id,
+                (int) $targetUser->id,
+                $broadcastActionMap[$action],
+                (int) $user->id
+            );
+        }
+
         RealtimeStateUpdated::safeDispatch('channel.updated', (int) $channel->id, (int) $user->id);
 
         $actionMessages = [
@@ -625,8 +732,8 @@ class ChannelController
         ];
 
         return response()->json([
-            'message' => $actionMessages[$validated['action']] ?? 'Roster updated.',
-            'data' => new ChannelResource($channel->fresh('members.academicProfile')),
+            'message' => $actionMessages[$action] ?? 'Roster updated.',
+            'data' => new ChannelResource($freshChannel),
         ]);
     }
 }

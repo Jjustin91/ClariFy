@@ -20,6 +20,7 @@ import {
   API_BASE_URL,
   clearStoredSession,
   getAnnouncementsApi,
+  getChannelRosterApi,
   getChannelsApi,
   getMeApi,
   getPersistenceStatusApi,
@@ -29,7 +30,13 @@ import {
   setStoredUser,
 } from '../lib/api-client';
 import {
+  formatCourseHubName,
+  getTopLevelCourseHubs,
+  isUserCourseAdmin,
+} from '../lib/domain-logic';
+import {
   type ReverbBroadcastPayload,
+  subscribeChannelReverb,
   subscribeGlobalReverb,
 } from '../lib/reverb-client';
 
@@ -79,7 +86,11 @@ interface ClarifyContextValue {
   dismissUrgentPopup: (announcementId: number) => void;
   subscribeRealtimeEvents: (listener: RealtimeEventListener) => () => void;
   channels: Channel[];
-  refreshChannels: () => Promise<void>;
+  refreshChannels: (options?: { forceImmediate?: boolean }) => Promise<Channel[]>;
+  rosterChannelById: Record<number, Channel>;
+  isLoadingRosterById: Record<number, boolean>;
+  refreshChannelRoster: (channelId: number) => Promise<Channel | null>;
+  setRosterChannelSnapshot: (channelId: number, data: Channel) => void;
   announcementVersion: number;
   triggerAnnouncementRefresh: () => void;
   toasts: ToastItem[];
@@ -171,18 +182,39 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
   const [urgentPopupAnnouncement, setUrgentPopupAnnouncement] =
     useState<Announcement | null>(null);
   const [channels, setChannels] = useState<Channel[]>([]);
+  const [rosterChannelById, setRosterChannelById] = useState<
+    Record<number, Channel>
+  >({});
+  const [isLoadingRosterById, setIsLoadingRosterById] = useState<
+    Record<number, boolean>
+  >({});
   const [announcementVersion, setAnnouncementVersion] = useState<number>(0);
   const [toasts, setToasts] = useState<ToastItem[]>([]);
+
+  const channelsRef = useRef<Channel[]>([]);
+  const rosterChannelByIdRef = useRef<Record<number, Channel>>({});
+
+  useEffect(() => {
+    channelsRef.current = channels;
+  }, [channels]);
+
+  useEffect(() => {
+    rosterChannelByIdRef.current = rosterChannelById;
+  }, [rosterChannelById]);
 
   const lastRevisionRef = useRef<number>(0);
   const dismissedUrgentIdsRef = useRef<Set<number>>(new Set());
   const eventListenersRef = useRef<Set<RealtimeEventListener>>(new Set());
-  const refreshChannelsInFlightRef = useRef<Promise<void> | null>(null);
+  const refreshChannelsInFlightRef = useRef<Promise<Channel[]> | null>(null);
+  const rosterFetchInFlightRef = useRef<Map<number, Promise<Channel | null>>>(
+    new Map()
+  );
   const urgentCheckInFlightRef = useRef<Promise<void> | null>(null);
   const debouncedRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
     null
   );
   const pendingVisibilityRefreshRef = useRef<boolean>(false);
+  const recentMembershipToastKeysRef = useRef<Map<string, number>>(new Map());
 
   const showToast = useCallback(
     (message: string, variant: ToastItem['variant'] = 'info') => {
@@ -226,36 +258,164 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
     );
   }, []);
 
-  const refreshChannels = useCallback(async () => {
-    if (typeof document !== 'undefined' && document.hidden) {
-      pendingVisibilityRefreshRef.current = true;
-      return;
-    }
-    if (refreshChannelsInFlightRef.current) {
-      return refreshChannelsInFlightRef.current;
-    }
+  const setRosterChannelSnapshot = useCallback(
+    (channelId: number, data: Channel) => {
+      if (!channelId || !data) return;
+      setRosterChannelById((prev) => {
+        const next = { ...prev, [channelId]: data };
+        rosterChannelByIdRef.current = next;
+        return next;
+      });
+      setChannels((prev) => {
+        const next = prev.map((ch) => {
+          if (Number(ch.id) !== Number(channelId)) return ch;
+          return {
+            ...ch,
+            members_count: data.members_count ?? ch.members_count,
+            pending_requests: data.pending_requests ?? ch.pending_requests,
+          };
+        });
+        channelsRef.current = next;
+        return next;
+      });
+    },
+    []
+  );
 
-    const sessionUser = getStoredSessionUser();
-    const token = getStoredToken();
-    if (!sessionUser || !token || sessionUser.role === 'it_admin') {
-      setChannels([]);
-      return;
-    }
+  const refreshChannelRoster = useCallback(
+    async (channelId: number): Promise<Channel | null> => {
+      const numericId = Number(channelId);
+      if (!numericId || numericId <= 0) return null;
 
-    const promise = (async () => {
-      try {
-        const res = await getChannelsApi();
-        setChannels(res.data);
-      } catch {
-        // Retain existing channels if backend is unreachable
-      } finally {
-        refreshChannelsInFlightRef.current = null;
+      if (typeof document !== 'undefined' && document.hidden) {
+        pendingVisibilityRefreshRef.current = true;
+        return rosterChannelByIdRef.current[numericId] || null;
       }
-    })();
 
-    refreshChannelsInFlightRef.current = promise;
-    return promise;
-  }, []);
+      const existingInFlight = rosterFetchInFlightRef.current.get(numericId);
+      if (existingInFlight) {
+        return existingInFlight;
+      }
+
+      const sessionUser = getStoredSessionUser();
+      const token = getStoredToken();
+      if (!sessionUser || !token || sessionUser.role === 'it_admin') {
+        return null;
+      }
+
+      setIsLoadingRosterById((prev) => ({ ...prev, [numericId]: true }));
+
+      const promise = (async (): Promise<Channel | null> => {
+        try {
+          const res = await getChannelRosterApi(numericId);
+          if (res?.data) {
+            setRosterChannelSnapshot(numericId, res.data);
+            return res.data;
+          }
+          return null;
+        } catch {
+          return rosterChannelByIdRef.current[numericId] || null;
+        } finally {
+          rosterFetchInFlightRef.current.delete(numericId);
+          setIsLoadingRosterById((prev) => ({ ...prev, [numericId]: false }));
+        }
+      })();
+
+      rosterFetchInFlightRef.current.set(numericId, promise);
+      return promise;
+    },
+    [setRosterChannelSnapshot]
+  );
+
+  const refreshChannels = useCallback(
+    async (options?: { forceImmediate?: boolean }): Promise<Channel[]> => {
+      if (
+        !options?.forceImmediate &&
+        typeof document !== 'undefined' &&
+        document.hidden
+      ) {
+        pendingVisibilityRefreshRef.current = true;
+        return channelsRef.current;
+      }
+
+      if (refreshChannelsInFlightRef.current) {
+        if (options?.forceImmediate) {
+          try {
+            await refreshChannelsInFlightRef.current;
+          } catch {
+            // Ignore prior in-flight failure and proceed with fresh fetch
+          }
+        } else {
+          return refreshChannelsInFlightRef.current;
+        }
+      }
+
+      const sessionUser = getStoredSessionUser();
+      const token = getStoredToken();
+      if (!sessionUser || !token || sessionUser.role === 'it_admin') {
+        setChannels([]);
+        channelsRef.current = [];
+        return [];
+      }
+
+      const promise = (async (): Promise<Channel[]> => {
+        try {
+          const res = await getChannelsApi();
+          const incomingList = Array.isArray(res.data) ? res.data : [];
+          const mergedList = incomingList.map((ch) => {
+            const rosterSnap = rosterChannelByIdRef.current[ch.id];
+            const isAdmin = isUserCourseAdmin(ch, sessionUser);
+            if (isAdmin && rosterSnap?.pending_requests) {
+              return {
+                ...ch,
+                members_count: rosterSnap.members_count ?? ch.members_count,
+                pending_requests: rosterSnap.pending_requests,
+              };
+            }
+            return ch;
+          });
+          setChannels(mergedList);
+          channelsRef.current = mergedList;
+
+          // Keep non-admin roster snapshots in sync with latest membership status
+          setRosterChannelById((prev) => {
+            let mutated = false;
+            const next = { ...prev };
+            for (const ch of incomingList) {
+              const snap = next[ch.id];
+              if (!snap) continue;
+              if (!isUserCourseAdmin(ch, sessionUser)) {
+                const isStillApproved = (ch.roster || []).some(
+                  (m) =>
+                    Number(m.id) === Number(sessionUser.id) ||
+                    m.institutional_id === sessionUser.institutional_id
+                );
+                if (!isStillApproved) {
+                  delete next[ch.id];
+                  mutated = true;
+                }
+              }
+            }
+            if (mutated) {
+              rosterChannelByIdRef.current = next;
+              return next;
+            }
+            return prev;
+          });
+
+          return mergedList;
+        } catch {
+          return channelsRef.current;
+        } finally {
+          refreshChannelsInFlightRef.current = null;
+        }
+      })();
+
+      refreshChannelsInFlightRef.current = promise;
+      return promise;
+    },
+    []
+  );
 
   const scheduleDebouncedChannelRefresh = useCallback(() => {
     if (typeof document !== 'undefined' && document.hidden) {
@@ -271,6 +431,36 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
       void refreshChannels();
     }, 1500 + jitterMs);
   }, [refreshChannels]);
+
+  const refreshAdminHubRosters = useCallback(() => {
+    if (typeof document !== 'undefined' && document.hidden) {
+      pendingVisibilityRefreshRef.current = true;
+      return;
+    }
+    const sessionUser = getStoredSessionUser();
+    if (!sessionUser || sessionUser.role === 'it_admin') return;
+
+    const topHubs = getTopLevelCourseHubs(channelsRef.current);
+    const adminHubIds = new Set<number>();
+    for (const hub of topHubs) {
+      if (isUserCourseAdmin(hub, sessionUser)) {
+        adminHubIds.add(Number(hub.id));
+      }
+    }
+    for (const key of Object.keys(rosterChannelByIdRef.current)) {
+      const numericId = Number(key);
+      if (numericId > 0) {
+        const hub = channelsRef.current.find((c) => Number(c.id) === numericId);
+        if (hub && isUserCourseAdmin(hub, sessionUser)) {
+          adminHubIds.add(numericId);
+        }
+      }
+    }
+
+    adminHubIds.forEach((hubId) => {
+      void refreshChannelRoster(hubId);
+    });
+  }, [refreshChannelRoster]);
 
   const checkUnacknowledgedUrgentAnnouncement = useCallback(async () => {
     if (typeof document !== 'undefined' && document.hidden) {
@@ -353,6 +543,9 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
     setUserState(GUEST_USER_PLACEHOLDER);
     setIsAuthenticated(false);
     setChannels([]);
+    channelsRef.current = [];
+    setRosterChannelById({});
+    rosterChannelByIdRef.current = {};
     setUrgentPopupAnnouncement(null);
   }, []);
 
@@ -378,6 +571,7 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
       void checkUnacknowledgedUrgentAnnouncement();
     } else {
       setChannels([]);
+      channelsRef.current = [];
     }
     void refreshPersistenceStatus();
 
@@ -390,6 +584,7 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
           setIsAuthenticated(true);
           if (res.data.role === 'it_admin') {
             setChannels([]);
+            channelsRef.current = [];
           }
         }
       })
@@ -416,14 +611,22 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
     }
   }, [isAuthReady, isAuthenticated, pathname, router]);
 
-  // Real-time synchronization via Laravel Reverb WebSockets + SSE + BroadcastChannel + fallback polling
+  // Compute administered Course Hub IDs so Course Admins subscribe to all hubs they administer
+  const adminCourseHubIdsKey = getTopLevelCourseHubs(channels)
+    .filter((hub) => isUserCourseAdmin(hub, user))
+    .map((hub) => Number(hub.id))
+    .sort((a, b) => a - b)
+    .join(',');
+
+  // Real-time synchronization via Laravel Reverb WebSockets + SSE + BroadcastChannel
   useEffect(() => {
     if (typeof window === 'undefined' || !isAuthenticated) return;
 
     const handleVisibilityChange = () => {
-      if (!document.hidden && pendingVisibilityRefreshRef.current) {
+      if (!document.hidden) {
         pendingVisibilityRefreshRef.current = false;
-        void refreshChannels();
+        void refreshChannels({ forceImmediate: true });
+        refreshAdminHubRosters();
         void checkUnacknowledgedUrgentAnnouncement();
         setAnnouncementVersion((v) => v + 1);
       }
@@ -455,6 +658,84 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
               };
             })
           );
+        }
+        return;
+      }
+
+      if (event.type === 'membership.changed') {
+        const targetChannelId = Number(event.channel_id || 0);
+        const targetUserId = Number(event.target_user_id || 0);
+        const isCurrentUserTarget =
+          targetUserId > 0 &&
+          Number(activeUser.id) > 0 &&
+          targetUserId === Number(activeUser.id);
+
+        if (isCurrentUserTarget) {
+          const dedupeKey = `${targetChannelId}:${targetUserId}:${event.action || ''}`;
+          const lastShownAt =
+            recentMembershipToastKeysRef.current.get(dedupeKey) || 0;
+          const nowMs = Date.now();
+          const shouldNotifyToast = nowMs - lastShownAt > 2500;
+          if (shouldNotifyToast) {
+            recentMembershipToastKeysRef.current.set(dedupeKey, nowMs);
+          }
+
+          void refreshChannels({ forceImmediate: true }).then((freshList) => {
+            if (!shouldNotifyToast) return;
+            const matchedHub =
+              freshList.find((c) => Number(c.id) === targetChannelId) ||
+              channelsRef.current.find(
+                (c) => Number(c.id) === targetChannelId
+              ) ||
+              rosterChannelByIdRef.current[targetChannelId];
+            const hubLabel = matchedHub
+              ? formatCourseHubName(matchedHub)
+              : 'Course Hub';
+
+            if (event.action === 'approved') {
+              showToast(
+                `Your request to join ${hubLabel} was approved`,
+                'success'
+              );
+              if (targetChannelId > 0) {
+                void refreshChannelRoster(targetChannelId);
+              }
+            } else if (event.action === 'rejected') {
+              showToast(
+                `Your request to join ${hubLabel} was declined`,
+                'info'
+              );
+              if (targetChannelId > 0) {
+                setRosterChannelById((prev) => {
+                  if (!prev[targetChannelId]) return prev;
+                  const next = { ...prev };
+                  delete next[targetChannelId];
+                  rosterChannelByIdRef.current = next;
+                  return next;
+                });
+              }
+            } else if (event.action === 'added') {
+              showToast(`You were added to ${hubLabel}`, 'success');
+              if (targetChannelId > 0) {
+                void refreshChannelRoster(targetChannelId);
+              }
+            }
+          });
+        }
+
+        if (targetChannelId > 0) {
+          const hub = channelsRef.current.find(
+            (c) => Number(c.id) === targetChannelId
+          );
+          if (
+            (hub && isUserCourseAdmin(hub, activeUser)) ||
+            Boolean(rosterChannelByIdRef.current[targetChannelId])
+          ) {
+            void refreshChannelRoster(targetChannelId);
+          }
+          if (!isCurrentUserTarget) {
+            scheduleDebouncedChannelRefresh();
+          }
         }
         return;
       }
@@ -521,6 +802,18 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
         event.type === 'channel.created' ||
         event.type === 'channel.updated'
       ) {
+        const targetChannelId = Number(event.channel_id || 0);
+        if (targetChannelId > 0) {
+          const hub = channelsRef.current.find(
+            (c) => Number(c.id) === targetChannelId
+          );
+          if (
+            (hub && isUserCourseAdmin(hub, activeUser)) ||
+            Boolean(rosterChannelByIdRef.current[targetChannelId])
+          ) {
+            void refreshChannelRoster(targetChannelId);
+          }
+        }
         scheduleDebouncedChannelRefresh();
         return;
       }
@@ -541,13 +834,21 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
       setAnnouncementVersion((v) => v + 1);
     };
 
-    // 1. Laravel Reverb (Laravel Echo + Pusher-js WebSocket subscription)
+    const handleRealtimeReconnect = () => {
+      void refreshChannels({ forceImmediate: true });
+      refreshAdminHubRosters();
+      void checkUnacknowledgedUrgentAnnouncement();
+    };
+
+    // 1. Laravel Reverb: Global + Private User (`clarify.user.{id}`) subscription
     const unsubscribeReverb = subscribeGlobalReverb(
       (payload: ReverbBroadcastPayload) => {
         const normalizedEvent: RealtimeEvent = {
           revision: Date.now(),
           type: payload.type || 'db.changed',
           channel_id: payload.channel_id,
+          target_user_id: payload.target_user_id,
+          action: payload.action,
           actor_id: payload.actor_id,
           announcement: payload.announcement,
           message: payload.message,
@@ -556,19 +857,63 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
         };
         handleIncomingRealtimeEvent(normalizedEvent);
       },
-      user.id
+      user.id,
+      handleRealtimeReconnect
     );
 
+    // 1b. Subscribe to private `clarify.channel.{id}` for EVERY Course Hub the current user administers
+    const adminHubIds = adminCourseHubIdsKey
+      ? adminCourseHubIdsKey
+          .split(',')
+          .map((s) => Number(s))
+          .filter((n) => n > 0)
+      : [];
+
+    const adminHubUnsubscribes = adminHubIds.map((hubId) => {
+      // Ensure initial roster & pending_requests snapshot is loaded for each administered hub
+      if (!rosterChannelByIdRef.current[hubId]) {
+        void refreshChannelRoster(hubId);
+      }
+      return subscribeChannelReverb(hubId, (payload: ReverbBroadcastPayload) => {
+        // Ignore chat.message here if MessengerChatBox handles active chat, except for updating preview or membership/channel updates
+        const normalizedEvent: RealtimeEvent = {
+          revision: Date.now(),
+          type: payload.type || 'channel.updated',
+          channel_id: payload.channel_id ?? hubId,
+          target_user_id: payload.target_user_id,
+          action: payload.action,
+          actor_id: payload.actor_id,
+          announcement: payload.announcement,
+          message: payload.message,
+          thread: payload.thread,
+          timestamp: payload.timestamp || new Date().toISOString(),
+        };
+        handleIncomingRealtimeEvent(normalizedEvent);
+      });
+    });
+
     // 2. Cross-tab BroadcastChannel + Same-tab CustomEvent for instant zero-latency local browser sync
-    const processMutationPayload = (msgData: {
-      endpoint?: string;
-      data?: Record<string, unknown>;
-    }) => {
+    const processMutationPayload = (
+      msgData: {
+        endpoint?: string;
+        data?: Record<string, unknown>;
+        requestBody?: Record<string, unknown>;
+      },
+      isFromCrossTab = false
+    ) => {
       const endpoint = String(msgData?.endpoint || '');
       let evType: RealtimeEvent['type'] = 'db.changed';
       let announcement: Announcement | undefined;
       let message: RealtimeEvent['message'];
       let thread: RealtimeEvent['thread'];
+      let channelId: number | undefined;
+      let targetUserId: number | undefined;
+      let membershipAction: RealtimeEvent['action'] | undefined;
+
+      const channelMatch = endpoint.match(/\/channels\/(\d+)/);
+      if (channelMatch) {
+        channelId = Number(channelMatch[1]);
+      }
 
       if (
         endpoint.includes('/announcements') &&
@@ -586,6 +931,38 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
       } else if (endpoint.includes('/threads')) {
         evType = 'thread.updated';
         thread = msgData?.data as unknown as RealtimeEvent['thread'];
+      } else if (
+        channelMatch &&
+        (endpoint.endsWith('/members') || endpoint.endsWith('/join'))
+      ) {
+        // Only synthesize membership.changed on cross-tab BroadcastChannel events so same-tab doesn't double-fire
+        if (isFromCrossTab) {
+          evType = 'membership.changed';
+          const rawAction = String(msgData?.requestBody?.action || '');
+          if (endpoint.endsWith('/join')) {
+            membershipAction = 'requested';
+          } else if (rawAction === 'approve') {
+            membershipAction = 'approved';
+          } else if (rawAction === 'reject') {
+            membershipAction = 'rejected';
+          } else if (rawAction === 'remove') {
+            membershipAction = 'removed';
+          } else if (rawAction === 'add') {
+            membershipAction = 'added';
+          }
+          const targetInstId = String(
+            msgData?.requestBody?.institutional_id || ''
+          );
+          const activeUser = getStoredUser();
+          if (
+            targetInstId &&
+            activeUser.institutional_id === targetInstId
+          ) {
+            targetUserId = activeUser.id;
+          }
+        } else {
+          evType = 'channel.updated';
+        }
       } else if (endpoint.includes('/channels')) {
         evType = 'channel.updated';
       }
@@ -594,9 +971,12 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
         revision: Date.now(),
         type: evType,
         channel_id:
+          channelId ||
           announcement?.channel_id ||
           message?.channel_id ||
           thread?.channel_id,
+        target_user_id: targetUserId,
+        action: membershipAction,
         announcement,
         message,
         thread,
@@ -608,9 +988,10 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
       const customEv = ev as CustomEvent<{
         endpoint?: string;
         data?: Record<string, unknown>;
+        requestBody?: Record<string, unknown>;
       }>;
       if (customEv.detail) {
-        processMutationPayload(customEv.detail);
+        processMutationPayload(customEv.detail, false);
       }
     };
     window.addEventListener('clarify_local_mutation', handleLocalMutationEvent);
@@ -625,7 +1006,9 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
               msgEvent.data as {
                 endpoint?: string;
                 data?: Record<string, unknown>;
-              }
+                requestBody?: Record<string, unknown>;
+              },
+              true
             );
           }
         };
@@ -638,10 +1021,17 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
     const isUsingLocalNextApi = API_BASE_URL.startsWith('/');
     let eventSource: EventSource | null = null;
     let pollInterval: ReturnType<typeof setInterval> | null = null;
+    let sseConnectedOnce = false;
 
     if (isUsingLocalNextApi && 'EventSource' in window) {
       try {
         eventSource = new EventSource('/api/v1/realtime/stream');
+        eventSource.onopen = () => {
+          if (sseConnectedOnce) {
+            handleRealtimeReconnect();
+          }
+          sseConnectedOnce = true;
+        };
         eventSource.onmessage = (e) => {
           try {
             const payload = JSON.parse(e.data) as RealtimeEvent;
@@ -678,12 +1068,9 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
             const hadPriorRevision = lastRevisionRef.current > 0;
             lastRevisionRef.current = data.revision;
             if (hadPriorRevision) {
-              const latestEv = data.events[data.events.length - 1] || {
-                revision: data.revision,
-                type: 'db.changed',
-                timestamp: new Date().toISOString(),
-              };
-              handleIncomingRealtimeEvent(latestEv);
+              for (const ev of data.events) {
+                handleIncomingRealtimeEvent(ev);
+              }
             }
           }
         } catch {
@@ -694,6 +1081,7 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
 
     return () => {
       unsubscribeReverb();
+      adminHubUnsubscribes.forEach((unsub) => unsub());
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       if (debouncedRefreshTimerRef.current) {
         clearTimeout(debouncedRefreshTimerRef.current);
@@ -719,10 +1107,14 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
   }, [
     isAuthenticated,
     user.id,
+    adminCourseHubIdsKey,
     refreshChannels,
+    refreshChannelRoster,
+    refreshAdminHubRosters,
     scheduleDebouncedChannelRefresh,
     checkUnacknowledgedUrgentAnnouncement,
     notifyEventListeners,
+    showToast,
   ]);
 
   const setUser = useCallback(
@@ -733,10 +1125,13 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
       setIsAuthReady(true);
       dismissedUrgentIdsRef.current.clear();
       if (nextUser.role !== 'it_admin') {
-        void refreshChannels();
+        void refreshChannels({ forceImmediate: true });
         void checkUnacknowledgedUrgentAnnouncement();
       } else {
         setChannels([]);
+        channelsRef.current = [];
+        setRosterChannelById({});
+        rosterChannelByIdRef.current = {};
         setUrgentPopupAnnouncement(null);
       }
       setAnnouncementVersion((v) => v + 1);
@@ -807,6 +1202,10 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
         subscribeRealtimeEvents,
         channels,
         refreshChannels,
+        rosterChannelById,
+        isLoadingRosterById,
+        refreshChannelRoster,
+        setRosterChannelSnapshot,
         announcementVersion,
         triggerAnnouncementRefresh,
         toasts,

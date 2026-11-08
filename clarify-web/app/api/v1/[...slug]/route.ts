@@ -67,6 +67,8 @@ function classifyMutationEvent(
 ): {
   type: RealtimeEvent['type'];
   channel_id?: number;
+  target_user_id?: number;
+  action?: RealtimeEvent['action'];
   announcement?: RealtimeEvent['announcement'];
   message?: RealtimeEvent['message'];
   thread?: RealtimeEvent['thread'];
@@ -144,8 +146,28 @@ function classifyMutationEvent(
   if (apiPath === '/channels') {
     return { type: 'channel.created' };
   }
-  if (/^\/channels\/\d+\/(join|members)$/.test(apiPath)) {
-    return { type: 'channel.updated' };
+  const joinOrMembersMatch = apiPath.match(/^\/channels\/(\d+)\/(join|members)$/);
+  if (joinOrMembersMatch) {
+    const channelId = Number(joinOrMembersMatch[1]);
+    const subRoute = joinOrMembersMatch[2];
+    const rawAction = String(body.action || '');
+    let action: RealtimeEvent['action'] = 'requested';
+    if (subRoute === 'members') {
+      if (rawAction === 'approve') action = 'approved';
+      else if (rawAction === 'reject') action = 'rejected';
+      else if (rawAction === 'remove') action = 'removed';
+      else action = 'added';
+    }
+    const targetUserId =
+      typeof responseBody?.target_user_id === 'number'
+        ? responseBody.target_user_id
+        : undefined;
+    return {
+      type: 'membership.changed',
+      channel_id: channelId,
+      target_user_id: targetUserId,
+      action,
+    };
   }
   if (
     apiPath.startsWith('/admin/') ||
@@ -298,10 +320,17 @@ async function handleRoute(
     if (ev) {
       emitRealtimeEvent(ev.type, {
         channel_id: ev.channel_id,
+        target_user_id: ev.target_user_id,
+        action: ev.action,
         announcement: ev.announcement,
         message: ev.message,
         thread: ev.thread,
       });
+      if (ev.type === 'membership.changed') {
+        emitRealtimeEvent('channel.updated', {
+          channel_id: ev.channel_id,
+        });
+      }
     }
   }
 
