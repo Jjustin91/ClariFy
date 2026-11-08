@@ -3,7 +3,6 @@
 namespace App\Http\Controllers\Api\V1;
 
 use App\Events\RealtimeStateUpdated;
-use App\Http\Controllers\Controller;
 use App\Models\Channel;
 use App\Models\Message;
 use App\Policies\ChannelPolicy;
@@ -20,7 +19,7 @@ use Illuminate\Support\Str;
  * so chat messages persist in PostgreSQL alongside Q&A threads while keeping
  * Q&A inquiries (which use real hashtags like `#Midterm`) cleanly separated.
  */
-class ChannelChatController extends Controller
+class ChannelChatController
 {
     /**
      * Allowed file extensions for Course Hub chat attachments (image, document, voice note).
