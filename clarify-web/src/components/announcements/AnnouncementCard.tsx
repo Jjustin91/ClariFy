@@ -12,13 +12,14 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
-import type { Announcement } from '../../types/api';
+import type { Announcement, ReadReach } from '../../types/api';
 import { useClarify } from '../../context/ClarifyContext';
 import {
   acknowledgeAnnouncementApi,
   deleteAnnouncementApi,
 } from '../../lib/api-client';
 import {
+  calculateAcknowledgedReadReach,
   canPublishOrManageAnnouncements,
   parseAnnouncementAttachment,
 } from '../../lib/domain-logic';
@@ -58,6 +59,20 @@ export function AnnouncementCard({
   const [isAckLoading, setIsAckLoading] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isLightboxOpen, setIsLightboxOpen] = useState(false);
+  const [optimisticReadReach, setOptimisticReadReach] =
+    useState<ReadReach | null>(null);
+
+  React.useEffect(() => {
+    setOptimisticReadReach(null);
+  }, [
+    announcement.id,
+    announcement.read_reach.acknowledged_count,
+    announcement.read_reach.enrolled_total,
+    announcement.read_reach.percentage,
+    announcement.read_reach.has_current_user_acknowledged,
+  ]);
+
+  const effectiveReadReach = optimisticReadReach ?? announcement.read_reach;
 
   const {
     cleanContent,
@@ -70,8 +85,10 @@ export function AnnouncementCard({
     attachmentType === 'image' &&
       attachmentUrl &&
       (attachmentUrl.startsWith('data:image/') ||
+        attachmentUrl.startsWith('blob:') ||
         attachmentUrl.startsWith('http://') ||
         attachmentUrl.startsWith('https://') ||
+        attachmentUrl.startsWith('/storage/') ||
         attachmentUrl.startsWith('/assets/'))
   );
 
@@ -133,12 +150,17 @@ export function AnnouncementCard({
     if (
       attachmentUrl &&
       (attachmentUrl.startsWith('data:') ||
+        attachmentUrl.startsWith('blob:') ||
         attachmentUrl.startsWith('http://') ||
-        attachmentUrl.startsWith('https://'))
+        attachmentUrl.startsWith('https://') ||
+        attachmentUrl.startsWith('/storage/') ||
+        attachmentUrl.startsWith('/assets/'))
     ) {
       const link = document.createElement('a');
       link.href = attachmentUrl;
       link.download = fileName;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
@@ -158,12 +180,16 @@ export function AnnouncementCard({
   };
 
   const handleAcknowledge = async () => {
-    if (announcement.read_reach.has_current_user_acknowledged || isAckLoading) {
+    if (effectiveReadReach.has_current_user_acknowledged || isAckLoading) {
       return;
     }
     setIsAckLoading(true);
+    setOptimisticReadReach(calculateAcknowledgedReadReach(effectiveReadReach));
     try {
       const res = await acknowledgeAnnouncementApi(announcement.id);
+      if (res?.data?.read_reach) {
+        setOptimisticReadReach(res.data.read_reach);
+      }
       showToast(
         res.message || 'Announcement acknowledged. Read Reach updated.',
         'success'
@@ -171,6 +197,7 @@ export function AnnouncementCard({
       triggerAnnouncementRefresh();
       onUpdated?.();
     } catch {
+      setOptimisticReadReach(null);
       showToast('Failed to acknowledge announcement.', 'error');
     } finally {
       setIsAckLoading(false);
@@ -383,26 +410,34 @@ export function AnnouncementCard({
           {/* Footer Bar matching Oct 22 MVP Screenshot */}
           <div className="mt-4 pt-3 border-t border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div className="flex items-center gap-3">
-              <span className="text-xs font-bold text-slate-700 tabular-nums">
-                Read Reach:{' '}
-                <span className="text-ustp-navy font-extrabold">
-                  {announcement.read_reach.acknowledged_count} of{' '}
-                  {announcement.read_reach.enrolled_total}
-                </span>{' '}
-                enrolled students acknowledged (
-                {announcement.read_reach.percentage}%)
-              </span>
-              <div className="w-24 h-2 bg-slate-200 rounded-full overflow-hidden hidden sm:block">
-                <div
-                  className="h-full bg-ustp-gold transition-all duration-200"
-                  style={{
-                    width: `${Math.min(
-                      100,
-                      announcement.read_reach.percentage
-                    )}%`,
-                  }}
-                />
-              </div>
+              {effectiveReadReach.enrolled_total > 0 ? (
+                <>
+                  <span className="text-xs font-bold text-slate-700 tabular-nums">
+                    Read Reach:{' '}
+                    <span className="text-ustp-navy font-extrabold">
+                      {effectiveReadReach.acknowledged_count} of{' '}
+                      {effectiveReadReach.enrolled_total}
+                    </span>{' '}
+                    enrolled students acknowledged (
+                    {effectiveReadReach.percentage}%)
+                  </span>
+                  <div className="w-24 h-2 bg-slate-200 rounded-full overflow-hidden hidden sm:block">
+                    <div
+                      className="h-full bg-ustp-gold transition-all duration-200"
+                      style={{
+                        width: `${Math.min(100, effectiveReadReach.percentage)}%`,
+                      }}
+                    />
+                  </div>
+                </>
+              ) : (
+                <span className="text-xs font-bold text-slate-600 tabular-nums">
+                  Read Reach:{' '}
+                  <span className="text-ustp-navy font-extrabold">
+                    No enrolled students yet
+                  </span>
+                </span>
+              )}
             </div>
 
             {isStudent ? (
@@ -410,16 +445,16 @@ export function AnnouncementCard({
                 type="button"
                 onClick={handleAcknowledge}
                 disabled={
-                  announcement.read_reach.has_current_user_acknowledged ||
+                  effectiveReadReach.has_current_user_acknowledged ||
                   isAckLoading
                 }
                 className={`px-3.5 py-1.5 rounded text-xs font-bold transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                  announcement.read_reach.has_current_user_acknowledged
+                  effectiveReadReach.has_current_user_acknowledged
                     ? 'bg-emerald-100 text-emerald-900 border border-emerald-300 cursor-default'
                     : 'bg-ustp-navy text-white hover:opacity-95 focus-visible:outline-2 focus-visible:outline-ustp-gold'
                 }`}
               >
-                {announcement.read_reach.has_current_user_acknowledged ? (
+                {effectiveReadReach.has_current_user_acknowledged ? (
                   <span className="inline-flex items-center gap-1">
                     Acknowledged <Check className="w-3.5 h-3.5" />
                   </span>
@@ -585,11 +620,17 @@ export function AnnouncementCard({
         <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between gap-2">
           <div className="text-xs font-mono tabular-nums text-slate-600">
             Read Reach:{' '}
-            <span className="font-bold text-ustp-navy">
-              {announcement.read_reach.percentage}% (
-              {announcement.read_reach.acknowledged_count}/
-              {announcement.read_reach.enrolled_total})
-            </span>
+            {effectiveReadReach.enrolled_total > 0 ? (
+              <span className="font-bold text-ustp-navy">
+                {effectiveReadReach.percentage}% (
+                {effectiveReadReach.acknowledged_count}/
+                {effectiveReadReach.enrolled_total})
+              </span>
+            ) : (
+              <span className="font-bold text-ustp-navy">
+                No enrolled students yet
+              </span>
+            )}
           </div>
 
           {isStudent ? (
@@ -597,16 +638,16 @@ export function AnnouncementCard({
               type="button"
               onClick={handleAcknowledge}
               disabled={
-                announcement.read_reach.has_current_user_acknowledged ||
+                effectiveReadReach.has_current_user_acknowledged ||
                 isAckLoading
               }
               className={`px-2.5 py-1 rounded text-[11px] font-bold transition-colors cursor-pointer ${
-                announcement.read_reach.has_current_user_acknowledged
+                effectiveReadReach.has_current_user_acknowledged
                   ? 'bg-emerald-100 text-emerald-900 border border-emerald-300'
                   : 'bg-ustp-navy text-white hover:opacity-95'
               }`}
             >
-              {announcement.read_reach.has_current_user_acknowledged
+              {effectiveReadReach.has_current_user_acknowledged
                 ? 'Acknowledged ✓'
                 : 'Mark as Read / Acknowledge'}
             </button>

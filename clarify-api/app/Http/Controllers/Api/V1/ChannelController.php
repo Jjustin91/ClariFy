@@ -114,19 +114,77 @@ class ChannelController
                 ->groupBy('channel_id')
                 ->pluck('aggregate_count', 'channel_id');
 
-            // 3. Grouped approved member counts per channel (when roster is not eager-loaded)
+            // 3. Grouped approved member counts & student counts per channel (when roster is not eager-loaded)
             $memberCountsByChannel = [];
+            $studentCountsByChannel = [];
+            $facultyByChannel = [];
             if (! $withFullRoster) {
-                $memberCountsByChannel = DB::table('channel_user')
+                $countRows = DB::table('channel_user')
                     ->join('users', 'users.id', '=', 'channel_user.user_id')
                     ->whereIn('channel_user.channel_id', $channelIds)
                     ->where('channel_user.approval_status', 'approved')
                     ->where('users.verification_status', 'approved')
                     ->where('users.role', '!=', 'it_admin')
-                    ->selectRaw('channel_user.channel_id, COUNT(*) as aggregate_count')
+                    ->selectRaw("channel_user.channel_id, COUNT(*) as aggregate_count, SUM(CASE WHEN users.role = 'student' THEN 1 ELSE 0 END) as students_count")
                     ->groupBy('channel_user.channel_id')
-                    ->pluck('aggregate_count', 'channel_id')
-                    ->all();
+                    ->get();
+
+                foreach ($countRows as $row) {
+                    $cid = (int) $row->channel_id;
+                    $memberCountsByChannel[$cid] = (int) $row->aggregate_count;
+                    $studentCountsByChannel[$cid] = (int) $row->students_count;
+                }
+
+                $facultyRows = DB::table('channel_user')
+                    ->join('users', 'users.id', '=', 'channel_user.user_id')
+                    ->whereIn('channel_user.channel_id', $channelIds)
+                    ->where('channel_user.approval_status', 'approved')
+                    ->where('users.verification_status', 'approved')
+                    ->whereIn('users.role', ['faculty', 'dept_head'])
+                    ->select(['channel_user.channel_id', 'users.id', 'users.name', 'users.role'])
+                    ->orderBy('users.name')
+                    ->orderBy('users.id')
+                    ->get();
+
+                foreach ($facultyRows as $fRow) {
+                    $cid = (int) $fRow->channel_id;
+                    $facultyByChannel[$cid][] = [
+                        'id' => (int) $fRow->id,
+                        'name' => (string) $fRow->name,
+                        'role' => (string) $fRow->role,
+                    ];
+                }
+
+                // Fallback: if a channel has no approved faculty in channel_user, check if its creator is an approved faculty/dept_head
+                $creatorIdsToLoad = [];
+                foreach ($channels as $ch) {
+                    $cid = (int) $ch->id;
+                    if (empty($facultyByChannel[$cid]) && ! empty($ch->created_by)) {
+                        $creatorIdsToLoad[] = (int) $ch->created_by;
+                    }
+                }
+                if (! empty($creatorIdsToLoad)) {
+                    $creatorsById = User::query()
+                        ->whereIn('id', array_values(array_unique($creatorIdsToLoad)))
+                        ->where('verification_status', 'approved')
+                        ->whereIn('role', ['faculty', 'dept_head'])
+                        ->get(['id', 'name', 'role'])
+                        ->keyBy('id');
+
+                    foreach ($channels as $ch) {
+                        $cid = (int) $ch->id;
+                        if (empty($facultyByChannel[$cid]) && ! empty($ch->created_by)) {
+                            $creator = $creatorsById->get((int) $ch->created_by);
+                            if ($creator) {
+                                $facultyByChannel[$cid] = [[
+                                    'id' => (int) $creator->id,
+                                    'name' => (string) $creator->name,
+                                    'role' => (string) $creator->role,
+                                ]];
+                            }
+                        }
+                    }
+                }
             }
 
             // 4. Latest announcement per channel in 1 query
@@ -180,7 +238,11 @@ class ChannelController
                 $ch->precomputed_include_roster = $withFullRoster;
                 $ch->precomputed_open_threads_count = (int) ($openThreadCounts[$cid] ?? 0);
                 $ch->precomputed_chat_messages_count = $totalChatCount;
-                $ch->precomputed_members_count = (int) ($memberCountsByChannel[$cid] ?? 0);
+                if (! $withFullRoster) {
+                    $ch->precomputed_members_count = (int) ($memberCountsByChannel[$cid] ?? 0);
+                    $ch->precomputed_students_count = (int) ($studentCountsByChannel[$cid] ?? 0);
+                    $ch->precomputed_faculty = $facultyByChannel[$cid] ?? [];
+                }
                 $ch->precomputed_latest_announcement = $latestAnnouncementsByChannel->get($cid);
                 $ch->precomputed_latest_message = $bestLatestMsg;
             }

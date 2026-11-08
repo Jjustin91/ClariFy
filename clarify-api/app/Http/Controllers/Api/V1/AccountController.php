@@ -62,6 +62,7 @@ class AccountController
 
         ApiCache::forgetInstructors();
         ApiCache::forgetChannels();
+        ApiCache::forgetChannelAnnouncements(null);
         RealtimeStateUpdated::safeDispatch('admin.updated', null, (int) ($request->user()?->id ?? 0));
 
         return response()->json([
@@ -124,6 +125,7 @@ class AccountController
 
         ApiCache::forgetInstructors();
         ApiCache::forgetChannels();
+        ApiCache::forgetChannelAnnouncements(null);
         RealtimeStateUpdated::safeDispatch('admin.updated', null, (int) ($request->user()?->id ?? 0));
 
         return response()->json([
@@ -159,6 +161,7 @@ class AccountController
 
         ApiCache::forgetInstructors();
         ApiCache::forgetChannels();
+        ApiCache::forgetChannelAnnouncements(null);
 
         return response()->json([
             'message' => "PRISMS batch synchronization completed for {$validated['semester_code']}.",

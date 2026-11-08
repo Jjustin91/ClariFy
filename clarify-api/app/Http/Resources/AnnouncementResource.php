@@ -2,8 +2,11 @@
 
 namespace App\Http\Resources;
 
+use App\Policies\ChannelPolicy;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
 
 class AnnouncementResource extends JsonResource
 {
@@ -11,18 +14,16 @@ class AnnouncementResource extends JsonResource
     {
         $user = $request->user();
 
-        $channelMembersCount = $this->channel?->members_count !== null
-            ? (int) $this->channel->members_count
-            : (int) ($this->channel?->members()->count() ?? 0);
-        $enrolledTotal = max(42, $channelMembersCount);
+        if ($this->precomputed_enrolled_total !== null && $this->precomputed_acknowledged_count !== null) {
+            $enrolledTotal = max(0, (int) $this->precomputed_enrolled_total);
+            $acknowledgedCount = min($enrolledTotal, max(0, (int) $this->precomputed_acknowledged_count));
+        } else {
+            [$enrolledTotal, $acknowledgedCount] = $this->computeFallbackReadReach();
+        }
 
-        $acknowledgedCount = $this->reads_count !== null
-            ? (int) $this->reads_count
-            : (int) $this->reads()->count();
-
-        $percentage = $enrolledTotal > 0
-            ? round(($acknowledgedCount / $enrolledTotal) * 100, 1)
-            : 0.0;
+        $percentage = $this->precomputed_percentage !== null
+            ? (float) $this->precomputed_percentage
+            : ($enrolledTotal > 0 ? round(($acknowledgedCount / $enrolledTotal) * 100, 1) : 0.0);
 
         if ($this->has_current_user_acknowledged !== null) {
             $hasAcknowledged = (bool) $this->has_current_user_acknowledged;
@@ -47,6 +48,8 @@ class AnnouncementResource extends JsonResource
                 : "{$pubDept} Department";
         }
 
+        $resolvedAttachmentUrl = $this->resolvePublicAttachmentUrl($this->attachment_url);
+
         return [
             'id' => $this->id,
             'channel_id' => $this->channel_id,
@@ -56,7 +59,7 @@ class AnnouncementResource extends JsonResource
             'title' => $this->title,
             'subtitle' => $displaySubtitle,
             'content' => $this->content,
-            'attachment_url' => $this->attachment_url,
+            'attachment_url' => $resolvedAttachmentUrl,
             'attachment_name' => $this->attachment_name,
             'attachment_type' => $this->attachment_type,
             'tags' => $this->tags ?? [],
@@ -82,4 +85,116 @@ class AnnouncementResource extends JsonResource
             ],
         ];
     }
+
+    private function resolvePublicAttachmentUrl(?string $rawUrl): ?string
+    {
+        if ($rawUrl === null || trim($rawUrl) === '') {
+            return null;
+        }
+
+        $trimmed = trim($rawUrl);
+        if (
+            str_starts_with($trimmed, 'http://') ||
+            str_starts_with($trimmed, 'https://') ||
+            str_starts_with($trimmed, 'data:')
+        ) {
+            return $trimmed;
+        }
+
+        if (str_starts_with($trimmed, '/storage/')) {
+            return url($trimmed);
+        }
+
+        $relativePath = ltrim(preg_replace('#^storage/#', '', $trimmed), '/');
+
+        return url(Storage::disk('public')->url($relativePath));
+    }
+
+    /**
+     * Fallback approved-student Read Reach calculation when rendered outside AnnouncementController.
+     *
+     * @return array{0:int, 1:int}
+     */
+    private function computeFallbackReadReach(): array
+    {
+        $channel = $this->channel;
+        $channelType = $channel?->channel_type ?? 'course_hub';
+
+        if ($channel && $channelType === 'course_hub') {
+            $targetHubId = ChannelPolicy::resolveParentHubId($channel) ?? (int) $channel->id;
+
+            $enrolledTotal = (int) DB::table('channel_user')
+                ->join('users', 'users.id', '=', 'channel_user.user_id')
+                ->where('channel_user.channel_id', $targetHubId)
+                ->where('channel_user.approval_status', 'approved')
+                ->where('users.verification_status', 'approved')
+                ->where('users.role', 'student')
+                ->count(DB::raw('DISTINCT channel_user.user_id'));
+
+            if ($enrolledTotal === 0) {
+                return [0, 0];
+            }
+
+            $acknowledgedCount = (int) DB::table('announcement_reads')
+                ->join('users', 'users.id', '=', 'announcement_reads.user_id')
+                ->join('channel_user', function ($join) use ($targetHubId) {
+                    $join->on('channel_user.user_id', '=', 'announcement_reads.user_id')
+                        ->where('channel_user.channel_id', '=', $targetHubId)
+                        ->where('channel_user.approval_status', '=', 'approved');
+                })
+                ->where('announcement_reads.announcement_id', $this->id)
+                ->where('users.verification_status', 'approved')
+                ->where('users.role', 'student')
+                ->count(DB::raw('DISTINCT announcement_reads.user_id'));
+
+            return [$enrolledTotal, min($enrolledTotal, $acknowledgedCount)];
+        }
+
+        $scopeDept = ($channel && in_array($channelType, ['department', 'college'], true))
+            ? trim((string) ($channel->scope_department ?? ''))
+            : '';
+
+        if ($scopeDept !== '' && strtoupper($scopeDept) !== 'USTP' && strtoupper($scopeDept) !== 'ALL') {
+            $enrolledTotal = (int) DB::table('users')
+                ->join('academic_profiles', 'academic_profiles.user_id', '=', 'users.id')
+                ->where('users.verification_status', 'approved')
+                ->where('users.role', 'student')
+                ->whereRaw('UPPER(academic_profiles.department) = ?', [strtoupper($scopeDept)])
+                ->count(DB::raw('DISTINCT users.id'));
+
+            if ($enrolledTotal === 0) {
+                return [0, 0];
+            }
+
+            $acknowledgedCount = (int) DB::table('announcement_reads')
+                ->join('users', 'users.id', '=', 'announcement_reads.user_id')
+                ->join('academic_profiles', 'academic_profiles.user_id', '=', 'users.id')
+                ->where('announcement_reads.announcement_id', $this->id)
+                ->where('users.verification_status', 'approved')
+                ->where('users.role', 'student')
+                ->whereRaw('UPPER(academic_profiles.department) = ?', [strtoupper($scopeDept)])
+                ->count(DB::raw('DISTINCT announcement_reads.user_id'));
+
+            return [$enrolledTotal, min($enrolledTotal, $acknowledgedCount)];
+        }
+
+        $enrolledTotal = (int) DB::table('users')
+            ->where('verification_status', 'approved')
+            ->where('users.role', 'student')
+            ->count();
+
+        if ($enrolledTotal === 0) {
+            return [0, 0];
+        }
+
+        $acknowledgedCount = (int) DB::table('announcement_reads')
+            ->join('users', 'users.id', '=', 'announcement_reads.user_id')
+            ->where('announcement_reads.announcement_id', $this->id)
+            ->where('users.verification_status', 'approved')
+            ->where('users.role', 'student')
+            ->count(DB::raw('DISTINCT announcement_reads.user_id'));
+
+        return [$enrolledTotal, min($enrolledTotal, $acknowledgedCount)];
+    }
 }
+

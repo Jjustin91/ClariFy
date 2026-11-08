@@ -128,7 +128,10 @@ export function UrgentAnnouncementModal() {
           {attachmentType === 'image' &&
           attachmentUrl &&
           (attachmentUrl.startsWith('data:image/') ||
-            attachmentUrl.startsWith('http')) ? (
+            attachmentUrl.startsWith('blob:') ||
+            attachmentUrl.startsWith('http') ||
+            attachmentUrl.startsWith('/storage/') ||
+            attachmentUrl.startsWith('/assets/')) ? (
             <div className="rounded-lg overflow-hidden border border-slate-200 bg-slate-50 max-h-56 flex items-center justify-center">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
@@ -155,23 +158,31 @@ export function UrgentAnnouncementModal() {
                 <AlertTriangle className="w-3.5 h-3.5 text-amber-600" />
                 Live Acknowledgment Counter:
               </span>
-              <span className="font-mono font-extrabold text-ustp-navy tabular-nums">
-                {urgentPopupAnnouncement.read_reach.acknowledged_count} of{' '}
-                {urgentPopupAnnouncement.read_reach.enrolled_total} students (
-                {urgentPopupAnnouncement.read_reach.percentage}%)
-              </span>
+              {urgentPopupAnnouncement.read_reach.enrolled_total > 0 ? (
+                <span className="font-mono font-extrabold text-ustp-navy tabular-nums">
+                  {urgentPopupAnnouncement.read_reach.acknowledged_count} of{' '}
+                  {urgentPopupAnnouncement.read_reach.enrolled_total} students (
+                  {urgentPopupAnnouncement.read_reach.percentage}%)
+                </span>
+              ) : (
+                <span className="font-mono font-extrabold text-ustp-navy tabular-nums">
+                  No enrolled students yet
+                </span>
+              )}
             </div>
-            <div className="w-full h-2.5 bg-slate-200 rounded-full overflow-hidden">
-              <div
-                className="h-full bg-ustp-gold transition-all duration-300"
-                style={{
-                  width: `${Math.min(
-                    100,
-                    urgentPopupAnnouncement.read_reach.percentage
-                  )}%`,
-                }}
-              />
-            </div>
+            {urgentPopupAnnouncement.read_reach.enrolled_total > 0 && (
+              <div className="w-full h-2.5 bg-slate-200 rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-ustp-gold transition-all duration-300"
+                  style={{
+                    width: `${Math.min(
+                      100,
+                      urgentPopupAnnouncement.read_reach.percentage
+                    )}%`,
+                  }}
+                />
+              </div>
+            )}
           </div>
 
           {/* Actions */}

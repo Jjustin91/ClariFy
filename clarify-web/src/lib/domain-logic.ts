@@ -323,14 +323,71 @@ export function encodeAnnouncementContentWithAttachment(
 }
 
 /**
+ * Returns the formatted label of approved Faculty / Dept Heads in a Course Hub.
+ * Reads from `channel.faculty` returned by `ChannelResource` so it never depends on `channel.roster`.
+ */
+export function getChannelFacultyLabel(channel: Channel | undefined): string {
+  if (!channel) return 'No Faculty Assigned Yet';
+  if (Array.isArray(channel.faculty)) {
+    const names = Array.from(
+      new Set(
+        channel.faculty
+          .filter(
+            (m) =>
+              m &&
+              (m.role === 'faculty' || m.role === 'dept_head') &&
+              typeof m.name === 'string' &&
+              m.name.trim().length > 0
+          )
+          .map((m) => m.name.trim())
+      )
+    );
+    return names.length > 0 ? names.join(', ') : 'No Faculty Assigned Yet';
+  }
+  const rosterFaculty = Array.from(
+    new Set(
+      (channel.roster || [])
+        .filter((m) => m.role === 'faculty' || m.role === 'dept_head')
+        .map((m) => m.name.trim())
+        .filter(Boolean)
+    )
+  );
+  return rosterFaculty.length > 0
+    ? rosterFaculty.join(', ')
+    : 'No Faculty Assigned Yet';
+}
+
+/**
+ * Formats the Enrolled Roster summary from `members_count` and `students_count`
+ * (e.g., "7 members (6 students)"). Never uses `roster.length` unless `members_count` is omitted.
+ */
+export function formatEnrolledRosterSummary(
+  channel: Channel | undefined
+): string {
+  if (!channel) return '0 members (0 students)';
+  const membersCount =
+    typeof channel.members_count === 'number'
+      ? Math.max(0, channel.members_count)
+      : (channel.roster || []).length;
+  const studentsCount =
+    typeof channel.students_count === 'number'
+      ? Math.max(0, channel.students_count)
+      : (channel.roster || []).filter((m) => m.role === 'student').length;
+
+  const memberWord = membersCount === 1 ? 'member' : 'members';
+  const studentWord = studentsCount === 1 ? 'student' : 'students';
+  return `${membersCount} ${memberWord} (${studentsCount} ${studentWord})`;
+}
+
+/**
  * Parses an announcement's text content and attachment metadata, resolving either dedicated
- * `attachment_url` / `attachment_name` / `attachment_type` columns or an embedded attachment header.
+ * `attachment_url` / `attachment_name` / `attachment_type` columns or a legacy embedded header.
  */
 export function parseAnnouncementAttachment(announcement: {
   content: string;
   attachment_url?: string | null;
   attachment_name?: string | null;
-  attachment_type?: 'image' | 'document' | null;
+  attachment_type?: 'image' | 'pdf' | 'document' | null;
 }): {
   cleanContent: string;
   attachmentUrl: string | null;
@@ -339,7 +396,12 @@ export function parseAnnouncementAttachment(announcement: {
 } {
   const rawContent = announcement.content || '';
   let cleanContent = rawContent;
-  let embeddedMeta: AnnouncementAttachmentMeta | null = null;
+  let embeddedMeta: {
+    name?: string;
+    type?: 'image' | 'pdf' | 'document';
+    dataUrl?: string;
+    url?: string;
+  } | null = null;
 
   if (rawContent.startsWith(ANNOUNCEMENT_MEDIA_PREFIX)) {
     const newlineIdx = rawContent.indexOf('\n');
@@ -350,8 +412,8 @@ export function parseAnnouncementAttachment(announcement: {
     cleanContent =
       newlineIdx === -1 ? '' : rawContent.slice(newlineIdx + 1).trim();
     try {
-      const parsed = JSON.parse(jsonPart) as AnnouncementAttachmentMeta;
-      if (parsed && parsed.dataUrl) {
+      const parsed = JSON.parse(jsonPart);
+      if (parsed && (parsed.dataUrl || parsed.url)) {
         embeddedMeta = parsed;
       }
     } catch {
@@ -360,21 +422,36 @@ export function parseAnnouncementAttachment(announcement: {
   }
 
   const rawUrl = announcement.attachment_url || null;
-  // Prefer a real data URL or absolute URL over a synthetic /storage/memos/ placeholder path
+  const embeddedUrl = embeddedMeta?.dataUrl || embeddedMeta?.url || null;
   const isSyntheticStoragePath =
-    rawUrl && rawUrl.startsWith('/storage/memos/') && embeddedMeta?.dataUrl;
+    rawUrl && rawUrl.startsWith('/storage/memos/') && embeddedUrl;
 
   const attachmentUrl = isSyntheticStoragePath
-    ? embeddedMeta!.dataUrl
-    : embeddedMeta?.dataUrl || rawUrl;
+    ? embeddedUrl
+    : rawUrl || embeddedUrl;
 
   const attachmentName =
     announcement.attachment_name || embeddedMeta?.name || null;
 
   const inferType = (): 'image' | 'document' | null => {
-    if (announcement.attachment_type) return announcement.attachment_type;
-    if (embeddedMeta?.type) return embeddedMeta.type;
+    if (announcement.attachment_type === 'image') return 'image';
+    if (
+      announcement.attachment_type === 'pdf' ||
+      announcement.attachment_type === 'document'
+    ) {
+      return 'document';
+    }
+    if (embeddedMeta?.type === 'image') return 'image';
+    if (embeddedMeta?.type === 'pdf' || embeddedMeta?.type === 'document') {
+      return 'document';
+    }
     if (attachmentUrl?.startsWith('data:image/')) return 'image';
+    if (
+      attachmentUrl &&
+      /\.(png|jpe?g|gif|webp|svg|bmp)(\?.*)?$/i.test(attachmentUrl)
+    ) {
+      return 'image';
+    }
     if (
       attachmentName &&
       /\.(png|jpe?g|gif|webp|svg|bmp)$/i.test(attachmentName)
@@ -393,21 +470,38 @@ export function parseAnnouncementAttachment(announcement: {
   };
 }
 
-
 /**
  * Computes the updated ReadReach state when a student acknowledges an announcement.
- * Enforces idempotent acknowledgment and 1-decimal percentage calculation.
+ * Enforces idempotent acknowledgment, clamps acknowledged_count to enrolled_total,
+ * and returns 0 / 0% when enrolled_total is 0 (no artificial floor).
  */
 export function calculateAcknowledgedReadReach(current: ReadReach): ReadReach {
-  if (current.has_current_user_acknowledged) {
-    return current;
+  const enrolledTotal = Math.max(0, Number(current.enrolled_total) || 0);
+  if (enrolledTotal === 0) {
+    return {
+      acknowledged_count: 0,
+      enrolled_total: 0,
+      percentage: 0,
+      has_current_user_acknowledged: true,
+    };
   }
-  const enrolledTotal = Math.max(1, current.enrolled_total);
-  const nextCount = Math.min(enrolledTotal, current.acknowledged_count + 1);
+  const currentClamped = Math.min(
+    enrolledTotal,
+    Math.max(0, Number(current.acknowledged_count) || 0)
+  );
+  if (current.has_current_user_acknowledged) {
+    return {
+      acknowledged_count: currentClamped,
+      enrolled_total: enrolledTotal,
+      percentage: Number(((currentClamped / enrolledTotal) * 100).toFixed(1)),
+      has_current_user_acknowledged: true,
+    };
+  }
+  const nextCount = Math.min(enrolledTotal, currentClamped + 1);
   const percentage = Number(((nextCount / enrolledTotal) * 100).toFixed(1));
   return {
     acknowledged_count: nextCount,
-    enrolled_total: current.enrolled_total,
+    enrolled_total: enrolledTotal,
     percentage,
     has_current_user_acknowledged: true,
   };

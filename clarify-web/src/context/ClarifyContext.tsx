@@ -272,6 +272,8 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
           return {
             ...ch,
             members_count: data.members_count ?? ch.members_count,
+            students_count: data.students_count ?? ch.students_count,
+            faculty: data.faculty ?? ch.faculty,
             pending_requests: data.pending_requests ?? ch.pending_requests,
           };
         });
@@ -369,6 +371,8 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
               return {
                 ...ch,
                 members_count: rosterSnap.members_count ?? ch.members_count,
+                students_count: rosterSnap.students_count ?? ch.students_count,
+                faculty: rosterSnap.faculty ?? ch.faculty,
                 pending_requests: rosterSnap.pending_requests,
               };
             }
@@ -737,6 +741,7 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
             scheduleDebouncedChannelRefresh();
           }
         }
+        setAnnouncementVersion((v) => v + 1);
         return;
       }
 

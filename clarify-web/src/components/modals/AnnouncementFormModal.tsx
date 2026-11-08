@@ -16,7 +16,6 @@ import {
   updateAnnouncementApi,
 } from '../../lib/api-client';
 import {
-  encodeAnnouncementContentWithAttachment,
   formatCourseHubName,
   getFieldValidationError,
   getJoinedCourseHubs,
@@ -39,58 +38,6 @@ const AVAILABLE_TAGS = [
 ];
 
 const CAMPUS_DEPARTMENTS = ['CITC', 'CEA', 'COT', 'CSM'];
-
-function readImageAsCompressedDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const rawDataUrl = String(reader.result || '');
-      const img = new window.Image();
-      img.onload = () => {
-        try {
-          const maxDim = 1280;
-          let { width, height } = img;
-          if (width > maxDim || height > maxDim) {
-            if (width >= height) {
-              height = Math.round((height * maxDim) / width);
-              width = maxDim;
-            } else {
-              width = Math.round((width * maxDim) / height);
-              height = maxDim;
-            }
-          }
-          const canvas = document.createElement('canvas');
-          canvas.width = width;
-          canvas.height = height;
-          const ctx = canvas.getContext('2d');
-          if (!ctx) {
-            resolve(rawDataUrl);
-            return;
-          }
-          ctx.drawImage(img, 0, 0, width, height);
-          const outMime =
-            file.type === 'image/png' ? 'image/png' : 'image/jpeg';
-          resolve(canvas.toDataURL(outMime, 0.85));
-        } catch {
-          resolve(rawDataUrl);
-        }
-      };
-      img.onerror = () => resolve(rawDataUrl);
-      img.src = rawDataUrl;
-    };
-    reader.onerror = () => reject(new Error('Failed to read image file.'));
-    reader.readAsDataURL(file);
-  });
-}
-
-function readFileAsDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result || ''));
-    reader.onerror = () => reject(new Error('Failed to read document file.'));
-    reader.readAsDataURL(file);
-  });
-}
 
 export function AnnouncementFormModal() {
   const {
@@ -128,6 +75,8 @@ export function AnnouncementFormModal() {
   const [isUrgent, setIsUrgent] = useState(false);
   const [triggerSmsFallback, setTriggerSmsFallback] = useState(false);
   const [status, setStatus] = useState<'published' | 'draft'>('published');
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [previewObjectUrl, setPreviewObjectUrl] = useState<string | null>(null);
   const [attachmentUrl, setAttachmentUrl] = useState<string | null>(null);
   const [attachmentName, setAttachmentName] = useState<string | null>(null);
   const [attachmentType, setAttachmentType] = useState<'image' | 'document' | null>(
@@ -135,13 +84,20 @@ export function AnnouncementFormModal() {
   );
   const [removeExistingAttachment, setRemoveExistingAttachment] =
     useState(false);
-  const [isReadingFile, setIsReadingFile] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string[]>>({});
   const [generalError, setGeneralError] = useState<string | null>(null);
 
   const imageInputRef = React.useRef<HTMLInputElement | null>(null);
   const documentInputRef = React.useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (previewObjectUrl) {
+        URL.revokeObjectURL(previewObjectUrl);
+      }
+    };
+  }, [previewObjectUrl]);
 
   const wasOpenRef = React.useRef(false);
   const lastEditingIdRef = React.useRef<number | null>(null);
@@ -172,6 +128,11 @@ export function AnnouncementFormModal() {
     setGeneralError(null);
     setShowTagPicker(false);
     setRemoveExistingAttachment(false);
+    setSelectedFile(null);
+    setPreviewObjectUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return null;
+    });
     if (editingAnnouncement) {
       const parsed = parseAnnouncementAttachment(editingAnnouncement);
       setTitle(editingAnnouncement.title);
@@ -234,7 +195,7 @@ export function AnnouncementFormModal() {
     });
   };
 
-  const handleFileChange = async (
+  const handleFileChange = (
     e: React.ChangeEvent<HTMLInputElement>,
     kind: 'image' | 'document'
   ) => {
@@ -243,32 +204,42 @@ export function AnnouncementFormModal() {
     if (!file) return;
 
     if (file.size > 10 * 1024 * 1024) {
-      setGeneralError('Attachment file size must not exceed 10 MB.');
+      setFieldErrors((prev) => ({
+        ...prev,
+        attachment: ['Attachment file size must not exceed 10 MB.'],
+      }));
       return;
     }
 
     setGeneralError(null);
-    setIsReadingFile(true);
-    try {
-      const isImg =
-        kind === 'image' ||
-        file.type.startsWith('image/') ||
-        /\.(png|jpe?g|gif|webp|svg|bmp)$/i.test(file.name);
-      const dataUrl = isImg
-        ? await readImageAsCompressedDataUrl(file)
-        : await readFileAsDataUrl(file);
-      setAttachmentUrl(dataUrl);
-      setAttachmentName(file.name);
-      setAttachmentType(isImg ? 'image' : 'document');
-      setRemoveExistingAttachment(false);
-    } catch {
-      setGeneralError('Unable to read the selected file. Please try another file.');
-    } finally {
-      setIsReadingFile(false);
-    }
+    setFieldErrors((prev) => {
+      const next = { ...prev };
+      delete next.attachment;
+      return next;
+    });
+
+    const isImg =
+      kind === 'image' ||
+      file.type.startsWith('image/') ||
+      /\.(png|jpe?g|gif|webp)$/i.test(file.name);
+
+    setPreviewObjectUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return isImg ? URL.createObjectURL(file) : null;
+    });
+    setSelectedFile(file);
+    setAttachmentUrl(null);
+    setAttachmentName(file.name);
+    setAttachmentType(isImg ? 'image' : 'document');
+    setRemoveExistingAttachment(false);
   };
 
   const handleRemoveAttachment = () => {
+    setPreviewObjectUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return null;
+    });
+    setSelectedFile(null);
     setAttachmentUrl(null);
     setAttachmentName(null);
     setAttachmentType(null);
@@ -296,36 +267,31 @@ export function AnnouncementFormModal() {
 
     setIsSubmitting(true);
     const outgoingTags = isCampusWideMode ? selectedTags : [];
-    const hasActiveAttachment = Boolean(
-      !removeExistingAttachment && attachmentUrl && attachmentName
-    );
-    const encodedContent = hasActiveAttachment
-      ? encodeAnnouncementContentWithAttachment(trimmedContent, {
-          name: attachmentName!,
-          type: attachmentType || 'document',
-          dataUrl: attachmentUrl!,
-        })
-      : trimmedContent;
 
     try {
+      const formData = new FormData();
+      formData.set('title', trimmedTitle);
+      formData.set('content', trimmedContent);
+      formData.set('tags', JSON.stringify(outgoingTags));
+      formData.set('is_urgent', isUrgent ? '1' : '0');
+      formData.set('trigger_sms_fallback', triggerSmsFallback ? '1' : '0');
+      formData.set('status', status);
+
+      if (selectedFile) {
+        formData.set('attachment', selectedFile);
+        formData.set('attachment_name', selectedFile.name);
+        if (attachmentType) {
+          formData.set('attachment_type', attachmentType);
+        }
+      } else if (removeExistingAttachment) {
+        formData.set('remove_attachment', '1');
+      }
+
       if (editingAnnouncement) {
-        const res = await updateAnnouncementApi(editingAnnouncement.id, {
-          title: trimmedTitle,
-          content: encodedContent,
-          tags: outgoingTags,
-          is_urgent: isUrgent,
-          trigger_sms_fallback: triggerSmsFallback,
-          status,
-          attachment_url: hasActiveAttachment ? attachmentUrl : null,
-          attachment_name: hasActiveAttachment ? attachmentName : null,
-          attachment_type: hasActiveAttachment
-            ? attachmentType || 'document'
-            : null,
-          remove_attachment: !hasActiveAttachment,
-        });
+        formData.set('_method', 'PATCH');
+        const res = await updateAnnouncementApi(editingAnnouncement.id, formData);
         showToast(res.message || 'Announcement updated.', 'success');
       } else {
-        const formData = new FormData();
         formData.set(
           'scope_mode',
           isCampusWideMode ? 'campus_wide' : 'course_hub'
@@ -338,29 +304,8 @@ export function AnnouncementFormModal() {
           formData.set('channel_id', String(primaryId));
           formData.set('channel_ids', JSON.stringify(targetIds));
         }
-        formData.set('title', trimmedTitle);
-        formData.set('content', encodedContent);
-        formData.set('tags', JSON.stringify(outgoingTags));
-        formData.set('is_urgent', String(isUrgent));
-        formData.set('trigger_sms_fallback', String(triggerSmsFallback));
-        formData.set('status', status);
-        if (hasActiveAttachment && attachmentName) {
-          formData.set('attachment_name', attachmentName);
-        }
-        if (hasActiveAttachment && attachmentType) {
-          formData.set('attachment_type', attachmentType);
-        }
 
-        const res = await createAnnouncementApi(
-          formData,
-          hasActiveAttachment
-            ? {
-                attachment_url: attachmentUrl,
-                attachment_name: attachmentName,
-                attachment_type: attachmentType || 'document',
-              }
-            : undefined
-        );
+        const res = await createAnnouncementApi(formData);
         showToast(res.message || 'Announcement posted.', 'success');
       }
       triggerAnnouncementRefresh();
@@ -381,6 +326,8 @@ export function AnnouncementFormModal() {
 
   const titleError = getFieldValidationError(fieldErrors, 'title');
   const contentError = getFieldValidationError(fieldErrors, 'content');
+  const attachmentError = getFieldValidationError(fieldErrors, 'attachment');
+  const effectivePreviewUrl = previewObjectUrl || attachmentUrl;
 
   return (
     <div
@@ -628,12 +575,15 @@ export function AnnouncementFormModal() {
             <div className="p-2.5 bg-slate-50 border border-slate-200 rounded-md flex items-center justify-between gap-3">
               <div className="flex items-center gap-3 min-w-0">
                 {attachmentType === 'image' &&
-                attachmentUrl &&
-                (attachmentUrl.startsWith('data:image/') ||
-                  attachmentUrl.startsWith('http')) ? (
+                effectivePreviewUrl &&
+                (effectivePreviewUrl.startsWith('blob:') ||
+                  effectivePreviewUrl.startsWith('data:image/') ||
+                  effectivePreviewUrl.startsWith('http') ||
+                  effectivePreviewUrl.startsWith('/storage/') ||
+                  effectivePreviewUrl.startsWith('/assets/')) ? (
                   // eslint-disable-next-line @next/next/no-img-element
                   <img
-                    src={attachmentUrl}
+                    src={effectivePreviewUrl}
                     alt={attachmentName}
                     className="w-12 h-12 rounded object-cover border border-slate-300 shrink-0 bg-white"
                   />
@@ -669,18 +619,24 @@ export function AnnouncementFormModal() {
             </div>
           )}
 
+          {attachmentError && (
+            <p className="text-xs font-semibold text-red-600" role="alert">
+              {attachmentError}
+            </p>
+          )}
+
           {/* Hidden File Inputs for Image and Document */}
           <input
             ref={imageInputRef}
             type="file"
-            accept="image/*"
+            accept=".jpg,.jpeg,.png,.webp,.gif,image/jpeg,image/png,image/webp,image/gif"
             onChange={(e) => handleFileChange(e, 'image')}
             className="hidden"
           />
           <input
             ref={documentInputRef}
             type="file"
-            accept=".pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.txt,.csv,.zip,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation,text/plain,text/csv"
+            accept=".pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.txt,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation,text/plain"
             onChange={(e) => handleFileChange(e, 'document')}
             className="hidden"
           />
@@ -690,37 +646,36 @@ export function AnnouncementFormModal() {
             <div className="flex items-center gap-2 flex-wrap">
               <button
                 type="button"
-                disabled={isReadingFile || isSubmitting}
+                disabled={isSubmitting}
                 onClick={() => imageInputRef.current?.click()}
                 aria-label="Attach image"
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-ustp-text bg-slate-100 hover:bg-slate-200 rounded border border-slate-300 disabled:opacity-50 cursor-pointer"
               >
                 <ImageIcon className="w-4 h-4 text-ustp-navy" />
                 <span>
-                  {attachmentName && attachmentType === 'image'
+                  {!removeExistingAttachment &&
+                  attachmentName &&
+                  attachmentType === 'image'
                     ? 'Replace Image'
                     : 'Image'}
                 </span>
               </button>
               <button
                 type="button"
-                disabled={isReadingFile || isSubmitting}
+                disabled={isSubmitting}
                 onClick={() => documentInputRef.current?.click()}
                 aria-label="Attach document"
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-ustp-text bg-slate-100 hover:bg-slate-200 rounded border border-slate-300 disabled:opacity-50 cursor-pointer"
               >
                 <FileText className="w-4 h-4 text-ustp-navy" />
                 <span>
-                  {attachmentName && attachmentType === 'document'
+                  {!removeExistingAttachment &&
+                  attachmentName &&
+                  attachmentType === 'document'
                     ? 'Replace Document'
                     : 'Document'}
                 </span>
               </button>
-              {isReadingFile && (
-                <span className="text-xs text-slate-600 font-semibold">
-                  Reading file...
-                </span>
-              )}
             </div>
 
             <div className="flex items-center gap-2">
@@ -733,11 +688,13 @@ export function AnnouncementFormModal() {
               </button>
               <button
                 type="submit"
-                disabled={isSubmitting || isReadingFile}
+                disabled={isSubmitting}
                 className="px-6 py-2 text-xs font-bold bg-ustp-navy text-white rounded hover:opacity-95 disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-ustp-gold cursor-pointer"
               >
                 {isSubmitting
-                  ? 'Publishing...'
+                  ? selectedFile
+                    ? 'Uploading...'
+                    : 'Publishing...'
                   : editingAnnouncement
                   ? 'Save Changes'
                   : 'Post'}

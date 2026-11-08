@@ -55,7 +55,9 @@ import {
   canResolveOrPinThreads,
   canStudentModifyOwnInquiry,
   formatCourseHubName,
+  formatEnrolledRosterSummary,
   formatSubChannelDisplayName,
+  getChannelFacultyLabel,
   getFieldValidationError,
   getSubChannelsForHub,
   isThreadVisibleToUser,
@@ -862,29 +864,10 @@ export default function CourseHubPage() {
                   {activeChannel.scope_section || 'IT3R2'}
                 </p>
                 {(() => {
-                  const members = activeChannel.roster || [];
-                  const enrolledCount =
-                    activeChannel.members_count !== undefined
-                      ? activeChannel.members_count
-                      : activeChannel.roster !== undefined
-                      ? activeChannel.roster.length
-                      : 0;
-                  const facultyMembers = members.filter(
-                    (m) => m.role === 'faculty' || m.role === 'dept_head'
-                  );
-                  const instructorFallback =
-                    activeChannel.instructor_name &&
-                    !members.some(
-                      (m) =>
-                        m.name === activeChannel.instructor_name &&
-                        m.role === 'student'
-                    )
-                      ? activeChannel.instructor_name
-                      : null;
                   const currentFacultyLabel =
-                    facultyMembers.length > 0
-                      ? facultyMembers.map((f) => f.name).join(', ')
-                      : instructorFallback || 'No Faculty Assigned Yet';
+                    getChannelFacultyLabel(activeChannel);
+                  const enrolledRosterSummary =
+                    formatEnrolledRosterSummary(activeChannel);
 
                   return (
                     <>
@@ -900,8 +883,7 @@ export default function CourseHubPage() {
                         </span>
                       </p>
                       <p className="font-mono tabular-nums text-slate-400">
-                        Enrolled Roster: {enrolledCount}{' '}
-                        {enrolledCount === 1 ? 'member' : 'members'}
+                        Enrolled Roster: {enrolledRosterSummary}
                       </p>
                     </>
                   );

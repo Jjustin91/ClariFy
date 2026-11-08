@@ -7,29 +7,84 @@ import {
   canStudentModifyOwnInquiry,
   enforceFaqAnonymity,
   filterAndSortAnnouncements,
+  formatEnrolledRosterSummary,
   formatSubjectHashtag,
+  getChannelFacultyLabel,
   getFieldValidationError,
   isThreadVisibleToUser,
 } from './domain-logic';
-import type { Announcement, QaThread, User } from '../types/api';
+import type { Announcement, Channel, QaThread, User } from '../types/api';
 
-test('calculateAcknowledgedReadReach increments count and recalculates percentage accurately', () => {
+test('calculateAcknowledgedReadReach increments count, clamps to enrolled_total, and handles zero enrolled students', () => {
   const initial = {
     acknowledged_count: 1,
-    enrolled_total: 42,
-    percentage: 2.4,
+    enrolled_total: 6,
+    percentage: 16.7,
     has_current_user_acknowledged: false,
   };
 
   const updated = calculateAcknowledgedReadReach(initial);
   assert.equal(updated.acknowledged_count, 2);
-  assert.equal(updated.enrolled_total, 42);
-  assert.equal(updated.percentage, 4.8);
+  assert.equal(updated.enrolled_total, 6);
+  assert.equal(updated.percentage, 33.3);
   assert.equal(updated.has_current_user_acknowledged, true);
 
   // Calling again should be idempotent
   const duplicate = calculateAcknowledgedReadReach(updated);
   assert.equal(duplicate.acknowledged_count, 2);
+  assert.equal(duplicate.percentage, 33.3);
+
+  // Clamping: acknowledged_count never exceeds enrolled_total
+  const clamped = calculateAcknowledgedReadReach({
+    acknowledged_count: 6,
+    enrolled_total: 6,
+    percentage: 100,
+    has_current_user_acknowledged: false,
+  });
+  assert.equal(clamped.acknowledged_count, 6);
+  assert.equal(clamped.percentage, 100);
+
+  // Zero enrolled students returns 0 / 0% with no artificial floor
+  const zeroEnrolled = calculateAcknowledgedReadReach({
+    acknowledged_count: 0,
+    enrolled_total: 0,
+    percentage: 0,
+    has_current_user_acknowledged: false,
+  });
+  assert.equal(zeroEnrolled.acknowledged_count, 0);
+  assert.equal(zeroEnrolled.enrolled_total, 0);
+  assert.equal(zeroEnrolled.percentage, 0);
+  assert.equal(zeroEnrolled.has_current_user_acknowledged, true);
+});
+
+test('getChannelFacultyLabel and formatEnrolledRosterSummary use channel.faculty, members_count, and students_count', () => {
+  const hubWithFaculty: Channel = {
+    id: 7,
+    course_code: 'IT314',
+    name: '# IT314 SoftEng',
+    description: 'IT3R2 Scoped Course Hub',
+    channel_type: 'course_hub',
+    scope_college: 'CITC',
+    scope_department: 'CITC',
+    scope_section: 'IT3R2',
+    members_count: 7,
+    students_count: 6,
+    faculty: [{ id: 10492, name: 'Aki Hayakawa', role: 'faculty' }],
+    roster: [], // Even when roster is empty/self-only, faculty and counts are accurate
+  };
+
+  assert.equal(getChannelFacultyLabel(hubWithFaculty), 'Aki Hayakawa');
+  assert.equal(formatEnrolledRosterSummary(hubWithFaculty), '7 members (6 students)');
+
+  const hubWithoutFaculty: Channel = {
+    ...hubWithFaculty,
+    members_count: 1,
+    students_count: 1,
+    faculty: [],
+    instructor_name: 'Student Creator Name',
+  };
+  assert.equal(getChannelFacultyLabel(hubWithoutFaculty), 'No Faculty Assigned Yet');
+  assert.equal(formatEnrolledRosterSummary(hubWithoutFaculty), '1 member (1 student)');
 });
 
 test('enforceFaqAnonymity masks student author as Anonymous Student when is_pinned_faq is true', () => {
@@ -65,7 +120,7 @@ test('RBAC role helpers strictly enforce student vs faculty/admin boundaries', (
   assert.equal(canPublishOrManageAnnouncements('student'), false);
   assert.equal(canPublishOrManageAnnouncements('faculty'), true);
   assert.equal(canPublishOrManageAnnouncements('dept_head'), true);
-  assert.equal(canPublishOrManageAnnouncements('it_admin'), true);
+  assert.equal(canPublishOrManageAnnouncements('it_admin'), false);
 
   assert.equal(canResolveOrPinThreads('student'), false);
   assert.equal(canResolveOrPinThreads('faculty'), true);

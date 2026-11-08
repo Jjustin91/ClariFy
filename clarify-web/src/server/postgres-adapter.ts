@@ -2367,10 +2367,13 @@ export async function handlePostgresApiRequest(
       const content = String(body.content || '').trim();
       const scopeMode = String(body.scope_mode || '').trim();
       const isUrgent =
-        body.is_urgent === true || String(body.is_urgent) === 'true';
+        body.is_urgent === true ||
+        String(body.is_urgent) === 'true' ||
+        String(body.is_urgent) === '1';
       const triggerSms =
         body.trigger_sms_fallback === true ||
-        String(body.trigger_sms_fallback) === 'true';
+        String(body.trigger_sms_fallback) === 'true' ||
+        String(body.trigger_sms_fallback) === '1';
       const status =
         (body.status as 'published' | 'draft' | 'archived') || 'published';
       const attachmentName = body.attachment_name
@@ -2378,6 +2381,7 @@ export async function handlePostgresApiRequest(
         : null;
       const attachmentType = body.attachment_type as
         | 'image'
+        | 'pdf'
         | 'document'
         | null;
 
@@ -2520,8 +2524,6 @@ export async function handlePostgresApiRequest(
 
       const attachmentUrl = body.attachment_url
         ? String(body.attachment_url)
-        : attachmentName
-        ? `/storage/memos/${attachmentName}`
         : null;
       const publisherDeptSubtitle = `${
         activeUser.academic_profile?.department || 'CITC'
@@ -2545,8 +2547,8 @@ export async function handlePostgresApiRequest(
             publisherDeptSubtitle,
             content,
             attachmentUrl,
-            attachmentName,
-            attachmentType || null,
+            attachmentUrl ? attachmentName : null,
+            attachmentUrl ? attachmentType || null : null,
             JSON.stringify(parsedTags),
             isUrgent,
             isUrgent,
@@ -2639,23 +2641,40 @@ export async function handlePostgresApiRequest(
 
       const isUrgent =
         body.is_urgent !== undefined
-          ? Boolean(body.is_urgent)
+          ? body.is_urgent === true ||
+            String(body.is_urgent) === 'true' ||
+            String(body.is_urgent) === '1'
           : Boolean(prev.is_urgent);
       const isPinned = isUrgent ? true : Boolean(prev.is_pinned);
       const triggerSms =
         body.trigger_sms_fallback !== undefined
-          ? Boolean(body.trigger_sms_fallback)
+          ? body.trigger_sms_fallback === true ||
+            String(body.trigger_sms_fallback) === 'true' ||
+            String(body.trigger_sms_fallback) === '1'
           : Boolean(prev.trigger_sms_fallback);
       const nextStatus =
         (body.status as 'published' | 'draft' | 'archived') ||
         String(prev.status || 'published');
-      const nextTags = Array.isArray(body.tags)
-        ? JSON.stringify(body.tags.map(String))
-        : JSON.stringify(prev.tags || []);
+
+      let parsedNextTags = prev.tags || [];
+      if (Array.isArray(body.tags)) {
+        parsedNextTags = body.tags.map(String);
+      } else if (typeof body.tags === 'string') {
+        try {
+          const decoded = JSON.parse(body.tags);
+          if (Array.isArray(decoded)) {
+            parsedNextTags = decoded.map(String);
+          }
+        } catch {
+          parsedNextTags = prev.tags || [];
+        }
+      }
+      const nextTags = JSON.stringify(parsedNextTags);
 
       const removeAttachment =
         body.remove_attachment === true ||
-        String(body.remove_attachment) === 'true';
+        String(body.remove_attachment) === 'true' ||
+        String(body.remove_attachment) === '1';
       const nextAttachmentUrl = removeAttachment
         ? null
         : body.attachment_url !== undefined

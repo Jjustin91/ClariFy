@@ -421,4 +421,269 @@ class ChannelAuthorizationTest extends TestCase
         $this->assertCount(2, $studentRosterRes->json('data.roster'));
         $this->assertSame([], $studentRosterRes->json('data.pending_requests'));
     }
+
+    public function test_read_reach_counts_only_approved_enrolled_students_and_excludes_faculty_pending_and_removed(): void
+    {
+        $faculty = $this->createVerifiedUser('faculty', '10492', 'CITC');
+        $student1 = $this->createVerifiedUser('student', '2020100001', 'CITC');
+        $student2 = $this->createVerifiedUser('student', '2020100002', 'CITC');
+        $student3 = $this->createVerifiedUser('student', '2020100003', 'CITC');
+        $pendingStudent = $this->createVerifiedUser('student', '2020100004', 'CITC');
+        $hub = $this->createCourseHub($faculty, 'CITC');
+
+        DB::table('channel_user')->insert([
+            [
+                'channel_id' => $hub->id,
+                'user_id' => $faculty->id,
+                'can_publish' => true,
+                'approval_status' => 'approved',
+                'joined_at' => now(),
+            ],
+            [
+                'channel_id' => $hub->id,
+                'user_id' => $student1->id,
+                'can_publish' => false,
+                'approval_status' => 'approved',
+                'joined_at' => now(),
+            ],
+            [
+                'channel_id' => $hub->id,
+                'user_id' => $student2->id,
+                'can_publish' => false,
+                'approval_status' => 'approved',
+                'joined_at' => now(),
+            ],
+            [
+                'channel_id' => $hub->id,
+                'user_id' => $student3->id,
+                'can_publish' => false,
+                'approval_status' => 'approved',
+                'joined_at' => now(),
+            ],
+            [
+                'channel_id' => $hub->id,
+                'user_id' => $pendingStudent->id,
+                'can_publish' => false,
+                'approval_status' => 'pending',
+                'joined_at' => now(),
+            ],
+        ]);
+
+        // Faculty publishes an announcement (publisher read is recorded automatically)
+        Sanctum::actingAs($faculty);
+        $createRes = $this->postJson('/api/v1/announcements', [
+            'channel_id' => $hub->id,
+            'title' => 'Midterm Coverage',
+            'content' => 'Chapters 1 to 4.',
+        ])->assertStatus(201);
+
+        $annId = (int) $createRes->json('data.id');
+        // Faculty publisher acknowledgment is NOT counted toward student read_reach
+        $this->assertSame(3, $createRes->json('data.read_reach.enrolled_total'));
+        $this->assertSame(0, $createRes->json('data.read_reach.acknowledged_count'));
+        $this->assertSame(0, $createRes->json('data.read_reach.percentage'));
+
+        // Student 1 and Student 2 acknowledge
+        Sanctum::actingAs($student1);
+        $this->postJson("/api/v1/announcements/{$annId}/acknowledge")
+            ->assertStatus(200)
+            ->assertJsonPath('read_reach.acknowledged_count', 1)
+            ->assertJsonPath('read_reach.enrolled_total', 3)
+            ->assertJsonPath('read_reach.percentage', 33.3);
+
+        Sanctum::actingAs($student2);
+        $this->postJson("/api/v1/announcements/{$annId}/acknowledge")
+            ->assertStatus(200)
+            ->assertJsonPath('read_reach.acknowledged_count', 2)
+            ->assertJsonPath('read_reach.enrolled_total', 3)
+            ->assertJsonPath('read_reach.percentage', 66.7);
+
+        // Even if a pending student had a read row, they are not counted
+        DB::table('announcement_reads')->insert([
+            'announcement_id' => $annId,
+            'user_id' => $pendingStudent->id,
+            'acknowledged_at' => now(),
+        ]);
+
+        $feedRes = $this->getJson("/api/v1/announcements?channel_id={$hub->id}")
+            ->assertStatus(200);
+        $this->assertSame(2, $feedRes->json('data.0.read_reach.acknowledged_count'));
+        $this->assertSame(3, $feedRes->json('data.0.read_reach.enrolled_total'));
+        $this->assertSame(66.7, $feedRes->json('data.0.read_reach.percentage'));
+
+        // Removing student2 from the hub excludes their old read row and updates enrolled_total to 2
+        Sanctum::actingAs($faculty);
+        $this->postJson("/api/v1/channels/{$hub->id}/members", [
+            'institutional_id' => $student2->institutional_id,
+            'action' => 'remove',
+        ])->assertStatus(200);
+
+        $afterRemoveFeed = $this->getJson("/api/v1/announcements?channel_id={$hub->id}")
+            ->assertStatus(200);
+        $this->assertSame(1, $afterRemoveFeed->json('data.0.read_reach.acknowledged_count'));
+        $this->assertSame(2, $afterRemoveFeed->json('data.0.read_reach.enrolled_total'));
+        $this->assertSame(50, $afterRemoveFeed->json('data.0.read_reach.percentage'));
+    }
+
+    public function test_channel_resource_returns_approved_faculty_and_students_count(): void
+    {
+        $studentCreator = $this->createVerifiedUser('student', '2020202020', 'CITC');
+        $approvedFaculty = $this->createVerifiedUser('faculty', '10492', 'CITC');
+        $pendingFaculty = $this->createVerifiedUser('faculty', '10499', 'CITC');
+        $hub = $this->createCourseHub($studentCreator, 'CITC');
+
+        DB::table('channel_user')->insert([
+            [
+                'channel_id' => $hub->id,
+                'user_id' => $studentCreator->id,
+                'can_publish' => false,
+                'approval_status' => 'approved',
+                'joined_at' => now(),
+            ],
+            [
+                'channel_id' => $hub->id,
+                'user_id' => $approvedFaculty->id,
+                'can_publish' => true,
+                'approval_status' => 'approved',
+                'joined_at' => now(),
+            ],
+            [
+                'channel_id' => $hub->id,
+                'user_id' => $pendingFaculty->id,
+                'can_publish' => true,
+                'approval_status' => 'pending',
+                'joined_at' => now(),
+            ],
+        ]);
+
+        Sanctum::actingAs($studentCreator);
+        $channelsRes = $this->getJson('/api/v1/channels')->assertStatus(200);
+        $channelData = collect($channelsRes->json('data'))->firstWhere('id', $hub->id);
+
+        $this->assertNotNull($channelData);
+        $this->assertSame(2, $channelData['members_count']);
+        $this->assertSame(1, $channelData['students_count']);
+        $this->assertCount(1, $channelData['faculty']);
+        $this->assertSame($approvedFaculty->id, $channelData['faculty'][0]['id']);
+        $this->assertSame($approvedFaculty->name, $channelData['faculty'][0]['name']);
+        $this->assertSame('faculty', $channelData['faculty'][0]['role']);
+    }
+
+    public function test_announcement_attachments_upload_update_replace_remove_reject_executables_and_migrate(): void
+    {
+        \Illuminate\Support\Facades\Storage::fake('public');
+
+        $faculty = $this->createVerifiedUser('faculty', '10492', 'CITC');
+        $hub = $this->createCourseHub($faculty, 'CITC');
+        DB::table('channel_user')->insert([
+            'channel_id' => $hub->id,
+            'user_id' => $faculty->id,
+            'can_publish' => true,
+            'approval_status' => 'approved',
+            'joined_at' => now(),
+        ]);
+
+        Sanctum::actingAs($faculty);
+
+        // 1. Create announcement without attachment
+        $createRes = $this->postJson('/api/v1/announcements', [
+            'channel_id' => $hub->id,
+            'title' => 'Lab Guidelines',
+            'content' => 'Initial text body.',
+        ])->assertStatus(201);
+        $annId = (int) $createRes->json('data.id');
+
+        // 2. Reject .exe and .php uploads with 422 on attachment
+        $exeFile = \Illuminate\Http\UploadedFile::fake()->create('malware.exe', 128, 'application/x-msdownload');
+        $this->post("/api/v1/announcements/{$annId}", [
+            '_method' => 'PATCH',
+            'title' => 'Lab Guidelines',
+            'content' => 'Attempt exe upload',
+            'attachment' => $exeFile,
+        ], ['Accept' => 'application/json'])->assertStatus(422)->assertJsonValidationErrors(['attachment']);
+
+        $phpFile = \Illuminate\Http\UploadedFile::fake()->create('shell.php', 64, 'application/x-php');
+        $this->post("/api/v1/announcements/{$annId}", [
+            '_method' => 'PATCH',
+            'title' => 'Lab Guidelines',
+            'content' => 'Attempt php upload',
+            'attachment' => $phpFile,
+        ], ['Accept' => 'application/json'])->assertStatus(422)->assertJsonValidationErrors(['attachment']);
+
+        // 3. Update announcement with a 2 MB image via multipart POST + _method=PATCH
+        $image2Mb = \Illuminate\Http\UploadedFile::fake()->image('schedule.png', 400, 400)->size(2048);
+        $updateImgRes = $this->post("/api/v1/announcements/{$annId}", [
+            '_method' => 'PATCH',
+            'title' => 'Lab Guidelines Updated',
+            'content' => 'Please see the attached 2 MB schedule image.',
+            'attachment' => $image2Mb,
+        ], ['Accept' => 'application/json'])->assertStatus(200);
+
+        $firstStoredPath = \App\Models\Announcement::findOrFail($annId)->attachment_url;
+        $this->assertNotNull($firstStoredPath);
+        $this->assertStringStartsWith("announcements/{$hub->id}/", $firstStoredPath);
+        \Illuminate\Support\Facades\Storage::disk('public')->assertExists($firstStoredPath);
+        $this->assertSame('image', $updateImgRes->json('data.attachment_type'));
+        $this->assertSame('schedule.png', $updateImgRes->json('data.attachment_name'));
+
+        // Feed response must not contain any data: base64 strings
+        $feedJson = $this->getJson("/api/v1/announcements?channel_id={$hub->id}")
+            ->assertStatus(200)
+            ->getContent();
+        $this->assertStringNotContainsString('data:', (string) $feedJson);
+
+        // 4. Replace attachment with a PDF -> old image file is deleted from disk
+        $pdfFile = \Illuminate\Http\UploadedFile::fake()->create('syllabus.pdf', 512, 'application/pdf');
+        $replaceRes = $this->post("/api/v1/announcements/{$annId}", [
+            '_method' => 'PATCH',
+            'title' => 'Lab Guidelines PDF',
+            'content' => 'Replaced with PDF.',
+            'attachment' => $pdfFile,
+        ], ['Accept' => 'application/json'])->assertStatus(200);
+
+        $secondStoredPath = \App\Models\Announcement::findOrFail($annId)->attachment_url;
+        \Illuminate\Support\Facades\Storage::disk('public')->assertMissing($firstStoredPath);
+        \Illuminate\Support\Facades\Storage::disk('public')->assertExists($secondStoredPath);
+        $this->assertSame('pdf', $replaceRes->json('data.attachment_type'));
+
+        // 5. Remove attachment -> file is deleted and fields are null
+        $removeRes = $this->post("/api/v1/announcements/{$annId}", [
+            '_method' => 'PATCH',
+            'title' => 'Lab Guidelines Text Only',
+            'content' => 'Removed attachment.',
+            'remove_attachment' => '1',
+        ], ['Accept' => 'application/json'])->assertStatus(200);
+
+        \Illuminate\Support\Facades\Storage::disk('public')->assertMissing($secondStoredPath);
+        $this->assertNull($removeRes->json('data.attachment_url'));
+        $this->assertNull($removeRes->json('data.attachment_name'));
+        $this->assertNull($removeRes->json('data.attachment_type'));
+
+        // 6. Test announcements:migrate-attachments command idempotency
+        $tinyPngBase64 = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+        $legacyAnn = \App\Models\Announcement::create([
+            'channel_id' => $hub->id,
+            'published_by' => $faculty->id,
+            'title' => 'Legacy Embedded',
+            'content' => '__CLARIFY_ANN_MEDIA__' . json_encode([
+                'url' => $tinyPngBase64,
+                'name' => 'legacy.png',
+                'type' => 'image',
+            ]) . "\nLegacy body text.",
+            'published_at' => now(),
+        ]);
+
+        $this->artisan('announcements:migrate-attachments')->assertExitCode(0);
+        $legacyAnn->refresh();
+        $this->assertSame('Legacy body text.', $legacyAnn->content);
+        $this->assertStringStartsWith("announcements/{$hub->id}/", (string) $legacyAnn->attachment_url);
+        \Illuminate\Support\Facades\Storage::disk('public')->assertExists($legacyAnn->attachment_url);
+
+        $migratedPath = $legacyAnn->attachment_url;
+        // Second run is a no-op
+        $this->artisan('announcements:migrate-attachments')->assertExitCode(0);
+        $legacyAnn->refresh();
+        $this->assertSame($migratedPath, $legacyAnn->attachment_url);
+    }
 }
+

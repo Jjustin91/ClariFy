@@ -4,9 +4,11 @@ namespace App\Http\Resources;
 
 use App\Models\Channel;
 use App\Models\Message;
+use App\Models\User;
 use App\Policies\ChannelPolicy;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
+use Illuminate\Support\Facades\DB;
 
 class ChannelResource extends JsonResource
 {
@@ -36,6 +38,24 @@ class ChannelResource extends JsonResource
                 ->values();
 
             $membersCount = $approvedMembers->count();
+            $studentsCount = $approvedMembers
+                ->filter(fn ($m) => $m->role === 'student')
+                ->count();
+
+            $faculty = $approvedMembers
+                ->filter(fn ($m) => in_array($m->role, ['faculty', 'dept_head'], true))
+                ->sortBy('name', SORT_NATURAL | SORT_FLAG_CASE)
+                ->map(fn ($member) => [
+                    'id' => (int) $member->id,
+                    'name' => (string) $member->name,
+                    'role' => (string) $member->role,
+                ])
+                ->values()
+                ->all();
+
+            if (empty($faculty)) {
+                $faculty = $this->resolveCreatorFacultyFallback();
+            }
 
             $roster = $approvedMembers->map(fn ($member) => [
                 'id' => $member->id,
@@ -61,6 +81,32 @@ class ChannelResource extends JsonResource
                 : [];
         } else {
             $membersCount = (int) ($this->precomputed_members_count ?? 0);
+            $studentsCount = (int) ($this->precomputed_students_count ?? 0);
+
+            if (is_array($this->precomputed_faculty)) {
+                $faculty = $this->precomputed_faculty;
+            } else {
+                $targetHubId = $parentHubId ?? (int) $this->id;
+                $faculty = DB::table('channel_user')
+                    ->join('users', 'users.id', '=', 'channel_user.user_id')
+                    ->where('channel_user.channel_id', $targetHubId)
+                    ->where('channel_user.approval_status', 'approved')
+                    ->where('users.verification_status', 'approved')
+                    ->whereIn('users.role', ['faculty', 'dept_head'])
+                    ->orderBy('users.name')
+                    ->select(['users.id', 'users.name', 'users.role'])
+                    ->get()
+                    ->map(fn ($row) => [
+                        'id' => (int) $row->id,
+                        'name' => (string) $row->name,
+                        'role' => (string) $row->role,
+                    ])
+                    ->all();
+
+                if (empty($faculty)) {
+                    $faculty = $this->resolveCreatorFacultyFallback();
+                }
+            }
         }
 
         if (isset($this->precomputed_open_threads_count)) {
@@ -94,7 +140,10 @@ class ChannelResource extends JsonResource
                 ->first();
         }
 
-        $latestPreview = "{$this->instructor_name}: Scoped Course Hub active.";
+        $defaultInstructor = ! empty($faculty)
+            ? $faculty[0]['name']
+            : ($this->instructor_name ?? 'Course Hub');
+        $latestPreview = "{$defaultInstructor}: Scoped Course Hub active.";
         $latestAt = $this->created_at ? $this->created_at->diffForHumans(null, true, true) . ' ago' : 'Just now';
 
         $annTime = $latestAnnouncement?->published_at?->timestamp ?? 0;
@@ -111,7 +160,7 @@ class ChannelResource extends JsonResource
             $latestPreview = "{$senderName}: {$cleanText}";
             $latestAt = $latestMessage->created_at->diffForHumans(null, true, true) . ' ago';
         } elseif ($latestAnnouncement) {
-            $pubName = $latestAnnouncement->publisher?->name ?? $this->instructor_name ?? 'Faculty';
+            $pubName = $latestAnnouncement->publisher?->name ?? $defaultInstructor;
             $latestPreview = "{$pubName}: " . mb_strimwidth((string) $latestAnnouncement->content, 0, 95, '...');
             $latestAt = $latestAnnouncement->published_at->diffForHumans(null, true, true) . ' ago';
         }
@@ -130,6 +179,8 @@ class ChannelResource extends JsonResource
             'unread_count' => $openThreadsCount,
             'chat_messages_count' => $chatMessagesCount,
             'members_count' => $membersCount,
+            'students_count' => $studentsCount,
+            'faculty' => $faculty,
             'instructor_name' => $this->instructor_name ?? 'Aki Hayakawa',
             'latest_activity_preview' => $latestPreview,
             'latest_activity_at' => $latestAt,
@@ -137,5 +188,38 @@ class ChannelResource extends JsonResource
             'pending_requests' => $pendingRequests,
         ];
     }
+
+    /**
+     * If no approved faculty member exists in channel_user, falls back to the hub creator
+     * only when the creator is an approved faculty or dept_head.
+     *
+     * @return array<int, array{id:int, name:string, role:string}>
+     */
+    private function resolveCreatorFacultyFallback(): array
+    {
+        $creatorId = $this->created_by ? (int) $this->created_by : null;
+        if (! $creatorId) {
+            return [];
+        }
+
+        $creator = $this->relationLoaded('creator')
+            ? $this->creator
+            : User::select(['id', 'name', 'role', 'verification_status'])->find($creatorId);
+
+        if (
+            $creator &&
+            $creator->verification_status === 'approved' &&
+            in_array($creator->role, ['faculty', 'dept_head'], true)
+        ) {
+            return [[
+                'id' => (int) $creator->id,
+                'name' => (string) $creator->name,
+                'role' => (string) $creator->role,
+            ]];
+        }
+
+        return [];
+    }
 }
+
 

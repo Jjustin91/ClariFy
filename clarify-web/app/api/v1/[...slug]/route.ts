@@ -1,3 +1,6 @@
+import crypto from 'node:crypto';
+import fs from 'node:fs/promises';
+import path from 'node:path';
 import { NextRequest, NextResponse } from 'next/server';
 import {
   getPostgresStatusInfo,
@@ -12,8 +15,35 @@ import type { PersistenceStatus, RealtimeEvent } from '@/src/types/api';
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
+const ALLOWED_ATTACHMENT_EXTENSIONS = new Set([
+  'jpg',
+  'jpeg',
+  'png',
+  'webp',
+  'gif',
+  'pdf',
+  'doc',
+  'docx',
+  'ppt',
+  'pptx',
+  'xls',
+  'xlsx',
+  'txt',
+]);
+
+const FORBIDDEN_ATTACHMENT_MIMES = new Set([
+  'application/x-msdownload',
+  'application/x-executable',
+  'application/x-dosexec',
+  'application/x-sh',
+  'application/x-httpd-php',
+  'application/x-php',
+  'text/x-php',
+]);
+
 async function parseRequestBody(
-  req: NextRequest
+  req: NextRequest,
+  apiPath: string
 ): Promise<Record<string, unknown>> {
   if (req.method === 'GET' || req.method === 'HEAD') {
     return {};
@@ -24,6 +54,8 @@ async function parseRequestBody(
     if (contentType.includes('multipart/form-data')) {
       const formData = await req.formData();
       const obj: Record<string, unknown> = {};
+      let uploadedAttachmentFile: File | null = null;
+
       for (const [key, value] of formData.entries()) {
         if (typeof value === 'string') {
           obj[key] = value;
@@ -34,22 +66,59 @@ async function parseRequestBody(
           'arrayBuffer' in value
         ) {
           const fileObj = value as File;
-          obj[key] = fileObj.name;
-          if (!obj.attachment_name) {
-            obj.attachment_name = fileObj.name;
-          }
-          if (!obj.attachment_type && fileObj.type) {
-            obj.attachment_type = fileObj.type.startsWith('image/')
-              ? 'image'
-              : 'document';
-          }
-          if (!obj.attachment_url && fileObj.size > 0) {
-            const ab = await fileObj.arrayBuffer();
-            const b64 = Buffer.from(ab).toString('base64');
-            const mime = fileObj.type || 'application/octet-stream';
-            obj.attachment_url = `data:${mime};base64,${b64}`;
+          if (key === 'attachment') {
+            uploadedAttachmentFile = fileObj;
+          } else {
+            obj[key] = fileObj.name;
           }
         }
+      }
+
+      if (uploadedAttachmentFile && uploadedAttachmentFile.size > 0) {
+        if (uploadedAttachmentFile.size > 10 * 1024 * 1024) {
+          obj._attachment_error =
+            'The attachment field must not be greater than 10240 kilobytes.';
+          return obj;
+        }
+
+        const origName = uploadedAttachmentFile.name || 'attachment';
+        const ext = origName.includes('.')
+          ? origName.split('.').pop()!.toLowerCase()
+          : '';
+        const mime = (uploadedAttachmentFile.type || '').toLowerCase();
+
+        if (
+          !ALLOWED_ATTACHMENT_EXTENSIONS.has(ext) ||
+          FORBIDDEN_ATTACHMENT_MIMES.has(mime)
+        ) {
+          obj._attachment_error =
+            'The attachment must be a file of type: jpg, jpeg, png, webp, gif, pdf, doc, docx, ppt, pptx, xls, xlsx, txt.';
+          return obj;
+        }
+
+        const isImage =
+          mime.startsWith('image/') ||
+          ['jpg', 'jpeg', 'png', 'webp', 'gif'].includes(ext);
+        const isPdf = mime === 'application/pdf' || ext === 'pdf';
+
+        const annMatch = apiPath.match(/^\/announcements\/(\d+)$/);
+        const channelFolder = Number(
+          obj.channel_id || (annMatch ? annMatch[1] : 0) || 0
+        );
+        const fileName = `${crypto.randomUUID()}.${ext}`;
+        const relDir = path.posix.join(
+          'storage',
+          'announcements',
+          String(channelFolder)
+        );
+        const absDir = path.join(process.cwd(), 'public', relDir);
+        await fs.mkdir(absDir, { recursive: true });
+        const ab = await uploadedAttachmentFile.arrayBuffer();
+        await fs.writeFile(path.join(absDir, fileName), Buffer.from(ab));
+
+        obj.attachment_url = `/${relDir}/${fileName}`;
+        obj.attachment_name = origName;
+        obj.attachment_type = isImage ? 'image' : isPdf ? 'pdf' : 'document';
       }
       return obj;
     }
@@ -240,7 +309,19 @@ async function handleRoute(
   const { slug } = await context.params;
   const apiPath = `/${(slug || []).join('/')}`;
 
-  const body = await parseRequestBody(req);
+  const body = await parseRequestBody(req, apiPath);
+  if (typeof body._attachment_error === 'string' && body._attachment_error) {
+    return NextResponse.json(
+      {
+        status: 422,
+        message: body._attachment_error,
+        errors: {
+          attachment: [body._attachment_error],
+        },
+      },
+      { status: 422 }
+    );
+  }
   const effectiveMethod =
     typeof body._method === 'string' ? body._method.toUpperCase() : req.method;
 

@@ -32,6 +32,12 @@ export interface ChannelMember {
   department: string;
 }
 
+export interface ChannelFacultyMember {
+  id: number;
+  name: string;
+  role: UserRole;
+}
+
 export interface Channel {
   id: number;
   parent_hub_id?: number | null;
@@ -46,6 +52,8 @@ export interface Channel {
   unread_count?: number;
   chat_messages_count?: number;
   members_count?: number;
+  students_count?: number;
+  faculty?: ChannelFacultyMember[];
   latest_activity_preview?: string;
   latest_activity_at?: string;
   instructor_name?: string;
@@ -71,7 +79,7 @@ export interface Announcement {
   subtitle?: string;
   attachment_url: string | null;
   attachment_name?: string | null;
-  attachment_type?: 'image' | 'document' | null;
+  attachment_type?: 'image' | 'pdf' | 'document' | null;
   tags: string[];
   is_urgent: boolean;
   is_pinned: boolean;

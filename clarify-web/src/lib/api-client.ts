@@ -605,12 +605,7 @@ export async function getAnnouncementsApi(params?: {
 }
 
 export async function createAnnouncementApi(
-  formData: FormData,
-  clientAttachment?: {
-    attachment_url: string | null;
-    attachment_name: string | null;
-    attachment_type: 'image' | 'document' | null;
-  }
+  formData: FormData
 ): Promise<SingleResourceResponse<Announcement>> {
   const res = await requestLaravel<SingleResourceResponse<Announcement>>(
     '/announcements',
@@ -624,13 +619,6 @@ export async function createAnnouncementApi(
     const created: Announcement = {
       ...res.data,
       ...(scopeMode === 'course_hub' ? { tags: [] } : {}),
-      ...(clientAttachment?.attachment_url
-        ? {
-            attachment_url: clientAttachment.attachment_url,
-            attachment_name: clientAttachment.attachment_name,
-            attachment_type: clientAttachment.attachment_type,
-          }
-        : {}),
     };
     sessionAnnouncementsById.set(created.id, created);
     sessionDeletedAnnouncementIds.delete(created.id);
@@ -667,48 +655,59 @@ export async function createAnnouncementApi(
 
 export async function updateAnnouncementApi(
   id: number,
-  payload: {
-    title: string;
-    content: string;
-    tags?: string[];
-    is_urgent?: boolean;
-    trigger_sms_fallback?: boolean;
-    status?: 'published' | 'draft' | 'archived';
-    attachment_url?: string | null;
-    attachment_name?: string | null;
-    attachment_type?: 'image' | 'document' | null;
-    remove_attachment?: boolean;
-  }
+  payload:
+    | FormData
+    | {
+        title: string;
+        content: string;
+        tags?: string[];
+        is_urgent?: boolean;
+        trigger_sms_fallback?: boolean;
+        status?: 'published' | 'draft' | 'archived';
+        attachment?: File | null;
+        remove_attachment?: boolean;
+      }
 ): Promise<SingleResourceResponse<Announcement>> {
+  let formData: FormData;
+  if (payload instanceof FormData) {
+    formData = payload;
+  } else {
+    formData = new FormData();
+    formData.set('title', payload.title);
+    formData.set('content', payload.content);
+    if (payload.tags !== undefined) {
+      formData.set('tags', JSON.stringify(payload.tags));
+    }
+    if (payload.is_urgent !== undefined) {
+      formData.set('is_urgent', payload.is_urgent ? '1' : '0');
+    }
+    if (payload.trigger_sms_fallback !== undefined) {
+      formData.set(
+        'trigger_sms_fallback',
+        payload.trigger_sms_fallback ? '1' : '0'
+      );
+    }
+    if (payload.status !== undefined) {
+      formData.set('status', payload.status);
+    }
+    if (payload.attachment) {
+      formData.set('attachment', payload.attachment);
+    }
+    if (payload.remove_attachment) {
+      formData.set('remove_attachment', '1');
+    }
+  }
+  formData.set('_method', 'PATCH');
+
   const res = await requestLaravel<SingleResourceResponse<Announcement>>(
     `/announcements/${id}`,
     {
-      method: 'PATCH',
-      body: JSON.stringify(payload),
+      method: 'POST',
+      body: formData,
     }
   );
   if (res?.data) {
-    const updated: Announcement = {
-      ...res.data,
-      ...(payload.remove_attachment
-        ? {
-            attachment_url: null,
-            attachment_name: null,
-            attachment_type: null,
-          }
-        : payload.attachment_url !== undefined
-        ? {
-            attachment_url: payload.attachment_url,
-            attachment_name: payload.attachment_name ?? res.data.attachment_name,
-            attachment_type: payload.attachment_type ?? res.data.attachment_type,
-          }
-        : {}),
-    };
-    sessionAnnouncementsById.set(updated.id, updated);
-    return {
-      ...res,
-      data: updated,
-    };
+    sessionAnnouncementsById.set(res.data.id, res.data);
   }
   return res;
 }

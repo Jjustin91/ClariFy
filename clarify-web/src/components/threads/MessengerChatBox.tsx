@@ -40,7 +40,9 @@ import {
   type ChatMediaAttachment,
   encodeChatMessageWithAttachment,
   formatCourseHubName,
+  formatEnrolledRosterSummary,
   formatSubChannelDisplayName,
+  getChannelFacultyLabel,
   getCleanChannelDescription,
   getFieldValidationError,
   getJoinedCourseHubs,
@@ -1188,20 +1190,12 @@ export function MessengerChatBox({
       : channel?.members_count !== undefined
       ? channel.members_count
       : channelRoster.length;
-  const facultyInRoster = channelRoster.filter(
-    (m) => m.role === 'faculty' || m.role === 'dept_head'
+  const enrolledRosterSummary = formatEnrolledRosterSummary(
+    detailedChannel || channel
   );
-  const instructorFallback =
-    channel?.instructor_name &&
-    !channelRoster.some(
-      (m) => m.name === channel.instructor_name && m.role === 'student'
-    )
-      ? channel.instructor_name
-      : null;
-  const currentFacultyLabel =
-    facultyInRoster.length > 0
-      ? facultyInRoster.map((f) => f.name).join(', ')
-      : instructorFallback || 'No Faculty Assigned Yet';
+  const currentFacultyLabel = getChannelFacultyLabel(
+    detailedChannel || channel
+  );
 
   const handleSyncRosterAccess = async () => {
     const targetHubId = hubKey || channelKey;
@@ -1569,6 +1563,12 @@ export function MessengerChatBox({
                 Current Faculty:{' '}
                 <span className="font-bold text-ustp-navy">
                   {currentFacultyLabel}
+                </span>
+              </p>
+              <p className="text-[11px] text-slate-600 font-mono tabular-nums">
+                Enrolled Roster:{' '}
+                <span className="font-bold text-ustp-navy">
+                  {enrolledRosterSummary}
                 </span>
               </p>
               <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
