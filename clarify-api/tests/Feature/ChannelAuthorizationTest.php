@@ -685,5 +685,139 @@ class ChannelAuthorizationTest extends TestCase
         $legacyAnn->refresh();
         $this->assertSame($migratedPath, $legacyAnn->attachment_url);
     }
+
+    public function test_channel_chat_attachments_upload_validate_authorize_and_broadcast_metadata_without_base64(): void
+    {
+        \Illuminate\Support\Facades\Storage::fake('public');
+        \Illuminate\Support\Facades\Event::fake([\App\Events\RealtimeStateUpdated::class]);
+
+        $faculty = $this->createVerifiedUser('faculty', '10492', 'CITC');
+        $student = $this->createVerifiedUser('student', '2020202020', 'CITC');
+        $outsider = $this->createVerifiedUser('student', '2020999999', 'CEA');
+        $hub = $this->createCourseHub($faculty, 'CITC');
+
+        DB::table('channel_user')->insert([
+            [
+                'channel_id' => $hub->id,
+                'user_id' => $faculty->id,
+                'can_publish' => true,
+                'approval_status' => 'approved',
+                'joined_at' => now(),
+            ],
+            [
+                'channel_id' => $hub->id,
+                'user_id' => $student->id,
+                'can_publish' => false,
+                'approval_status' => 'approved',
+                'joined_at' => now(),
+            ],
+        ]);
+
+        // 1. Non-member gets 403 on multipart attachment upload
+        Sanctum::actingAs($outsider);
+        $blockedImg = \Illuminate\Http\UploadedFile::fake()->image('outsider.png', 100, 100);
+        $this->post("/api/v1/channels/{$hub->id}/messages", [
+            'content' => 'Blocked upload',
+            'attachment' => $blockedImg,
+        ], ['Accept' => 'application/json'])->assertStatus(403);
+
+        // 2. Wrong channel id gets 404
+        Sanctum::actingAs($student);
+        $this->post('/api/v1/channels/999999/messages', [
+            'content' => 'Missing channel',
+        ], ['Accept' => 'application/json'])->assertStatus(404);
+
+        // 3. Text-only message still works (201) and returns attachment = null
+        $textRes = $this->postJson("/api/v1/channels/{$hub->id}/messages", [
+            'content' => 'Hello classmates!',
+            'temp_id' => 'temp-text-1',
+        ])->assertStatus(201);
+        $this->assertSame('Hello classmates!', $textRes->json('data.content'));
+        $this->assertSame('temp-text-1', $textRes->json('data.temp_id'));
+        $this->assertNull($textRes->json('data.attachment'));
+
+        // 4. Image upload returns 201 with attachment metadata (even with empty text content)
+        $imageFile = \Illuminate\Http\UploadedFile::fake()->image('whiteboard.jpg', 640, 480)->size(512);
+        $imgRes = $this->post("/api/v1/channels/{$hub->id}/messages", [
+            'content' => '',
+            'temp_id' => 'temp-img-1',
+            'attachment' => $imageFile,
+        ], ['Accept' => 'application/json'])->assertStatus(201);
+
+        $this->assertSame('', $imgRes->json('data.content'));
+        $this->assertSame('image', $imgRes->json('data.attachment.type'));
+        $this->assertSame('whiteboard.jpg', $imgRes->json('data.attachment.name'));
+        $this->assertNotEmpty($imgRes->json('data.attachment.url'));
+        $this->assertIsInt($imgRes->json('data.attachment.size'));
+
+        $imgMsg = Message::findOrFail((int) $imgRes->json('data.id'));
+        $this->assertStringStartsWith("chat/{$hub->id}/", (string) $imgMsg->attachment_url);
+        \Illuminate\Support\Facades\Storage::disk('public')->assertExists($imgMsg->attachment_url);
+
+        // 5. PDF document upload returns 201 with type = document
+        $pdfFile = \Illuminate\Http\UploadedFile::fake()->create('reviewer.pdf', 1024, 'application/pdf');
+        $pdfRes = $this->post("/api/v1/channels/{$hub->id}/messages", [
+            'content' => 'Attached reviewer PDF',
+            'attachment' => $pdfFile,
+        ], ['Accept' => 'application/json'])->assertStatus(201);
+
+        $this->assertSame('document', $pdfRes->json('data.attachment.type'));
+        $this->assertSame('reviewer.pdf', $pdfRes->json('data.attachment.name'));
+
+        // 6. Voice note (.webm) upload returns 201 with type = voice
+        $voiceFile = \Illuminate\Http\UploadedFile::fake()->create('voice-note.webm', 256, 'audio/webm');
+        $voiceRes = $this->post("/api/v1/channels/{$hub->id}/messages", [
+            'attachment' => $voiceFile,
+        ], ['Accept' => 'application/json'])->assertStatus(201);
+
+        $this->assertSame('voice', $voiceRes->json('data.attachment.type'));
+        $this->assertSame('voice-note.webm', $voiceRes->json('data.attachment.name'));
+
+        // 7. File over 10 MB (11 MB = 11264 KB) gets 422
+        $hugeFile = \Illuminate\Http\UploadedFile::fake()->create('huge.pdf', 11264, 'application/pdf');
+        $this->post("/api/v1/channels/{$hub->id}/messages", [
+            'content' => 'Too large',
+            'attachment' => $hugeFile,
+        ], ['Accept' => 'application/json'])->assertStatus(422)->assertJsonValidationErrors(['attachment']);
+
+        // 8. Executable/script files (.php and .exe) get 422
+        $phpFile = \Illuminate\Http\UploadedFile::fake()->create('exploit.php', 32, 'application/x-php');
+        $this->post("/api/v1/channels/{$hub->id}/messages", [
+            'attachment' => $phpFile,
+        ], ['Accept' => 'application/json'])->assertStatus(422)->assertJsonValidationErrors(['attachment']);
+
+        $exeFile = \Illuminate\Http\UploadedFile::fake()->create('trojan.exe', 64, 'application/x-msdownload');
+        $this->post("/api/v1/channels/{$hub->id}/messages", [
+            'attachment' => $exeFile,
+        ], ['Accept' => 'application/json'])->assertStatus(422)->assertJsonValidationErrors(['attachment']);
+
+        // 9. GET /messages index returns attachment metadata on every message
+        $indexRes = $this->getJson("/api/v1/channels/{$hub->id}/messages")
+            ->assertStatus(200);
+        $list = collect($indexRes->json('data'));
+        $this->assertCount(4, $list);
+
+        $fetchedImgMsg = $list->firstWhere('id', $imgMsg->id);
+        $this->assertNotNull($fetchedImgMsg);
+        $this->assertSame('image', $fetchedImgMsg['attachment']['type']);
+        $this->assertSame('whiteboard.jpg', $fetchedImgMsg['attachment']['name']);
+        $this->assertStringNotContainsString('data:', json_encode($fetchedImgMsg));
+
+        // 10. Broadcast payload contains metadata only and no base64 strings
+        \Illuminate\Support\Facades\Event::assertDispatched(
+            \App\Events\RealtimeStateUpdated::class,
+            function (\App\Events\RealtimeStateUpdated $event) use ($imgMsg): bool {
+                if ($event->type !== 'chat.message' || ($event->message['id'] ?? null) !== $imgMsg->id) {
+                    return false;
+                }
+                $serialized = json_encode($event->broadcastWith());
+                return is_string($serialized)
+                    && ! str_contains($serialized, 'data:')
+                    && ! str_contains($serialized, ';base64,')
+                    && ($event->message['attachment']['type'] ?? null) === 'image'
+                    && ($event->message['attachment']['name'] ?? null) === 'whiteboard.jpg';
+            }
+        );
+    }
 }
 

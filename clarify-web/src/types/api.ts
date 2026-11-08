@@ -199,12 +199,22 @@ export interface SingleResourceResponse<T> {
   data: T;
 }
 
+export interface ChatAttachment {
+  url: string;
+  name: string;
+  type: 'image' | 'document' | 'voice';
+  mime: string | null;
+  size: number | null;
+  duration_sec?: number;
+}
+
 export interface ChatMessage {
   id: number | string;
   temp_id?: string | null;
   channel_id: number;
   sender_id?: number;
   content: string;
+  attachment?: ChatAttachment | null;
   created_at: string;
   status?: 'sending' | 'sent' | 'failed';
   author: {

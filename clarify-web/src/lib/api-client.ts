@@ -14,6 +14,7 @@ import type {
   UserRole,
   VerificationStatus,
 } from '../types/api';
+import { buildChatMessageFormData } from './domain-logic';
 
 // Always route browser requests through same-origin /api/v1 (which connects to PostgreSQL directly or proxies to LARAVEL_BACKEND_URL)
 const RAW_API_URL = 
@@ -957,19 +958,30 @@ export async function getChannelChatMessagesApi(
 export async function sendChannelChatMessageApi(
   channelId: number,
   content: string,
-  tempId?: string
+  tempId?: string,
+  attachmentFile?: File | null
 ): Promise<SingleResourceResponse<ChatMessage>> {
-  const body = JSON.stringify({
-    content,
-    ...(tempId ? { temp_id: tempId } : {}),
-  });
+  const createBody = (): BodyInit => {
+    if (attachmentFile) {
+      return buildChatMessageFormData({
+        content,
+        tempId,
+        attachment: attachmentFile,
+        attachmentFileName: attachmentFile.name || 'attachment.bin',
+      });
+    }
+    return JSON.stringify({
+      content,
+      ...(tempId ? { temp_id: tempId } : {}),
+    });
+  };
 
   try {
     return await requestLaravel<SingleResourceResponse<ChatMessage>>(
       `/channels/${channelId}/messages`,
       {
         method: 'POST',
-        body,
+        body: createBody(),
       }
     );
   } catch (err) {
@@ -979,7 +991,7 @@ export async function sendChannelChatMessageApi(
         `/channels/${channelId}/chat`,
         {
           method: 'POST',
-          body,
+          body: createBody(),
         }
       );
     }

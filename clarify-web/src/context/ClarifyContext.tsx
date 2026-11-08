@@ -651,9 +651,20 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
           setChannels((prev) =>
             prev.map((ch) => {
               if (Number(ch.id) !== targetChannelId) return ch;
-              const previewText = event.message?.content
-                ? String(event.message.content).slice(0, 72)
+              const rawContent = event.message?.content
+                ? String(event.message.content).trim()
+                : '';
+              const att = event.message?.attachment;
+              const fallbackAttachmentPreview = att
+                ? att.type === 'image'
+                  ? `Shared photo: ${att.name}`
+                  : att.type === 'voice'
+                    ? 'Sent a voice note'
+                    : `Shared file: ${att.name}`
                 : ch.latest_activity_preview;
+              const previewText = rawContent
+                ? rawContent.slice(0, 72)
+                : fallbackAttachmentPreview;
               return {
                 ...ch,
                 chat_messages_count: (ch.chat_messages_count ?? 0) + 1,

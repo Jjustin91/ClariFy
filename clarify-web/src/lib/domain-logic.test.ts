@@ -1,10 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  buildChatMessageFormData,
   calculateAcknowledgedReadReach,
   canPublishOrManageAnnouncements,
   canResolveOrPinThreads,
   canStudentModifyOwnInquiry,
+  createRetryableChatFileStore,
   enforceFaqAnonymity,
   filterAndSortAnnouncements,
   formatEnrolledRosterSummary,
@@ -12,6 +14,7 @@ import {
   getChannelFacultyLabel,
   getFieldValidationError,
   isThreadVisibleToUser,
+  validateChatAttachmentFile,
 } from './domain-logic';
 import type { Announcement, Channel, QaThread, User } from '../types/api';
 
@@ -269,5 +272,88 @@ test('getFieldValidationError extracts Laravel 422 field error message', () => {
   assert.equal(getFieldValidationError(errors, 'title'), 'The title field is required.');
   assert.equal(getFieldValidationError(errors, 'content'), null);
 });
+
+test('validateChatAttachmentFile accepts image, document, and voice up to 10 MB and rejects >10 MB or executables', () => {
+  assert.deepEqual(
+    validateChatAttachmentFile({
+      name: 'lecture-slide.png',
+      size: 512 * 1024,
+      type: 'image/png',
+    }),
+    { valid: true, attachmentType: 'image' }
+  );
+
+  assert.deepEqual(
+    validateChatAttachmentFile({
+      name: 'syllabus.pdf',
+      size: 2 * 1024 * 1024,
+      type: 'application/pdf',
+    }),
+    { valid: true, attachmentType: 'document' }
+  );
+
+  assert.deepEqual(
+    validateChatAttachmentFile({
+      name: 'voice-note.webm',
+      size: 120 * 1024,
+      type: 'audio/webm',
+    }),
+    { valid: true, attachmentType: 'voice' }
+  );
+
+  const over10Mb = validateChatAttachmentFile({
+    name: 'archive.zip',
+    size: 11 * 1024 * 1024,
+    type: 'application/zip',
+  });
+  assert.equal(over10Mb.valid, false);
+
+  const phpScript = validateChatAttachmentFile({
+    name: 'shell.php',
+    size: 1024,
+    type: 'application/x-php',
+  });
+  assert.equal(phpScript.valid, false);
+
+  const exeBinary = validateChatAttachmentFile({
+    name: 'setup.exe',
+    size: 4096,
+    type: 'application/x-msdownload',
+  });
+  assert.equal(exeBinary.valid, false);
+});
+
+test('buildChatMessageFormData builds multipart fields without base64-encoding content and createRetryableChatFileStore retains File for retry', () => {
+  const sampleBlob = new Blob(['PDF binary bytes'], { type: 'application/pdf' });
+  const formData = buildChatMessageFormData({
+    content: 'Here is the lab manual',
+    tempId: 'temp-12345',
+    attachment: sampleBlob,
+    attachmentFileName: 'lab-manual.pdf',
+  });
+
+  assert.equal(formData.get('content'), 'Here is the lab manual');
+  assert.equal(formData.get('temp_id'), 'temp-12345');
+
+  const attachedEntry = formData.get('attachment') as File | null;
+  assert.ok(attachedEntry);
+  assert.equal(attachedEntry.name, 'lab-manual.pdf');
+  assert.equal(attachedEntry.size, 16);
+  assert.equal(String(formData.get('content')).includes('data:'), false);
+
+  // Verify retry path retains the exact File reference across failed attempt -> retry -> clear on success
+  const retryStore = createRetryableChatFileStore<{ name: string; size: number }>();
+  const stagedFile = { name: 'voice-note.webm', size: 8192 };
+  retryStore.stage('temp-retry-99', stagedFile);
+
+  assert.equal(retryStore.has('temp-retry-99'), true);
+  assert.strictEqual(retryStore.getForRetry('temp-retry-99'), stagedFile);
+
+  // After retry succeeds, clear removes it
+  retryStore.clear('temp-retry-99');
+  assert.equal(retryStore.has('temp-retry-99'), false);
+  assert.equal(retryStore.getForRetry('temp-retry-99'), undefined);
+});
+
 
 

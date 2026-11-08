@@ -250,11 +250,165 @@ export interface ChatMediaAttachment {
   dataUrl: string;
 }
 
+export const MAX_CHAT_ATTACHMENT_BYTES = 10 * 1024 * 1024; // 10 MB
+
+export const CHAT_ALLOWED_EXTENSIONS = [
+  'jpg',
+  'jpeg',
+  'png',
+  'webp',
+  'gif',
+  'pdf',
+  'doc',
+  'docx',
+  'ppt',
+  'pptx',
+  'xls',
+  'xlsx',
+  'txt',
+  'csv',
+  'zip',
+  'webm',
+  'ogg',
+  'wav',
+  'mp3',
+  'm4a',
+] as const;
+
+const FORBIDDEN_CHAT_EXTENSIONS = new Set([
+  'php',
+  'phtml',
+  'exe',
+  'msi',
+  'bat',
+  'cmd',
+  'sh',
+  'js',
+  'mjs',
+  'cjs',
+  'html',
+  'htm',
+  'vbs',
+  'dll',
+  'scr',
+]);
+
+/**
+ * Validates a File/Blob candidate before staging or uploading to Course Hub chat.
+ * Enforces <= 10 MB and allowed extension/MIME types.
+ */
+export function validateChatAttachmentFile(file: {
+  name: string;
+  size: number;
+  type?: string;
+}): { valid: true; attachmentType: 'image' | 'document' | 'voice' } | { valid: false; error: string } {
+  if (!file || typeof file.size !== 'number' || file.size <= 0) {
+    return { valid: false, error: 'Selected attachment file is empty.' };
+  }
+
+  if (file.size > MAX_CHAT_ATTACHMENT_BYTES) {
+    return {
+      valid: false,
+      error: 'File exceeds the 10 MB limit. Please choose a file up to 10 MB.',
+    };
+  }
+
+  const rawName = (file.name || '').trim();
+  const ext = rawName.includes('.')
+    ? rawName.split('.').pop()!.toLowerCase()
+    : '';
+  const mime = (file.type || '').toLowerCase();
+
+  if (
+    FORBIDDEN_CHAT_EXTENSIONS.has(ext) ||
+    mime.includes('application/x-msdownload') ||
+    mime.includes('application/x-executable') ||
+    mime.includes('application/x-php') ||
+    mime.includes('text/x-php')
+  ) {
+    return {
+      valid: false,
+      error: 'Executable and script files (.php, .exe, .sh, .bat) are not permitted.',
+    };
+  }
+
+  const isAllowedExt = (CHAT_ALLOWED_EXTENSIONS as readonly string[]).includes(ext);
+  if (!isAllowedExt) {
+    return {
+      valid: false,
+      error: `Unsupported file type (.${ext || 'unknown'}). Allowed: images, PDF, Office docs, TXT/CSV/ZIP, and voice/audio.`,
+    };
+  }
+
+  if (
+    ['jpg', 'jpeg', 'png', 'webp', 'gif'].includes(ext) ||
+    mime.startsWith('image/')
+  ) {
+    return { valid: true, attachmentType: 'image' };
+  }
+
+  if (
+    ['webm', 'ogg', 'wav', 'mp3', 'm4a'].includes(ext) ||
+    mime.startsWith('audio/')
+  ) {
+    return { valid: true, attachmentType: 'voice' };
+  }
+
+  return { valid: true, attachmentType: 'document' };
+}
+
+/**
+ * Builds a multipart/form-data payload for POST /api/v1/channels/{id}/messages.
+ * Never base64-encodes the file inside `content`.
+ */
+export function buildChatMessageFormData(params: {
+  content: string;
+  tempId?: string;
+  attachment: File | Blob;
+  attachmentFileName?: string;
+}): FormData {
+  const formData = new FormData();
+  formData.append('content', params.content);
+  if (params.tempId) {
+    formData.append('temp_id', params.tempId);
+  }
+  const fileName =
+    params.attachmentFileName ||
+    ('name' in params.attachment && typeof params.attachment.name === 'string'
+      ? params.attachment.name
+      : 'attachment.bin');
+  formData.append('attachment', params.attachment, fileName);
+  return formData;
+}
+
+/**
+ * Retains pending/failed upload File references keyed by optimistic `temp_id`
+ * so that retrying a failed chat message re-sends the exact same File object.
+ */
+export function createRetryableChatFileStore<TFile = File>() {
+  const filesByTempId = new Map<string, TFile>();
+  return {
+    stage(tempId: string, file: TFile | null | undefined): void {
+      if (!tempId || !file) return;
+      filesByTempId.set(tempId, file);
+    },
+    getForRetry(tempId: string): TFile | undefined {
+      return filesByTempId.get(tempId);
+    },
+    clear(tempId: string): void {
+      filesByTempId.delete(tempId);
+    },
+    has(tempId: string): boolean {
+      return filesByTempId.has(tempId);
+    },
+  };
+}
+
 const CHAT_MEDIA_PREFIX = '__CLARIFY_MEDIA__';
 
 /**
- * Encodes a chat message with an optional rich attachment (image, downloadable file, or voice recording)
- * into a self-contained string stored in `messages.content`.
+ * Legacy helper preserved only for backward compatibility.
+ * New chat messages upload real files via `buildChatMessageFormData`.
  */
 export function encodeChatMessageWithAttachment(
   text: string,
@@ -269,7 +423,8 @@ export function encodeChatMessageWithAttachment(
 }
 
 /**
- * Parses a raw chat message content string into its text body and optional rich media attachment.
+ * Parses a raw chat message content string into its text body and optional legacy media attachment.
+ * Used as a fallback for historical messages created before dedicated attachment columns.
  */
 export function parseChatMessageContent(rawContent: string): {
   text: string;

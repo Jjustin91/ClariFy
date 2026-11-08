@@ -19,6 +19,11 @@ class Message extends Model
         'parent_id',
         'subject_hashtag',
         'content',
+        'attachment_url',
+        'attachment_name',
+        'attachment_type',
+        'attachment_mime',
+        'attachment_size',
         'is_private',
         'is_resolved',
         'is_pinned_faq',
@@ -27,6 +32,7 @@ class Message extends Model
     protected function casts(): array
     {
         return [
+            'attachment_size' => 'integer',
             'is_private' => 'boolean',
             'is_resolved' => 'boolean',
             'is_pinned_faq' => 'boolean',

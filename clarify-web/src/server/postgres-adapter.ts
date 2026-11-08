@@ -365,6 +365,11 @@ async function ensurePostgresSchema(pool: Pool): Promise<void> {
         parent_id BIGINT NULL REFERENCES messages(id) ON DELETE CASCADE,
         subject_hashtag VARCHAR(255) NULL,
         content TEXT NOT NULL,
+        attachment_url TEXT NULL,
+        attachment_name VARCHAR(255) NULL,
+        attachment_type VARCHAR(32) NULL,
+        attachment_mime VARCHAR(128) NULL,
+        attachment_size BIGINT NULL,
         is_private BOOLEAN NOT NULL DEFAULT FALSE,
         is_resolved BOOLEAN NOT NULL DEFAULT FALSE,
         is_pinned_faq BOOLEAN NOT NULL DEFAULT FALSE,
@@ -372,6 +377,15 @@ async function ensurePostgresSchema(pool: Pool): Promise<void> {
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `);
+
+    await client.query(`
+      ALTER TABLE messages
+        ADD COLUMN IF NOT EXISTS attachment_url TEXT NULL,
+        ADD COLUMN IF NOT EXISTS attachment_name VARCHAR(255) NULL,
+        ADD COLUMN IF NOT EXISTS attachment_type VARCHAR(32) NULL,
+        ADD COLUMN IF NOT EXISTS attachment_mime VARCHAR(128) NULL,
+        ADD COLUMN IF NOT EXISTS attachment_size BIGINT NULL;
+    `).catch(() => {});
 
     await client.query(`
       CREATE TABLE IF NOT EXISTS prisms_sync_logs (
@@ -2834,6 +2848,11 @@ export async function handlePostgresApiRequest(
                m.id,
                m.channel_id,
                m.content,
+               m.attachment_url,
+               m.attachment_name,
+               m.attachment_type,
+               m.attachment_mime,
+               m.attachment_size,
                m.created_at,
                u.id AS author_id,
                u.name AS author_name,
@@ -2854,6 +2873,11 @@ export async function handlePostgresApiRequest(
                m.id,
                m.channel_id,
                m.content,
+               m.attachment_url,
+               m.attachment_name,
+               m.attachment_type,
+               m.attachment_mime,
+               m.attachment_size,
                m.created_at,
                u.id AS author_id,
                u.name AS author_name,
@@ -2877,7 +2901,22 @@ export async function handlePostgresApiRequest(
       const messages: ChatMessage[] = slicedRows.map((r) => ({
         id: Number(r.id),
         channel_id: Number(r.channel_id),
-        content: String(r.content),
+        content: String(r.content ?? ''),
+        attachment: r.attachment_url
+          ? {
+              url: String(r.attachment_url),
+              name: String(r.attachment_name || 'attachment'),
+              type:
+                r.attachment_type === 'image' || r.attachment_type === 'voice'
+                  ? r.attachment_type
+                  : 'document',
+              mime: r.attachment_mime ? String(r.attachment_mime) : null,
+              size:
+                r.attachment_size !== null && r.attachment_size !== undefined
+                  ? Number(r.attachment_size)
+                  : null,
+            }
+          : null,
         created_at: new Date(String(r.created_at)).toISOString(),
         author: {
           id: Number(r.author_id),
@@ -2912,13 +2951,35 @@ export async function handlePostgresApiRequest(
       }
       const channelId = resolvedCh.id;
       const content = String(body.content || '').trim();
-      if (!content) {
+      const attachmentUrl = body.attachment_url
+        ? String(body.attachment_url)
+        : null;
+      const attachmentName = body.attachment_name
+        ? String(body.attachment_name)
+        : null;
+      const attachmentType =
+        body.attachment_type === 'image' ||
+        body.attachment_type === 'voice' ||
+        body.attachment_type === 'document'
+          ? (body.attachment_type as 'image' | 'voice' | 'document')
+          : null;
+      const attachmentMime = body.attachment_mime
+        ? String(body.attachment_mime)
+        : null;
+      const attachmentSize =
+        body.attachment_size !== undefined && body.attachment_size !== null
+          ? Number(body.attachment_size)
+          : null;
+
+      if (!content && !attachmentUrl) {
         return {
           status: 422,
           body: {
             status: 422,
-            message: 'Message content cannot be empty.',
-            errors: { content: ['Please type a message before sending.'] },
+            message: 'Please enter a message or attach a file before sending.',
+            errors: {
+              content: ['Please enter a message or attach a file before sending.'],
+            },
           },
         };
       }
@@ -2936,10 +2997,23 @@ export async function handlePostgresApiRequest(
       }
 
       const insMsg = await pool.query(
-        `INSERT INTO messages (channel_id, sender_id, parent_id, subject_hashtag, content, is_private, is_resolved, is_pinned_faq, created_at, updated_at)
-         VALUES ($1, $2, NULL, '__CHAT__', $3, FALSE, FALSE, FALSE, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        `INSERT INTO messages (
+           channel_id, sender_id, parent_id, subject_hashtag, content,
+           attachment_url, attachment_name, attachment_type, attachment_mime, attachment_size,
+           is_private, is_resolved, is_pinned_faq, created_at, updated_at
+         )
+         VALUES ($1, $2, NULL, '__CHAT__', $3, $4, $5, $6, $7, $8, FALSE, FALSE, FALSE, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
          RETURNING id, created_at`,
-        [channelId, activeUser.id, content]
+        [
+          channelId,
+          activeUser.id,
+          content,
+          attachmentUrl,
+          attachmentName,
+          attachmentType,
+          attachmentMime,
+          attachmentSize,
+        ]
       );
 
       await pool.query(
@@ -2957,6 +3031,15 @@ export async function handlePostgresApiRequest(
             : undefined,
         channel_id: channelId,
         content,
+        attachment: attachmentUrl
+          ? {
+              url: attachmentUrl,
+              name: attachmentName || 'attachment',
+              type: attachmentType || 'document',
+              mime: attachmentMime,
+              size: attachmentSize,
+            }
+          : null,
         created_at: new Date(String(insMsg.rows[0].created_at)).toISOString(),
         author: {
           id: activeUser.id,

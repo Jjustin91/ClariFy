@@ -37,8 +37,7 @@ import {
   sendChannelChatMessageApi,
 } from '../../lib/api-client';
 import {
-  type ChatMediaAttachment,
-  encodeChatMessageWithAttachment,
+  createRetryableChatFileStore,
   formatCourseHubName,
   formatEnrolledRosterSummary,
   formatSubChannelDisplayName,
@@ -49,6 +48,7 @@ import {
   isSubChannel,
   isUserCourseAdmin,
   parseChatMessageContent,
+  validateChatAttachmentFile,
 } from '../../lib/domain-logic';
 import {
   type ReverbBroadcastPayload,
@@ -56,6 +56,7 @@ import {
 } from '../../lib/reverb-client';
 import type {
   Channel,
+  ChatAttachment,
   ChatMessage,
   LaravelValidationError,
   RealtimeEvent,
@@ -124,10 +125,20 @@ function formatDurationClock(totalSeconds: number): string {
   return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
 }
 
+interface StagedChatMedia {
+  file: File;
+  previewUrl: string;
+  kind: 'image' | 'file' | 'voice';
+  name: string;
+  mimeType: string;
+  size: number;
+  durationSec?: number;
+}
+
 /**
- * Generates a compact, playable WAV audio Data URL when browser/iframe permissions block hardware microphone capture
+ * Generates a compact, playable WAV audio File when browser/iframe permissions block hardware microphone capture
  */
-function createSynthesizedVoiceNoteWavDataUrl(durationSec: number): string {
+function createSynthesizedVoiceNoteWavFile(durationSec: number): File {
   const sampleRate = 8000;
   const clampedSeconds = Math.max(1, Math.min(durationSec, 15));
   const numSamples = sampleRate * clampedSeconds;
@@ -164,65 +175,73 @@ function createSynthesizedVoiceNoteWavDataUrl(durationSec: number): string {
     view.setInt16(44 + i * 2, Math.max(-1, Math.min(1, sample)) * 32767, true);
   }
 
-  const bytes = new Uint8Array(buffer);
-  let binary = '';
-  const chunkSize = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunkSize) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
-  }
-  return `data:audio/wav;base64,${btoa(binary)}`;
+  return new File(
+    [buffer],
+    `Voice_Note_${formatDurationClock(clampedSeconds).replace(':', 'm')}s.wav`,
+    {
+      type: 'audio/wav',
+      lastModified: Date.now(),
+    }
+  );
 }
 
-async function compressImageFileToDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () => reject(new Error('Failed to read image file.'));
-    reader.onload = () => {
-      const result = typeof reader.result === 'string' ? reader.result : '';
-      if (!result) {
-        reject(new Error('Empty image data.'));
+/**
+ * Compresses an uploaded image file via canvas.toBlob and returns a real File
+ * (never base64-encoding the image inside message content).
+ */
+async function compressImageFileToBlobFile(file: File): Promise<File> {
+  if (typeof window === 'undefined' || file.type === 'image/gif') {
+    return file;
+  }
+
+  return new Promise((resolve) => {
+    const objectUrl = URL.createObjectURL(file);
+    const img = new window.Image();
+    img.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      resolve(file);
+    };
+    img.onload = () => {
+      URL.revokeObjectURL(objectUrl);
+      const maxDim = 1280;
+      let { width, height } = img;
+      if (width > maxDim || height > maxDim) {
+        if (width >= height) {
+          height = Math.round((height * maxDim) / width);
+          width = maxDim;
+        } else {
+          width = Math.round((width * maxDim) / height);
+          height = maxDim;
+        }
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        resolve(file);
         return;
       }
-      const img = new window.Image();
-      img.onerror = () => resolve(result);
-      img.onload = () => {
-        const maxDim = 720;
-        let { width, height } = img;
-        if (width > maxDim || height > maxDim) {
-          if (width >= height) {
-            height = Math.round((height * maxDim) / width);
-            width = maxDim;
-          } else {
-            width = Math.round((width * maxDim) / height);
-            height = maxDim;
+      ctx.drawImage(img, 0, 0, width, height);
+      canvas.toBlob(
+        (blob) => {
+          if (!blob || blob.size >= file.size) {
+            resolve(file);
+            return;
           }
-        }
-        const canvas = document.createElement('canvas');
-        canvas.width = width;
-        canvas.height = height;
-        const ctx = canvas.getContext('2d');
-        if (!ctx) {
-          resolve(result);
-          return;
-        }
-        ctx.drawImage(img, 0, 0, width, height);
-        const compressed = canvas.toDataURL('image/jpeg', 0.82);
-        resolve(compressed);
-      };
-      img.src = result;
+          const baseName = file.name.replace(/\.[^.]+$/, '') || 'photo';
+          resolve(
+            new File([blob], `${baseName}.jpg`, {
+              type: 'image/jpeg',
+              lastModified: Date.now(),
+            })
+          );
+        },
+        'image/jpeg',
+        0.82
+      );
     };
-    reader.readAsDataURL(file);
-  });
-}
-
-async function readFileAsDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () => reject(new Error('Failed to read file.'));
-    reader.onload = () => {
-      resolve(typeof reader.result === 'string' ? reader.result : '');
-    };
-    reader.readAsDataURL(file);
+    img.src = objectUrl;
   });
 }
 
@@ -280,9 +299,60 @@ export function MessengerChatBox({
   >({});
   const [isLoadingChannel, setIsLoadingChannel] = useState(false);
   const [messageText, setMessageText] = useState('');
-  const [stagedMedia, setStagedMedia] = useState<ChatMediaAttachment | null>(
+  const [stagedMedia, setStagedMedia] = useState<StagedChatMedia | null>(
     null
   );
+  const [brokenImageUrls, setBrokenImageUrls] = useState<
+    Record<string, boolean>
+  >({});
+  const retryFileStoreRef = useRef(createRetryableChatFileStore<File>());
+  const activeObjectUrlsRef = useRef<Set<string>>(new Set());
+
+  const createTrackedObjectUrl = useCallback((blob: Blob): string => {
+    const url = URL.createObjectURL(blob);
+    activeObjectUrlsRef.current.add(url);
+    return url;
+  }, []);
+
+  const revokeTrackedObjectUrl = useCallback(
+    (url: string | null | undefined) => {
+      if (!url || !url.startsWith('blob:')) return;
+      activeObjectUrlsRef.current.delete(url);
+      try {
+        URL.revokeObjectURL(url);
+      } catch {
+        // Ignore revoke errors
+      }
+    },
+    []
+  );
+
+  const clearStagedMedia = useCallback(
+    (preservePreviewUrl = false) => {
+      setStagedMedia((prev) => {
+        if (prev && !preservePreviewUrl) {
+          revokeTrackedObjectUrl(prev.previewUrl);
+        }
+        return null;
+      });
+    },
+    [revokeTrackedObjectUrl]
+  );
+
+  useEffect(() => {
+    const tracked = activeObjectUrlsRef.current;
+    return () => {
+      tracked.forEach((url) => {
+        try {
+          URL.revokeObjectURL(url);
+        } catch {
+          // Ignore revoke errors
+        }
+      });
+      tracked.clear();
+    };
+  }, []);
+
   const [showSettingsMenu, setShowSettingsMenu] = useState(false);
   const skipAutoScrollRef = useRef(false);
 
@@ -747,12 +817,18 @@ export function MessengerChatBox({
     async (
       targetChannelId: number,
       finalContent: string,
-      existingTempId?: string
+      existingTempId?: string,
+      attachmentFile?: File | null,
+      optimisticAttachment?: ChatAttachment | null
     ) => {
       const tempId =
         existingTempId ||
         `temp-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
       const nowIso = new Date().toISOString();
+
+      if (attachmentFile) {
+        retryFileStoreRef.current.stage(tempId, attachmentFile);
+      }
 
       if (existingTempId) {
         // Mark existing failed message as 'sending' again
@@ -772,6 +848,7 @@ export function MessengerChatBox({
           channel_id: targetChannelId,
           sender_id: currentUser.id,
           content: finalContent,
+          attachment: optimisticAttachment ?? null,
           created_at: nowIso,
           status: 'sending',
           author: {
@@ -797,13 +874,19 @@ export function MessengerChatBox({
         const res = await sendChannelChatMessageApi(
           targetChannelId,
           finalContent,
-          tempId
+          tempId,
+          attachmentFile
         );
         const confirmedRecord: ChatMessage = {
           ...res.data,
           temp_id: tempId,
           status: 'sent',
         };
+
+        retryFileStoreRef.current.clear(tempId);
+        if (optimisticAttachment?.url) {
+          revokeTrackedObjectUrl(optimisticAttachment.url);
+        }
 
         setMessagesByChannel((prev) => {
           const list = prev[targetChannelId] || [];
@@ -847,7 +930,15 @@ export function MessengerChatBox({
         onMessageSentToast?.(
           res.message || 'Message sent to Course Hub chat.'
         );
-      } catch {
+      } catch (err) {
+        const apiErr = err as LaravelValidationError;
+        const validationMsg =
+          apiErr?.errors?.attachment?.[0] ||
+          apiErr?.errors?.content?.[0] ||
+          apiErr?.message;
+        if (validationMsg) {
+          showToast(validationMsg, 'error');
+        }
         setMessagesByChannel((prev) => ({
           ...prev,
           [targetChannelId]: (prev[targetChannelId] || []).map((m) =>
@@ -865,7 +956,9 @@ export function MessengerChatBox({
       currentUser.avatar_url,
       onMessageSentToast,
       refreshChannels,
+      revokeTrackedObjectUrl,
       scrollToBottomSmooth,
+      showToast,
     ]
   );
 
@@ -877,16 +970,37 @@ export function MessengerChatBox({
     const trimmed = messageText.trim();
     if (!trimmed && !stagedMedia) return;
 
-    const finalContent = encodeChatMessageWithAttachment(trimmed, stagedMedia);
+    const fileToUpload = stagedMedia?.file || null;
+    const optimisticAttachment: ChatAttachment | null = stagedMedia
+      ? {
+          url: stagedMedia.previewUrl,
+          name: stagedMedia.name,
+          type:
+            stagedMedia.kind === 'image'
+              ? 'image'
+              : stagedMedia.kind === 'voice'
+                ? 'voice'
+                : 'document',
+          mime: stagedMedia.mimeType,
+          size: stagedMedia.size,
+          duration_sec: stagedMedia.durationSec,
+        }
+      : null;
 
-    // Clear input field and staged attachment immediately (zero-latency optimistic UI)
+    // Clear input field and staged attachment immediately (preserve previewUrl until server confirms)
     setMessageText('');
-    setStagedMedia(null);
+    clearStagedMedia(true);
     if (composerTextareaRef.current) {
       composerTextareaRef.current.style.height = 'auto';
     }
 
-    void sendOptimisticMessage(channelKey, finalContent);
+    void sendOptimisticMessage(
+      channelKey,
+      trimmed,
+      undefined,
+      fileToUpload,
+      optimisticAttachment
+    );
   };
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -906,7 +1020,14 @@ export function MessengerChatBox({
   const handleRetryFailedMessage = (failedMsg: ChatMessage) => {
     if (!channelKey) return;
     const tempKey = String(failedMsg.temp_id || failedMsg.id);
-    void sendOptimisticMessage(channelKey, failedMsg.content, tempKey);
+    const retryFile = retryFileStoreRef.current.getForRetry(tempKey) || null;
+    void sendOptimisticMessage(
+      channelKey,
+      failedMsg.content,
+      tempKey,
+      retryFile,
+      failedMsg.attachment || null
+    );
   };
 
   const handleStartVoiceRecording = async () => {
@@ -935,7 +1056,14 @@ export function MessengerChatBox({
           audio: true,
         });
         mediaStreamRef.current = stream;
-        const recorder = new MediaRecorder(stream);
+        const preferredMime = MediaRecorder.isTypeSupported('audio/webm')
+          ? 'audio/webm'
+          : MediaRecorder.isTypeSupported('audio/ogg')
+            ? 'audio/ogg'
+            : '';
+        const recorder = preferredMime
+          ? new MediaRecorder(stream, { mimeType: preferredMime })
+          : new MediaRecorder(stream);
         mediaRecorderRef.current = recorder;
 
         recorder.ondataavailable = (ev) => {
@@ -946,33 +1074,58 @@ export function MessengerChatBox({
 
         recorder.onstop = () => {
           const duration = Math.max(1, recordingSecondsRef.current);
-          const mimeType = recorder.mimeType || 'audio/webm';
-          const blob = new Blob(audioChunksRef.current, { type: mimeType });
+          const rawMime = recorder.mimeType || 'audio/webm';
+          const cleanMime = rawMime.split(';')[0].trim() || 'audio/webm';
+          const ext = cleanMime.includes('ogg')
+            ? 'ogg'
+            : cleanMime.includes('mp4') || cleanMime.includes('m4a')
+              ? 'm4a'
+              : cleanMime.includes('wav')
+                ? 'wav'
+                : 'webm';
+          const blob = new Blob(audioChunksRef.current, { type: cleanMime });
           if (blob.size > 0) {
-            const reader = new FileReader();
-            reader.onload = () => {
-              const dataUrl =
-                typeof reader.result === 'string'
-                  ? reader.result
-                  : createSynthesizedVoiceNoteWavDataUrl(duration);
-              setStagedMedia({
+            const voiceFile = new File(
+              [blob],
+              `Voice_Note_${formatDurationClock(duration).replace(':', 'm')}s.${ext}`,
+              {
+                type: cleanMime,
+                lastModified: Date.now(),
+              }
+            );
+            const validation = validateChatAttachmentFile(voiceFile);
+            if (!validation.valid) {
+              showToast(validation.error, 'error');
+              cleanupRecordingTimersAndStream();
+              return;
+            }
+            const previewUrl = createTrackedObjectUrl(voiceFile);
+            setStagedMedia((prev) => {
+              if (prev) revokeTrackedObjectUrl(prev.previewUrl);
+              return {
+                file: voiceFile,
+                previewUrl,
                 kind: 'voice',
-                name: `Voice_Note_${formatDurationClock(duration).replace(':', 'm')}s.webm`,
-                mimeType,
-                size: blob.size,
+                name: voiceFile.name,
+                mimeType: cleanMime,
+                size: voiceFile.size,
                 durationSec: duration,
-                dataUrl,
-              });
-            };
-            reader.readAsDataURL(blob);
+              };
+            });
           } else {
-            const fallbackUrl = createSynthesizedVoiceNoteWavDataUrl(duration);
-            setStagedMedia({
-              kind: 'voice',
-              name: `Voice_Note_${formatDurationClock(duration).replace(':', 'm')}s.wav`,
-              mimeType: 'audio/wav',
-              durationSec: duration,
-              dataUrl: fallbackUrl,
+            const wavFile = createSynthesizedVoiceNoteWavFile(duration);
+            const previewUrl = createTrackedObjectUrl(wavFile);
+            setStagedMedia((prev) => {
+              if (prev) revokeTrackedObjectUrl(prev.previewUrl);
+              return {
+                file: wavFile,
+                previewUrl,
+                kind: 'voice',
+                name: wavFile.name,
+                mimeType: wavFile.type,
+                size: wavFile.size,
+                durationSec: duration,
+              };
             });
           }
           cleanupRecordingTimersAndStream();
@@ -998,13 +1151,19 @@ export function MessengerChatBox({
     }
 
     cleanupRecordingTimersAndStream();
-    const wavDataUrl = createSynthesizedVoiceNoteWavDataUrl(duration);
-    setStagedMedia({
-      kind: 'voice',
-      name: `Voice_Note_${formatDurationClock(duration).replace(':', 'm')}s.wav`,
-      mimeType: 'audio/wav',
-      durationSec: duration,
-      dataUrl: wavDataUrl,
+    const wavFile = createSynthesizedVoiceNoteWavFile(duration);
+    const previewUrl = createTrackedObjectUrl(wavFile);
+    setStagedMedia((prev) => {
+      if (prev) revokeTrackedObjectUrl(prev.previewUrl);
+      return {
+        file: wavFile,
+        previewUrl,
+        kind: 'voice',
+        name: wavFile.name,
+        mimeType: wavFile.type,
+        size: wavFile.size,
+        durationSec: duration,
+      };
     });
   };
 
@@ -1029,67 +1188,177 @@ export function MessengerChatBox({
     e.target.value = '';
     if (!file) return;
 
+    const validation = validateChatAttachmentFile(file);
+    if (!validation.valid) {
+      showToast(validation.error, 'error');
+      return;
+    }
+
     try {
-      const compressedDataUrl = await compressImageFileToDataUrl(file);
-      setStagedMedia({
-        kind: 'image',
-        name: file.name,
-        mimeType: file.type || 'image/jpeg',
-        size: file.size,
-        dataUrl: compressedDataUrl,
+      const processedFile = await compressImageFileToBlobFile(file);
+      const previewUrl = createTrackedObjectUrl(processedFile);
+      setStagedMedia((prev) => {
+        if (prev) revokeTrackedObjectUrl(prev.previewUrl);
+        return {
+          file: processedFile,
+          previewUrl,
+          kind: 'image',
+          name: file.name,
+          mimeType: processedFile.type || file.type || 'image/jpeg',
+          size: processedFile.size,
+        };
       });
     } catch {
       showToast('Could not process selected image.', 'error');
     }
   };
 
-  const handleDocumentInputChange = async (
+  const handleDocumentInputChange = (
     e: React.ChangeEvent<HTMLInputElement>
   ) => {
     const file = e.target.files?.[0];
     e.target.value = '';
     if (!file) return;
 
-    if (file.size > 2 * 1024 * 1024) {
-      showToast('Please select a file smaller than 2 MB.', 'error');
+    const validation = validateChatAttachmentFile(file);
+    if (!validation.valid) {
+      showToast(validation.error, 'error');
       return;
     }
 
-    try {
-      const dataUrl = await readFileAsDataUrl(file);
-      setStagedMedia({
-        kind: 'file',
+    const previewUrl = createTrackedObjectUrl(file);
+    setStagedMedia((prev) => {
+      if (prev) revokeTrackedObjectUrl(prev.previewUrl);
+      return {
+        file,
+        previewUrl,
+        kind:
+          validation.attachmentType === 'image'
+            ? 'image'
+            : validation.attachmentType === 'voice'
+              ? 'voice'
+              : 'file',
         name: file.name,
         mimeType: file.type || 'application/octet-stream',
         size: file.size,
-        dataUrl,
-      });
-    } catch {
-      showToast('Could not attach selected file.', 'error');
-    }
+      };
+    });
   };
 
-  const renderMessageContent = (rawContent: string, isOwnBubble: boolean) => {
-    const { text, attachment } = parseChatMessageContent(rawContent);
+  const renderMessageContent = (msg: ChatMessage, isOwnBubble: boolean) => {
+    const legacyParsed = parseChatMessageContent(msg.content);
+    const text = msg.attachment ? msg.content : legacyParsed.text;
+    const resolvedAttachment: {
+      url: string;
+      name: string;
+      type: 'image' | 'document' | 'voice';
+      size: number | null;
+      durationSec?: number;
+    } | null = msg.attachment
+      ? {
+          url: msg.attachment.url,
+          name: msg.attachment.name,
+          type: msg.attachment.type,
+          size: msg.attachment.size,
+          durationSec: msg.attachment.duration_sec,
+        }
+      : legacyParsed.attachment
+        ? {
+            url: legacyParsed.attachment.dataUrl,
+            name: legacyParsed.attachment.name,
+            type:
+              legacyParsed.attachment.kind === 'image'
+                ? 'image'
+                : legacyParsed.attachment.kind === 'voice' ||
+                    legacyParsed.attachment.kind === 'audio'
+                  ? 'voice'
+                  : 'document',
+            size:
+              legacyParsed.attachment.size ??
+              legacyParsed.attachment.sizeBytes ??
+              null,
+            durationSec: legacyParsed.attachment.durationSec,
+          }
+        : null;
+
+    const sizeLabel = formatFileSize(resolvedAttachment?.size ?? undefined);
+    const isBrokenImage = Boolean(
+      resolvedAttachment && brokenImageUrls[resolvedAttachment.url]
+    );
 
     return (
       <div className="space-y-2">
-        {attachment && attachment.kind === 'image' && (
+        {resolvedAttachment && resolvedAttachment.type === 'image' && (
           <div className="rounded-xl overflow-hidden border border-black/10 bg-black/5">
-            <img
-              src={attachment.dataUrl}
-              alt={attachment.name}
-              className="max-h-64 w-auto max-w-full object-contain rounded-lg block"
-            />
+            {isBrokenImage ? (
+              <a
+                href={resolvedAttachment.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className={`flex items-center justify-between gap-3 p-2.5 transition-colors ${
+                  isOwnBubble
+                    ? 'bg-white/10 hover:bg-white/15 text-white'
+                    : 'bg-white hover:bg-slate-50 text-ustp-navy'
+                }`}
+              >
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div
+                    className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${
+                      isOwnBubble
+                        ? 'bg-ustp-gold text-ustp-navy'
+                        : 'bg-ustp-navy text-ustp-gold'
+                    }`}
+                  >
+                    <ImageIcon className="w-4 h-4" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-xs font-extrabold truncate">
+                      {resolvedAttachment.name}
+                    </p>
+                    <p
+                      className={`text-[10px] font-mono tabular-nums ${
+                        isOwnBubble ? 'text-slate-300' : 'text-slate-500'
+                      }`}
+                    >
+                      {sizeLabel || 'Image Attachment'}
+                    </p>
+                  </div>
+                </div>
+              </a>
+            ) : (
+              <a
+                href={resolvedAttachment.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                title={`View ${resolvedAttachment.name}`}
+              >
+                <img
+                  src={resolvedAttachment.url}
+                  alt={resolvedAttachment.name}
+                  onError={() =>
+                    setBrokenImageUrls((prev) => ({
+                      ...prev,
+                      [resolvedAttachment.url]: true,
+                    }))
+                  }
+                  className="max-h-64 w-auto max-w-full object-contain rounded-lg block"
+                />
+              </a>
+            )}
             <div
               className={`px-2.5 py-1 flex items-center justify-between gap-2 text-[11px] ${
                 isOwnBubble ? 'text-slate-200' : 'text-slate-600'
               }`}
             >
-              <span className="truncate font-medium">{attachment.name}</span>
+              <span className="truncate font-medium">
+                {resolvedAttachment.name}
+                {sizeLabel ? ` (${sizeLabel})` : ''}
+              </span>
               <a
-                href={attachment.dataUrl}
-                download={attachment.name}
+                href={resolvedAttachment.url}
+                download={resolvedAttachment.name}
+                target="_blank"
+                rel="noopener noreferrer"
                 className={`inline-flex items-center gap-1 font-bold underline shrink-0 ${
                   isOwnBubble ? 'text-ustp-gold' : 'text-ustp-navy'
                 }`}
@@ -1101,10 +1370,12 @@ export function MessengerChatBox({
           </div>
         )}
 
-        {attachment && attachment.kind === 'file' && (
+        {resolvedAttachment && resolvedAttachment.type === 'document' && (
           <a
-            href={attachment.dataUrl}
-            download={attachment.name}
+            href={resolvedAttachment.url}
+            download={resolvedAttachment.name}
+            target="_blank"
+            rel="noopener noreferrer"
             className={`flex items-center justify-between gap-3 p-2.5 rounded-xl border transition-colors ${
               isOwnBubble
                 ? 'bg-white/10 hover:bg-white/15 border-white/20 text-white'
@@ -1123,14 +1394,14 @@ export function MessengerChatBox({
               </div>
               <div className="min-w-0">
                 <p className="text-xs font-extrabold truncate">
-                  {attachment.name}
+                  {resolvedAttachment.name}
                 </p>
                 <p
-                  className={`text-[10px] font-mono ${
+                  className={`text-[10px] font-mono tabular-nums ${
                     isOwnBubble ? 'text-slate-300' : 'text-slate-500'
                   }`}
                 >
-                  {formatFileSize(attachment.size) || 'Document Attachment'}
+                  {sizeLabel || 'Document Attachment'}
                 </p>
               </div>
             </div>
@@ -1147,7 +1418,7 @@ export function MessengerChatBox({
           </a>
         )}
 
-        {attachment && attachment.kind === 'voice' && (
+        {resolvedAttachment && resolvedAttachment.type === 'voice' && (
           <div
             className={`p-2.5 rounded-xl border space-y-1.5 ${
               isOwnBubble
@@ -1160,16 +1431,16 @@ export function MessengerChatBox({
                 <Volume2 className="w-3.5 h-3.5 text-ustp-gold shrink-0" />
                 <span>Voice Message</span>
               </span>
-              {attachment.durationSec !== undefined && (
-                <span className="font-mono text-[10px] opacity-80">
-                  {formatDurationClock(attachment.durationSec)}
-                </span>
-              )}
+              <span className="font-mono tabular-nums text-[10px] opacity-80">
+                {resolvedAttachment.durationSec !== undefined
+                  ? formatDurationClock(resolvedAttachment.durationSec)
+                  : sizeLabel}
+              </span>
             </div>
             <audio
               controls
               preload="metadata"
-              src={attachment.dataUrl}
+              src={resolvedAttachment.url}
               className="w-full max-w-[240px] sm:max-w-[280px] h-8"
             />
           </div>
@@ -1922,7 +2193,7 @@ export function MessengerChatBox({
                             }`}
                             title={`Sent by you (${currentUser.name}) at ${displayTime}`}
                           >
-                            {renderMessageContent(msg.content, true)}
+                            {renderMessageContent(msg, true)}
                           </div>
                         </div>
                         {msg.status === 'sending' && (
@@ -2003,7 +2274,7 @@ export function MessengerChatBox({
                             </div>
 
                             <div className="bg-ustp-cream text-ustp-text border border-amber-200/80 rounded-[20px] rounded-bl-xs px-4 py-2.5 text-xs sm:text-sm leading-relaxed shadow-2xs break-words">
-                              {renderMessageContent(msg.content, false)}
+                              {renderMessageContent(msg, false)}
                             </div>
                           </div>
                         </div>
@@ -2072,7 +2343,7 @@ export function MessengerChatBox({
               <div className="flex items-center gap-3 min-w-0">
                 {stagedMedia.kind === 'image' && (
                   <img
-                    src={stagedMedia.dataUrl}
+                    src={stagedMedia.previewUrl}
                     alt={stagedMedia.name}
                     className="w-10 h-10 rounded object-cover border border-amber-300 shrink-0"
                   />
@@ -2085,7 +2356,7 @@ export function MessengerChatBox({
                 {stagedMedia.kind === 'voice' && (
                   <audio
                     controls
-                    src={stagedMedia.dataUrl}
+                    src={stagedMedia.previewUrl}
                     className="h-8 max-w-[200px] sm:max-w-[240px]"
                   />
                 )}
@@ -2093,18 +2364,22 @@ export function MessengerChatBox({
                   <p className="font-bold text-ustp-navy truncate">
                     {stagedMedia.name}
                   </p>
-                  <p className="text-[10px] text-slate-500 font-mono">
+                  <p className="text-[10px] text-slate-500 font-mono tabular-nums">
                     {stagedMedia.kind === 'voice'
                       ? `Voice Recording • ${formatDurationClock(
                           stagedMedia.durationSec || 1
-                        )}`
+                        )}${
+                          formatFileSize(stagedMedia.size)
+                            ? ` • ${formatFileSize(stagedMedia.size)}`
+                            : ''
+                        }`
                       : formatFileSize(stagedMedia.size) || 'Ready to send'}
                   </p>
                 </div>
               </div>
               <button
                 type="button"
-                onClick={() => setStagedMedia(null)}
+                onClick={() => clearStagedMedia(false)}
                 aria-label="Remove staged attachment"
                 className="text-slate-500 hover:text-red-600 p-1 cursor-pointer shrink-0"
               >

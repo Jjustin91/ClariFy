@@ -29,6 +29,13 @@ const ALLOWED_ATTACHMENT_EXTENSIONS = new Set([
   'xls',
   'xlsx',
   'txt',
+  'csv',
+  'zip',
+  'webm',
+  'ogg',
+  'wav',
+  'mp3',
+  'm4a',
 ]);
 
 const FORBIDDEN_ATTACHMENT_MIMES = new Set([
@@ -92,23 +99,30 @@ async function parseRequestBody(
           FORBIDDEN_ATTACHMENT_MIMES.has(mime)
         ) {
           obj._attachment_error =
-            'The attachment must be a file of type: jpg, jpeg, png, webp, gif, pdf, doc, docx, ppt, pptx, xls, xlsx, txt.';
+            'The attachment must be a file of type: jpg, jpeg, png, webp, gif, pdf, doc, docx, ppt, pptx, xls, xlsx, txt, csv, zip, webm, ogg, wav, mp3, m4a.';
           return obj;
         }
 
         const isImage =
           mime.startsWith('image/') ||
           ['jpg', 'jpeg', 'png', 'webp', 'gif'].includes(ext);
+        const isVoice =
+          mime.startsWith('audio/') ||
+          ['webm', 'ogg', 'wav', 'mp3', 'm4a'].includes(ext);
         const isPdf = mime === 'application/pdf' || ext === 'pdf';
 
+        const chatMatch = apiPath.match(/^\/channels\/(\d+)\/(chat|messages)$/);
         const annMatch = apiPath.match(/^\/announcements\/(\d+)$/);
+        const isChatUpload = Boolean(chatMatch);
         const channelFolder = Number(
-          obj.channel_id || (annMatch ? annMatch[1] : 0) || 0
+          (chatMatch ? chatMatch[1] : obj.channel_id) ||
+            (annMatch ? annMatch[1] : 0) ||
+            0
         );
         const fileName = `${crypto.randomUUID()}.${ext}`;
         const relDir = path.posix.join(
           'storage',
-          'announcements',
+          isChatUpload ? 'chat' : 'announcements',
           String(channelFolder)
         );
         const absDir = path.join(process.cwd(), 'public', relDir);
@@ -118,7 +132,17 @@ async function parseRequestBody(
 
         obj.attachment_url = `/${relDir}/${fileName}`;
         obj.attachment_name = origName;
-        obj.attachment_type = isImage ? 'image' : isPdf ? 'pdf' : 'document';
+        obj.attachment_mime = mime || 'application/octet-stream';
+        obj.attachment_size = uploadedAttachmentFile.size;
+        obj.attachment_type = isImage
+          ? 'image'
+          : isVoice
+            ? 'voice'
+            : isChatUpload
+              ? 'document'
+              : isPdf
+                ? 'pdf'
+                : 'document';
       }
       return obj;
     }
@@ -175,7 +199,7 @@ function classifyMutationEvent(
       announcement: data as unknown as RealtimeEvent['announcement'],
     };
   }
-  const chatMatch = apiPath.match(/^\/channels\/(\d+)\/chat$/);
+  const chatMatch = apiPath.match(/^\/channels\/(\d+)\/(chat|messages)$/);
   if (chatMatch) {
     return {
       type: 'chat.message',
