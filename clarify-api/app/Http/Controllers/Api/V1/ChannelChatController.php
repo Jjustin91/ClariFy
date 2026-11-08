@@ -207,9 +207,10 @@ class ChannelChatController
             $validated['temp_id'] ?? null
         );
 
-        RealtimeStateUpdated::dispatchAfterResponse(
+        RealtimeStateUpdated::safeDispatch(
             'chat.message',
-            $channel->id,
+            (int) $channel->id,
+            (int) $user->id,
             null,
             $payload
         );
