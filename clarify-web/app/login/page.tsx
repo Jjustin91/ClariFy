@@ -6,6 +6,8 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
   AlertCircle,
+  Eye,
+  EyeOff,
   ShieldAlert,
   UserPlus,
 } from 'lucide-react';
@@ -20,6 +22,7 @@ export default function LoginPage() {
 
   const [institutionalId, setInstitutionalId] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string[]>>({});
   const [pendingNotice, setPendingNotice] = useState<string | null>(null);
@@ -82,8 +85,8 @@ export default function LoginPage() {
   return (
     <div className="min-h-screen flex flex-col lg:flex-row">
       {/* Left Side (70% width on desktop): Deep ustp-navy (#1a1851) background with centered institutional branding card */}
-      <div className="w-full lg:w-[70%] bg-ustp-navy text-white p-8 lg:p-16 flex flex-col items-center justify-center">
-        <div className="bg-slate-100 text-ustp-text border-2 border-ustp-gold rounded-lg p-8 sm:p-12 max-w-xl w-full text-center shadow-lg">
+      <div className="w-full lg:w-[70%] bg-ustp-navy text-white p-4 sm:p-8 lg:p-16 flex flex-col items-center justify-center">
+        <div className="bg-slate-100 text-ustp-text border-2 border-ustp-gold rounded-lg p-5 sm:p-12 max-w-xl w-full text-center shadow-lg">
           <div className="inline-flex items-center justify-center mb-3">
             <Image
               src="/assets/aistudio/image_07899ab9.png"
@@ -91,18 +94,18 @@ export default function LoginPage() {
               width={220}
               height={76}
               unoptimized
-              className="h-14 sm:h-16 w-auto object-contain"
+              className="h-12 sm:h-16 w-auto object-contain"
             />
           </div>
           <p className="text-sm sm:text-base font-bold text-ustp-blue mt-1">
             Unified Campus Noticeboard &amp; Scoped Communication Platform
           </p>
           <p className="text-xs sm:text-sm text-slate-600 mt-3 leading-relaxed">
-            University of Science and Technology of Southern Philippines — Cagayan de Oro Campus (IT314 Software Engineering • IT3R2 Group 5)
+            University of Science and Technology of Southern Philippines — Cagayan de Oro Campus
           </p>
 
           {/* Student/Faculty Registration Link */}
-          <div className="mt-8 pt-6 border-t border-slate-300 text-left">
+          <div className="mt-6 sm:mt-8 pt-5 sm:pt-6 border-t border-slate-300 text-left">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
                 <p className="text-xs font-extrabold text-ustp-navy">
@@ -125,7 +128,7 @@ export default function LoginPage() {
       </div>
 
       {/* Right Side (30% width on desktop): Full-height ustp-orange (#ff9718) vertical login panel */}
-      <div className="w-full lg:w-[30%] bg-ustp-orange text-ustp-text p-8 sm:p-10 flex flex-col items-center justify-center border-l border-amber-700/30">
+      <div className="w-full lg:w-[30%] bg-ustp-orange text-ustp-text p-5 sm:p-10 flex flex-col items-center justify-center border-l border-amber-700/30">
         <div className="w-full max-w-xs space-y-6">
           <div className="flex flex-col items-center">
             <div className="w-20 h-20 rounded-full bg-[#000b3d] border-4 border-ustp-gold flex items-center justify-center shadow-md overflow-hidden p-2.5">
@@ -197,14 +200,29 @@ export default function LoginPage() {
               <label htmlFor="login-password" className="sr-only">
                 Password
               </label>
-              <input
-                id="login-password"
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="Password"
-                className="w-full px-3.5 py-2.5 text-sm bg-white text-ustp-text placeholder:text-slate-400 border-2 border-white focus:border-ustp-navy rounded focus:outline-none"
-              />
+              <div className="relative">
+                <input
+                  id="login-password"
+                  type={showPassword ? 'text' : 'password'}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="Password"
+                  className="w-full pl-3.5 pr-11 py-2.5 text-sm bg-white text-ustp-text placeholder:text-slate-400 border-2 border-white focus:border-ustp-navy rounded focus:outline-none"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((prev) => !prev)}
+                  aria-label={showPassword ? 'Hide password' : 'Show password'}
+                  aria-pressed={showPassword}
+                  className="absolute right-1 top-1/2 -translate-y-1/2 min-w-[40px] min-h-[40px] flex items-center justify-center rounded text-slate-600 hover:text-ustp-navy focus-visible:outline-2 focus-visible:outline-ustp-navy cursor-pointer"
+                >
+                  {showPassword ? (
+                    <EyeOff className="w-4 h-4" />
+                  ) : (
+                    <Eye className="w-4 h-4" />
+                  )}
+                </button>
+              </div>
               {passwordError && (
                 <p
                   className="text-xs font-extrabold text-red-900 bg-red-100/90 px-2 py-1 rounded mt-1"

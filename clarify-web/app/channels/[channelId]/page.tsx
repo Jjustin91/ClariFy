@@ -180,8 +180,37 @@ export default function CourseHubPage() {
   const [replyErrors, setReplyErrors] = useState<Record<string, string[]>>({});
   const [isSubmittingReply, setIsSubmittingReply] = useState(false);
 
-  // Class FAQs Accordion open state
+  // Class FAQs Accordion open state (default collapsed: both panel and items)
   const [openFaqIds, setOpenFaqIds] = useState<number[]>([]);
+  const [isFaqSectionOpen, setIsFaqSectionOpen] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const stored = window.sessionStorage.getItem('clarify_class_faqs_open');
+      if (stored === '1') {
+        setIsFaqSectionOpen(true);
+      } else if (stored === '0') {
+        setIsFaqSectionOpen(false);
+      }
+    } catch {
+      // Ignore sessionStorage errors
+    }
+  }, []);
+
+  const updateFaqSectionOpen = useCallback((nextOpen: boolean) => {
+    setIsFaqSectionOpen(nextOpen);
+    if (typeof window !== 'undefined') {
+      try {
+        window.sessionStorage.setItem(
+          'clarify_class_faqs_open',
+          nextOpen ? '1' : '0'
+        );
+      } catch {
+        // Ignore sessionStorage errors
+      }
+    }
+  }, []);
 
   const loadHubData = useCallback(
     async (targetChannelId: number) => {
@@ -206,14 +235,6 @@ export default function CourseHubPage() {
         ]);
         setAnnouncements(annRes.data);
         setThreads(threadRes.data);
-        const faqIds = threadRes.data
-          .filter((t) => t.is_pinned_faq)
-          .map((t) => t.id);
-        if (faqIds.length > 0) {
-          setOpenFaqIds((prev) =>
-            prev.length === 0 ? faqIds : Array.from(new Set([...prev, ...faqIds]))
-          );
-        }
         hasLoadedOnceRef.current = true;
       } catch (err) {
         const apiErr = err as LaravelValidationError;
@@ -289,12 +310,9 @@ export default function CourseHubPage() {
             }
             return [incomingThread, ...prev];
           });
-          if (incomingThread.is_pinned_faq) {
-            setOpenFaqIds((prev) =>
-              prev.includes(incomingThread.id)
-                ? prev
-                : [incomingThread.id, ...prev]
-            );
+          if (event.type === 'thread.faq_pinned' && incomingThread.is_pinned_faq) {
+            updateFaqSectionOpen(true);
+            setOpenFaqIds([incomingThread.id]);
           }
         } else {
           void loadHubData(channelId);
@@ -328,6 +346,7 @@ export default function CourseHubPage() {
     user.role,
     loadHubData,
     subscribeRealtimeEvents,
+    updateFaqSectionOpen,
   ]);
 
   const canPublish = canPublishOrManageAnnouncements(user.role);
@@ -426,8 +445,9 @@ export default function CourseHubPage() {
         pin_to_faq: pinTicketToFaq,
       });
       showToast(res.message || 'Ticket answered.', 'success');
-      if (pinTicketToFaq && !openFaqIds.includes(answeringThread.id)) {
-        setOpenFaqIds((prev) => [answeringThread.id, ...prev]);
+      if (pinTicketToFaq) {
+        updateFaqSectionOpen(true);
+        setOpenFaqIds([answeringThread.id]);
       }
       setAnsweringThread(null);
       setReplyContent('');
@@ -444,14 +464,13 @@ export default function CourseHubPage() {
     }
   };
 
-  // Faculty 1-Click Convert to Class FAQ
+  // Faculty Pin to Class FAQs
   const handleOneClickConvertFaq = async (threadId: number) => {
     try {
       const res = await convertThreadToFaqApi(threadId);
-      showToast(res.message || 'Converted to anonymized Class FAQ.', 'success');
-      if (!openFaqIds.includes(threadId)) {
-        setOpenFaqIds((prev) => [threadId, ...prev]);
-      }
+      showToast(res.message || 'Pinned to Class FAQs.', 'success');
+      updateFaqSectionOpen(true);
+      setOpenFaqIds([threadId]);
       await loadHubData(channelId);
     } catch (err) {
       const apiErr = err as LaravelValidationError;
@@ -577,7 +596,7 @@ export default function CourseHubPage() {
               />
             </div>
 
-            {/* Top Action Buttons: + Add Course Hub & Browse Course Hubs */}
+            {/* Top Action Buttons: Add Course Hub & Browse Course Hubs */}
             <div className="space-y-1.5">
               <button
                 type="button"
@@ -587,7 +606,7 @@ export default function CourseHubPage() {
                 }}
                 className="w-full flex items-center justify-between px-3 py-2 text-xs font-extrabold bg-ustp-gold hover:opacity-95 text-ustp-navy rounded-md shadow-xs cursor-pointer"
               >
-                <span>+ Add Course Hub</span>
+                <span>Add Course Hub</span>
                 <Plus className="w-3.5 h-3.5 stroke-[2.5]" />
               </button>
 
@@ -1045,7 +1064,7 @@ export default function CourseHubPage() {
                         className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-extrabold bg-ustp-navy text-white hover:opacity-95 whitespace-nowrap shrink-0 cursor-pointer"
                       >
                         <Plus className="w-3.5 h-3.5 text-ustp-gold" />
-                        <span>+ Create Course Announcement</span>
+                        <span>Create Course Announcement</span>
                       </button>
                     )}
                   </div>
@@ -1058,7 +1077,7 @@ export default function CourseHubPage() {
                       description="Official course memos and room reassignments will appear here chronologically with urgent notices pinned on top."
                       actionLabel={
                         canPublish
-                          ? '+ Create First Course Announcement'
+                          ? 'Create First Course Announcement'
                           : undefined
                       }
                       onAction={
@@ -1085,7 +1104,7 @@ export default function CourseHubPage() {
                   )}
                 </div>
               ) : (
-                /* SEPARATE TAB: ISOLATED Q&A THREADS (WITH + ASK IN Q&A THREAD INSIDE THIS CHANNEL) */
+                /* SEPARATE TAB: ISOLATED Q&A THREADS (WITH ASK IN Q&A THREAD INSIDE THIS CHANNEL) */
                 <div className="space-y-4">
                   <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-slate-200">
                     <div>
@@ -1106,7 +1125,7 @@ export default function CourseHubPage() {
                         className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-md text-xs font-extrabold bg-ustp-gold text-ustp-navy hover:opacity-95 whitespace-nowrap shrink-0 cursor-pointer"
                       >
                         <MessageSquarePlus className="w-3.5 h-3.5" />
-                        <span>+ Ask in Q&amp;A Thread</span>
+                        <span>Ask in Q&amp;A Thread</span>
                       </button>
                     )}
                   </div>
@@ -1115,7 +1134,7 @@ export default function CourseHubPage() {
                     <EmptyState
                       title="No Academic Inquiries Submitted Yet"
                       description="Students can submit structured questions or clarifications without cluttering the official noticeboard."
-                      actionLabel={isStudent ? '+ Ask in Q&A Thread' : undefined}
+                      actionLabel={isStudent ? 'Ask in Q&A Thread' : undefined}
                       onAction={
                         isStudent
                           ? () => setActiveTab('send_inquiry')
@@ -1297,7 +1316,7 @@ export default function CourseHubPage() {
           />
         </div>
 
-        {/* INNER-RIGHT PANEL: Class FAQs — 1-Click Converted Accordion OR Faculty "Answer Ticket" Panel
+        {/* INNER-RIGHT PANEL: Class FAQs Accordion OR Faculty "Answer Ticket" Panel
             - Mobile (<1024px): Slide-out right drawer
             - Desktop (lg+): Sticky docked sidebar */}
         <aside
@@ -1387,7 +1406,7 @@ export default function CourseHubPage() {
                       onChange={(e) => setPinTicketToFaq(e.target.checked)}
                       className="accent-ustp-navy"
                     />
-                    <span>Pin Ticket (1-Click Anonymized FAQ)</span>
+                    <span>Pin to Class FAQs</span>
                   </label>
                 </div>
 
@@ -1410,28 +1429,48 @@ export default function CourseHubPage() {
               </form>
             </div>
           ) : (
-            /* CLASS FAQS — 1-CLICK CONVERTED ACCORDION matching Oct 22 MVP & Wireframe Page 7 */
+            /* CLASS FAQS ACCORDION matching Oct 22 MVP & Wireframe Page 7 */
             <div className="space-y-3">
-              <div className="flex items-center justify-between border-b border-slate-200 pb-2.5">
-                <h2 className="text-sm font-extrabold text-ustp-text">
-                  Class FAQs
-                </h2>
-                <div className="flex items-center gap-2">
-                  <span className="text-[11px] font-semibold text-slate-500">
-                    1-Click Converted
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => setIsMobileFaqOpen(false)}
-                    aria-label="Close Class FAQs drawer"
-                    className="lg:hidden p-1 rounded text-slate-500 hover:text-slate-800 cursor-pointer"
-                  >
-                    <X className="w-4 h-4" />
-                  </button>
-                </div>
+              <div className="flex items-center justify-between border-b border-slate-200 pb-2.5 gap-2">
+                <button
+                  type="button"
+                  onClick={() => updateFaqSectionOpen(!isFaqSectionOpen)}
+                  aria-expanded={isFaqSectionOpen}
+                  className="flex-1 flex items-center justify-between gap-2 text-left py-1 rounded hover:bg-slate-50 focus-visible:outline-2 focus-visible:outline-ustp-navy cursor-pointer"
+                >
+                  <div className="flex items-center gap-2">
+                    <h2 className="text-sm font-extrabold text-ustp-text">
+                      Class FAQs
+                    </h2>
+                    <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-700 font-mono tabular-nums text-[11px] font-bold">
+                      {publishedFaqs.length}
+                    </span>
+                  </div>
+                  {isFaqSectionOpen ? (
+                    <ChevronUp className="w-4 h-4 text-slate-500 shrink-0" />
+                  ) : (
+                    <ChevronDown className="w-4 h-4 text-slate-500 shrink-0" />
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsMobileFaqOpen(false)}
+                  aria-label="Close Class FAQs drawer"
+                  className="lg:hidden p-1 rounded text-slate-500 hover:text-slate-800 cursor-pointer shrink-0"
+                >
+                  <X className="w-4 h-4" />
+                </button>
               </div>
 
-              {!activeChannel ? (
+              {!isFaqSectionOpen ? (
+                <p className="text-xs text-slate-500 py-2">
+                  {publishedFaqs.length === 0
+                    ? 'No Class FAQs published yet.'
+                    : `${publishedFaqs.length} pinned FAQ${
+                        publishedFaqs.length === 1 ? '' : 's'
+                      } available. Click Class FAQs above to expand.`}
+                </p>
+              ) : !activeChannel ? (
                 <p className="text-xs text-slate-500 py-4 text-center">
                   Join a Course Hub to view Class FAQs.
                 </p>
@@ -1443,9 +1482,16 @@ export default function CourseHubPage() {
                 <div className="space-y-2.5">
                   {publishedFaqs.map((faq) => {
                     const isExpanded = openFaqIds.includes(faq.id);
+                    const latestReplyObj =
+                      faq.replies.length > 0
+                        ? faq.replies[faq.replies.length - 1]
+                        : undefined;
                     const latestReply =
-                      faq.replies[faq.replies.length - 1]?.content ||
+                      latestReplyObj?.content ||
                       'Resolved during consultation.';
+                    const facultyReplyHeader = latestReplyObj?.author?.name
+                      ? `Faculty reply · ${latestReplyObj.author.name}`
+                      : 'Faculty reply';
 
                     return (
                       <div
@@ -1469,15 +1515,22 @@ export default function CourseHubPage() {
                         </button>
 
                         {isExpanded && (
-                          <div className="px-3 pb-3 pt-1.5 text-xs space-y-2 border-t border-slate-100">
-                            <p className="text-[11px] font-semibold text-slate-500">
-                              Asked by: Anonymous Student
-                            </p>
-                            <p className="text-slate-700 leading-relaxed">
-                              {faq.content}
-                            </p>
-                            <div className="pt-1.5 border-t border-slate-200/80 text-ustp-text font-medium leading-relaxed">
-                              {latestReply}
+                          <div className="px-3 pb-3 pt-2 text-xs space-y-2.5 border-t border-slate-100 bg-white">
+                            <div className="space-y-1">
+                              <p className="text-[11px] font-semibold text-slate-500">
+                                Asked by: Anonymous Student
+                              </p>
+                              <p className="text-slate-700 leading-relaxed">
+                                {faq.content}
+                              </p>
+                            </div>
+                            <div className="bg-ustp-cream border border-amber-200/80 border-l-2 border-l-ustp-navy rounded p-2.5 space-y-1">
+                              <p className="text-[11px] font-extrabold text-ustp-navy">
+                                {facultyReplyHeader}
+                              </p>
+                              <p className="text-ustp-text font-medium leading-relaxed">
+                                {latestReply}
+                              </p>
                             </div>
                           </div>
                         )}

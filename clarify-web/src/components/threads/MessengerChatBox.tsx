@@ -35,6 +35,7 @@ import {
   leaveChannelApi,
   manageChannelMemberApi,
   sendChannelChatMessageApi,
+  unsendChannelChatMessageApi,
 } from '../../lib/api-client';
 import {
   createRetryableChatFileStore,
@@ -45,6 +46,7 @@ import {
   getCleanChannelDescription,
   getFieldValidationError,
   getJoinedCourseHubs,
+  getUnsentMessagePlaceholder,
   isSubChannel,
   isUserCourseAdmin,
   parseChatMessageContent,
@@ -375,6 +377,12 @@ export function MessengerChatBox({
   const [processingMemberIds, setProcessingMemberIds] = useState<
     Record<string, boolean>
   >({});
+  const [confirmingUnsendId, setConfirmingUnsendId] = useState<
+    string | number | null
+  >(null);
+  const [unsendingById, setUnsendingById] = useState<Record<string, boolean>>(
+    {}
+  );
 
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -651,6 +659,34 @@ export function MessengerChatBox({
           (!event.channel_id || Number(event.channel_id) === Number(hubKey))
         ) {
           void refreshChannelRoster(hubKey);
+        }
+        return;
+      }
+      if (event.type === 'chat.message_unsent') {
+        if (event.channel_id && Number(event.channel_id) !== Number(channelKey)) {
+          return;
+        }
+        const targetMsgId = event.message_id ?? event.message?.id;
+        if (targetMsgId !== undefined && targetMsgId !== null) {
+          setMessagesByChannel((prev) => {
+            const list = prev[channelKey] || [];
+            if (!list.some((m) => String(m.id) === String(targetMsgId))) {
+              return prev;
+            }
+            return {
+              ...prev,
+              [channelKey]: list.map((m) =>
+                String(m.id) === String(targetMsgId)
+                  ? {
+                      ...m,
+                      is_unsent: true,
+                      content: '',
+                      attachment: null,
+                    }
+                  : m
+              ),
+            };
+          });
         }
         return;
       }
@@ -1028,6 +1064,58 @@ export function MessengerChatBox({
       retryFile,
       failedMsg.attachment || null
     );
+  };
+
+  const handleConfirmUnsendMessage = async (msg: ChatMessage) => {
+    if (!channelKey || msg.is_unsent) return;
+    const msgKey = String(msg.id);
+    if (msgKey.startsWith('temp-') || unsendingById[msgKey]) return;
+
+    const snapshot: ChatMessage = {
+      ...msg,
+      attachment: msg.attachment ? { ...msg.attachment } : null,
+    };
+
+    setConfirmingUnsendId(null);
+    setUnsendingById((prev) => ({ ...prev, [msgKey]: true }));
+
+    // Optimistic patch
+    setMessagesByChannel((prev) => ({
+      ...prev,
+      [channelKey]: (prev[channelKey] || []).map((m) =>
+        String(m.id) === msgKey
+          ? {
+              ...m,
+              is_unsent: true,
+              content: '',
+              attachment: null,
+            }
+          : m
+      ),
+    }));
+
+    try {
+      await unsendChannelChatMessageApi(channelKey, msg.id);
+    } catch (err) {
+      const apiErr = err as LaravelValidationError;
+      // Roll back optimistic unsend on failure
+      setMessagesByChannel((prev) => ({
+        ...prev,
+        [channelKey]: (prev[channelKey] || []).map((m) =>
+          String(m.id) === msgKey ? snapshot : m
+        ),
+      }));
+      showToast(
+        apiErr?.message || 'Unable to unsend message. Please try again.',
+        'error'
+      );
+    } finally {
+      setUnsendingById((prev) => {
+        const next = { ...prev };
+        delete next[msgKey];
+        return next;
+      });
+    }
   };
 
   const handleStartVoiceRecording = async () => {
@@ -1736,7 +1824,7 @@ export function MessengerChatBox({
               className="inline-flex items-center gap-1.5 px-4 py-2 rounded-md text-xs font-extrabold bg-ustp-gold text-ustp-navy hover:opacity-95 cursor-pointer"
             >
               <Plus className="w-3.5 h-3.5" />
-              <span>+ Add Course Hub</span>
+              <span>Add Course Hub</span>
             </button>
           </div>
         </div>
@@ -2023,9 +2111,10 @@ export function MessengerChatBox({
                     <button
                       type="submit"
                       disabled={isManagingRoster}
-                      className="px-2.5 py-1.5 text-xs font-bold bg-ustp-navy text-white rounded hover:opacity-95 disabled:opacity-50 cursor-pointer"
+                      className="inline-flex items-center justify-center gap-1 px-2.5 py-1.5 text-xs font-bold bg-ustp-navy text-white rounded hover:opacity-95 disabled:opacity-50 cursor-pointer"
                     >
-                      + Add Member
+                      <Plus className="w-3.5 h-3.5 text-ustp-gold shrink-0" />
+                      <span>Add Member</span>
                     </button>
                   </div>
                   {memberIdError && (
@@ -2168,6 +2257,19 @@ export function MessengerChatBox({
                   ? currentUser.avatar_url || msg.author.avatar_url
                   : msg.author.avatar_url;
 
+                const unsentPlaceholder = getUnsentMessagePlaceholder(
+                  msg,
+                  currentUser.id
+                );
+                const canUnsendOwnMessage =
+                  isCurrentUser &&
+                  !msg.is_unsent &&
+                  (!msg.status || msg.status === 'sent') &&
+                  !String(msg.id).startsWith('temp-');
+                const isConfirmingThisUnsend =
+                  canUnsendOwnMessage &&
+                  String(confirmingUnsendId) === String(msg.id);
+
                 return (
                   <React.Fragment key={msg.id}>
                     {/* Centered Uppercase Timestamp Divider */}
@@ -2180,22 +2282,68 @@ export function MessengerChatBox({
                     )}
 
                     {isCurrentUser ? (
-                      /* CURRENT USER MESSAGE: Right-aligned USTP Navy Bubble (#1a1851) */
+                      /* CURRENT USER MESSAGE: Right-aligned USTP Navy Bubble (#1a1851) or muted unsent placeholder */
                       <div className="flex flex-col items-end">
-                        <div className="flex items-end justify-end gap-2 w-full">
-                          <div
-                            className={`rounded-[20px] rounded-br-xs px-4 py-2.5 text-xs sm:text-sm leading-relaxed shadow-2xs max-w-[82%] sm:max-w-[68%] break-words transition-opacity ${
-                              msg.status === 'failed'
-                                ? 'bg-red-900/90 text-white border border-red-500'
-                                : msg.status === 'sending'
-                                ? 'bg-ustp-navy/80 text-white border border-ustp-navy/80 opacity-85'
-                                : 'bg-ustp-navy text-white border border-ustp-navy'
-                            }`}
-                            title={`Sent by you (${currentUser.name}) at ${displayTime}`}
-                          >
-                            {renderMessageContent(msg, true)}
-                          </div>
+                        <div className="flex items-end justify-end gap-1.5 w-full">
+                          {canUnsendOwnMessage && !isConfirmingThisUnsend && (
+                            <button
+                              type="button"
+                              onClick={() => setConfirmingUnsendId(msg.id)}
+                              aria-label="Unsend message"
+                              title="Unsend message"
+                              className="min-w-[40px] min-h-[40px] px-2 rounded-md text-slate-400 hover:text-red-600 hover:bg-red-50 inline-flex items-center justify-center gap-1 text-[11px] font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-ustp-navy shrink-0 cursor-pointer"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                              <span className="hidden sm:inline">Unsend</span>
+                            </button>
+                          )}
+                          {unsentPlaceholder ? (
+                            <div
+                              className="rounded-[20px] rounded-br-xs px-4 py-2 text-xs italic text-slate-500 bg-slate-100 border border-slate-200 max-w-[82%] sm:max-w-[68%] select-none"
+                              title={`Unsent at ${displayTime}`}
+                            >
+                              {unsentPlaceholder}
+                            </div>
+                          ) : (
+                            <div
+                              className={`rounded-[20px] rounded-br-xs px-4 py-2.5 text-xs sm:text-sm leading-relaxed shadow-2xs max-w-[82%] sm:max-w-[68%] break-words transition-opacity ${
+                                msg.status === 'failed'
+                                  ? 'bg-red-900/90 text-white border border-red-500'
+                                  : msg.status === 'sending'
+                                  ? 'bg-ustp-navy/80 text-white border border-ustp-navy/80 opacity-85'
+                                  : 'bg-ustp-navy text-white border border-ustp-navy'
+                              }`}
+                              title={`Sent by you (${currentUser.name}) at ${displayTime}`}
+                            >
+                              {renderMessageContent(msg, true)}
+                            </div>
+                          )}
                         </div>
+                        {isConfirmingThisUnsend && (
+                          <div
+                            role="group"
+                            aria-label="Confirm unsend message"
+                            className="mt-1.5 flex items-center gap-1.5 bg-red-50 border border-red-200 rounded-md px-2.5 py-1 text-xs"
+                          >
+                            <span className="font-semibold text-red-900 text-[11px]">
+                              Unsend for everyone?
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => void handleConfirmUnsendMessage(msg)}
+                              className="min-h-[36px] px-2.5 py-1 rounded bg-red-600 hover:bg-red-700 text-white text-[11px] font-extrabold cursor-pointer"
+                            >
+                              Unsend
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setConfirmingUnsendId(null)}
+                              className="min-h-[36px] px-2 py-1 rounded bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 text-[11px] font-bold cursor-pointer"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        )}
                         {msg.status === 'sending' && (
                           <div className="mt-1 pr-1 flex items-center gap-1.5 select-none">
                             <Clock className="w-3 h-3 text-slate-400 animate-spin" />
@@ -2224,13 +2372,13 @@ export function MessengerChatBox({
                           isLastMessage && (
                             <div className="mt-1 pr-1 flex items-center gap-1.5 select-none">
                               <span className="text-[10px] font-medium text-slate-400">
-                                Sent {displayTime}
+                                {msg.is_unsent ? 'Unsent' : `Sent ${displayTime}`}
                               </span>
                             </div>
                           )}
                       </div>
                     ) : (
-                      /* RESPONDENT MESSAGE: Left-aligned USTP Cream Bubble (#FFFAF2) */
+                      /* RESPONDENT MESSAGE: Left-aligned USTP Cream Bubble (#FFFAF2) or muted unsent placeholder */
                       <div className="flex items-end justify-between gap-2">
                         <div className="flex items-end gap-2.5 min-w-0 max-w-[85%] sm:max-w-[72%]">
                           {/* Bottom-Left Circular Respondent Avatar */}
@@ -2273,9 +2421,15 @@ export function MessengerChatBox({
                               </span>
                             </div>
 
-                            <div className="bg-ustp-cream text-ustp-text border border-amber-200/80 rounded-[20px] rounded-bl-xs px-4 py-2.5 text-xs sm:text-sm leading-relaxed shadow-2xs break-words">
-                              {renderMessageContent(msg, false)}
-                            </div>
+                            {unsentPlaceholder ? (
+                              <div className="bg-slate-100 text-slate-500 border border-slate-200 rounded-[20px] rounded-bl-xs px-4 py-2 text-xs italic select-none">
+                                {unsentPlaceholder}
+                              </div>
+                            ) : (
+                              <div className="bg-ustp-cream text-ustp-text border border-amber-200/80 rounded-[20px] rounded-bl-xs px-4 py-2.5 text-xs sm:text-sm leading-relaxed shadow-2xs break-words">
+                                {renderMessageContent(msg, false)}
+                              </div>
+                            )}
                           </div>
                         </div>
 

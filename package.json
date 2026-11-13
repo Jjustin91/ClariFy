@@ -6,7 +6,7 @@
     "clarify-web"
   ],
   "scripts": {
-    "dev": "cd clarify-web && exec ./node_modules/.bin/next dev -p 3000 -H 0.0.0.0",
+    "dev": "cd clarify-web && exec env NODE_ENV=development ./node_modules/.bin/next dev -p 3000 -H 0.0.0.0",
     "build": "cd clarify-web && ./node_modules/.bin/next build",
     "start": "cd clarify-web && exec ./node_modules/.bin/next start -p 3000 -H 0.0.0.0",
     "lint": "cd clarify-web && ./node_modules/.bin/eslint .",

@@ -154,16 +154,16 @@ export default function DashboardPage() {
           )}
         </section>
 
-        {/* Section 2: Latest Messages (Course Hub Activity Summary) matching Wireframes Pages 2 & 5 */}
+        {/* Section 2: Course Hubs (Course Hub Activity Summary) matching Wireframes Pages 2 & 5 */}
         <section aria-labelledby="latest-messages-heading" className="space-y-3">
-          <div className="flex items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <h3
               id="latest-messages-heading"
               className="text-base sm:text-lg font-bold text-ustp-text"
             >
-              Latest Messages
+              Course Hubs
             </h3>
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-3 flex-wrap">
               <button
                 type="button"
                 onClick={() => openCourseHubModal('browse')}
@@ -201,9 +201,10 @@ export default function DashboardPage() {
                 <button
                   type="button"
                   onClick={() => openCourseHubModal('create_hub')}
-                  className="px-4 py-2 text-xs font-extrabold bg-ustp-gold text-ustp-navy rounded hover:opacity-95 cursor-pointer"
+                  className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-extrabold bg-ustp-gold text-ustp-navy rounded hover:opacity-95 cursor-pointer"
                 >
-                  + Add Course Hub
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Add Course Hub</span>
                 </button>
               </div>
             </div>

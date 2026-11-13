@@ -819,5 +819,130 @@ class ChannelAuthorizationTest extends TestCase
             }
         );
     }
+
+    public function test_channel_chat_unsend_enforces_sender_policy_scrubs_content_deletes_file_is_idempotent_and_preserves_cursor_pagination(): void
+    {
+        \Illuminate\Support\Facades\Storage::fake('public');
+        \Illuminate\Support\Facades\Event::fake([\App\Events\RealtimeStateUpdated::class]);
+
+        $faculty = $this->createVerifiedUser('faculty', '10492', 'CITC');
+        $studentA = $this->createVerifiedUser('student', '2020202020', 'CITC');
+        $studentB = $this->createVerifiedUser('student', '2020303030', 'CITC');
+        $hub = $this->createCourseHub($faculty, 'CITC');
+        $otherHub = $this->createCourseHub($faculty, 'CITC');
+
+        DB::table('channel_user')->insert([
+            [
+                'channel_id' => $hub->id,
+                'user_id' => $faculty->id,
+                'can_publish' => true,
+                'approval_status' => 'approved',
+                'joined_at' => now(),
+            ],
+            [
+                'channel_id' => $hub->id,
+                'user_id' => $studentA->id,
+                'can_publish' => false,
+                'approval_status' => 'approved',
+                'joined_at' => now(),
+            ],
+            [
+                'channel_id' => $hub->id,
+                'user_id' => $studentB->id,
+                'can_publish' => false,
+                'approval_status' => 'approved',
+                'joined_at' => now(),
+            ],
+            [
+                'channel_id' => $otherHub->id,
+                'user_id' => $studentA->id,
+                'can_publish' => false,
+                'approval_status' => 'approved',
+                'joined_at' => now(),
+            ],
+        ]);
+
+        // Student A sends 3 messages (middle one has an image attachment)
+        Sanctum::actingAs($studentA);
+        $msg1Res = $this->postJson("/api/v1/channels/{$hub->id}/messages", [
+            'content' => 'First message',
+        ])->assertStatus(201);
+        $msg1Id = (int) $msg1Res->json('data.id');
+        $this->assertFalse($msg1Res->json('data.is_unsent'));
+
+        $imgFile = \Illuminate\Http\UploadedFile::fake()->image('secret-diagram.png', 200, 200);
+        $msg2Res = $this->post("/api/v1/channels/{$hub->id}/messages", [
+            'content' => 'Message with secret attachment',
+            'attachment' => $imgFile,
+        ], ['Accept' => 'application/json'])->assertStatus(201);
+        $msg2Id = (int) $msg2Res->json('data.id');
+        $storedPath = Message::findOrFail($msg2Id)->attachment_url;
+        $this->assertNotNull($storedPath);
+        \Illuminate\Support\Facades\Storage::disk('public')->assertExists($storedPath);
+
+        $msg3Res = $this->postJson("/api/v1/channels/{$hub->id}/messages", [
+            'content' => 'Third message',
+        ])->assertStatus(201);
+        $msg3Id = (int) $msg3Res->json('data.id');
+
+        // 1. Non-sender (Student B or even Faculty) gets 403 when trying to unsend Student A's message
+        Sanctum::actingAs($studentB);
+        $this->deleteJson("/api/v1/channels/{$hub->id}/messages/{$msg2Id}")->assertStatus(403);
+
+        Sanctum::actingAs($faculty);
+        $this->deleteJson("/api/v1/channels/{$hub->id}/messages/{$msg2Id}")->assertStatus(403);
+
+        // 2. Wrong channel ID or non-existent message ID returns 404
+        Sanctum::actingAs($studentA);
+        $this->deleteJson("/api/v1/channels/{$otherHub->id}/messages/{$msg2Id}")->assertStatus(404);
+        $this->deleteJson("/api/v1/channels/{$hub->id}/messages/999999")->assertStatus(404);
+
+        // 3. Sender (Student A) unsends own message -> 200 OK, scrubbed content & null attachment, file deleted
+        $unsendRes = $this->deleteJson("/api/v1/channels/{$hub->id}/messages/{$msg2Id}")
+            ->assertStatus(200);
+        $this->assertTrue($unsendRes->json('data.is_unsent'));
+        $this->assertSame('', $unsendRes->json('data.content'));
+        $this->assertNull($unsendRes->json('data.attachment'));
+        \Illuminate\Support\Facades\Storage::disk('public')->assertMissing($storedPath);
+
+        \Illuminate\Support\Facades\Event::assertDispatched(
+            \App\Events\RealtimeStateUpdated::class,
+            function (\App\Events\RealtimeStateUpdated $event) use ($hub, $msg2Id): bool {
+                $payload = $event->broadcastWith();
+                return $event->type === 'chat.message_unsent'
+                    && ($payload['channel_id'] ?? null) === $hub->id
+                    && ($payload['message_id'] ?? null) === $msg2Id
+                    && ! isset($payload['message']);
+            }
+        );
+
+        // 4. Unsending an already-unsent message returns 200 idempotently
+        $this->deleteJson("/api/v1/channels/{$hub->id}/messages/{$msg2Id}")
+            ->assertStatus(200)
+            ->assertJsonPath('data.is_unsent', true)
+            ->assertJsonPath('data.content', '')
+            ->assertJsonPath('data.attachment', null);
+
+        // 5. GET /messages index returns unsent message with is_unsent=true, empty content, attachment=null, and preserves cursor pagination
+        $page1 = $this->getJson("/api/v1/channels/{$hub->id}/messages?limit=2")
+            ->assertStatus(200);
+        $this->assertTrue($page1->json('meta.has_more'));
+        $this->assertSame($msg2Id, $page1->json('meta.next_before'));
+        $page1Items = collect($page1->json('data'));
+        $this->assertCount(2, $page1Items);
+
+        $unsentInFeed = $page1Items->firstWhere('id', $msg2Id);
+        $this->assertNotNull($unsentInFeed);
+        $this->assertTrue($unsentInFeed['is_unsent']);
+        $this->assertSame('', $unsentInFeed['content']);
+        $this->assertNull($unsentInFeed['attachment']);
+        $this->assertStringNotContainsString('secret', json_encode($unsentInFeed));
+
+        $page2 = $this->getJson("/api/v1/channels/{$hub->id}/messages?before={$msg2Id}&limit=2")
+            ->assertStatus(200);
+        $this->assertFalse($page2->json('meta.has_more'));
+        $this->assertCount(1, $page2->json('data'));
+        $this->assertSame($msg1Id, $page2->json('data.0.id'));
+    }
 }
 

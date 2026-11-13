@@ -213,6 +213,7 @@ export interface ChatMessage {
   temp_id?: string | null;
   channel_id: number;
   sender_id?: number;
+  is_unsent?: boolean;
   content: string;
   attachment?: ChatAttachment | null;
   created_at: string;
@@ -235,6 +236,7 @@ export interface RealtimeEvent {
     | 'announcement.deleted'
     | 'announcement.acknowledged'
     | 'chat.message'
+    | 'chat.message_unsent'
     | 'thread.created'
     | 'thread.updated'
     | 'thread.deleted'
@@ -246,6 +248,7 @@ export interface RealtimeEvent {
     | 'admin.updated'
     | 'db.changed';
   channel_id?: number;
+  message_id?: number;
   target_user_id?: number;
   action?: 'requested' | 'approved' | 'rejected' | 'removed' | 'added';
   actor_id?: number;

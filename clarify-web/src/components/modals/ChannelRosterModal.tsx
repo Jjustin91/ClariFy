@@ -411,8 +411,8 @@ export function ChannelRosterModal() {
       aria-modal="true"
       aria-labelledby="channel-portal-modal-title"
     >
-      <div className="bg-white border border-slate-300 rounded-lg shadow-xl w-full max-w-2xl overflow-hidden">
-        <div className="flex items-center justify-between px-6 py-4 bg-ustp-navy text-white">
+      <div className="bg-white border border-slate-300 rounded-lg shadow-xl w-full max-w-2xl max-h-[90dvh] flex flex-col overflow-hidden">
+        <div className="flex items-center justify-between px-4 sm:px-6 py-4 bg-ustp-navy text-white shrink-0">
           <div className="flex items-center gap-2">
             {activeTab === 'create_channel' ? (
               <Hash className="w-4 h-4 text-ustp-gold" />
@@ -430,7 +430,7 @@ export function ChannelRosterModal() {
                 ? 'Edit Course Hub'
                 : activeTab === 'browse'
                 ? `Browse Course Hubs (${courseHubs.length})`
-                : '+ Add Course Hub'}
+                : 'Add Course Hub'}
             </h2>
           </div>
           <button
@@ -443,7 +443,7 @@ export function ChannelRosterModal() {
           </button>
         </div>
 
-        <div className="p-6 max-h-[74vh] overflow-y-auto">
+        <div className="p-4 sm:p-6 flex-1 min-h-0 overflow-y-auto">
           {(activeTab === 'create_hub' || activeTab === 'edit_hub') && (
             <form
               onSubmit={
@@ -469,7 +469,7 @@ export function ChannelRosterModal() {
                       Isolated Q&amp;A Threads
                     </span>
                     . You can add custom chat channels inside the Course Hub
-                    anytime using <span className="font-bold">+ Add Channel</span>.
+                    anytime using <span className="font-bold">Add Channel</span>.
                   </p>
                 </div>
               )}

@@ -242,6 +242,7 @@ async function requestLaravel<T>(
     }
     const mutationPayload = {
       type: 'mutation',
+      method,
       endpoint,
       data: json?.data,
       requestBody: parsedBody,
@@ -992,6 +993,31 @@ export async function sendChannelChatMessageApi(
         {
           method: 'POST',
           body: createBody(),
+        }
+      );
+    }
+    throw err;
+  }
+}
+
+export async function unsendChannelChatMessageApi(
+  channelId: number,
+  messageId: number | string
+): Promise<SingleResourceResponse<ChatMessage>> {
+  try {
+    return await requestLaravel<SingleResourceResponse<ChatMessage>>(
+      `/channels/${channelId}/messages/${messageId}`,
+      {
+        method: 'DELETE',
+      }
+    );
+  } catch (err) {
+    const apiErr = err as LaravelValidationError;
+    if (apiErr?.status === 404) {
+      return requestLaravel<SingleResourceResponse<ChatMessage>>(
+        `/channels/${channelId}/chat/${messageId}`,
+        {
+          method: 'DELETE',
         }
       );
     }

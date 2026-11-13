@@ -3,12 +3,42 @@
 namespace App\Policies;
 
 use App\Models\Channel;
+use App\Models\Message;
 use App\Models\User;
 use Illuminate\Auth\Access\Response;
 use Illuminate\Support\Facades\DB;
 
 class ChannelPolicy
 {
+    /**
+     * Authorizes unsending a chat message inside a Course Hub.
+     * Only an approved member who authored the message (sender_id === user.id) may unsend it.
+     */
+    public function unsendMessage(User $user, Channel $channel, Message $message): Response
+    {
+        if (! self::hasApprovedChannelAccess($user, $channel)) {
+            return Response::denyWithStatus(
+                403,
+                'HTTP 403 Forbidden: You must be an approved member of this Course Hub.'
+            );
+        }
+
+        if ((int) $message->channel_id !== (int) $channel->id) {
+            return Response::denyWithStatus(
+                403,
+                'HTTP 403 Forbidden: Message does not belong to this Course Hub.'
+            );
+        }
+
+        if ((int) $message->sender_id !== (int) $user->id) {
+            return Response::denyWithStatus(
+                403,
+                'HTTP 403 Forbidden: Only the original sender can unsend this chat message.'
+            );
+        }
+
+        return Response::allow();
+    }
     /**
      * Resolves parent Course Hub ID from column or legacy [HUB:id] prefix.
      */

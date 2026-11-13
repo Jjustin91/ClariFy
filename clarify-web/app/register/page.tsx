@@ -7,6 +7,8 @@ import {
   AlertCircle,
   ArrowLeft,
   CheckCircle2,
+  Eye,
+  EyeOff,
   GraduationCap,
   ShieldCheck,
 } from 'lucide-react';
@@ -28,6 +30,8 @@ export default function RegisterPage() {
   const [section, setSection] = useState('IT3R2');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string[]>>({});
@@ -445,14 +449,31 @@ export default function RegisterPage() {
                   >
                     Password
                   </label>
-                  <input
-                    id="reg-password"
-                    type="password"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    placeholder="Min. 6 characters"
-                    className="w-full px-3 py-2 text-sm bg-white text-ustp-text border border-slate-300 rounded focus:outline-none focus:border-ustp-navy"
-                  />
+                  <div className="relative">
+                    <input
+                      id="reg-password"
+                      type={showPassword ? 'text' : 'password'}
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      placeholder="Min. 6 characters"
+                      className="w-full pl-3 pr-11 py-2 text-sm bg-white text-ustp-text border border-slate-300 rounded focus:outline-none focus:border-ustp-navy"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword((prev) => !prev)}
+                      aria-label={
+                        showPassword ? 'Hide password' : 'Show password'
+                      }
+                      aria-pressed={showPassword}
+                      className="absolute right-0.5 top-1/2 -translate-y-1/2 min-w-[40px] min-h-[40px] flex items-center justify-center rounded text-slate-500 hover:text-ustp-navy focus-visible:outline-2 focus-visible:outline-ustp-navy cursor-pointer"
+                    >
+                      {showPassword ? (
+                        <EyeOff className="w-4 h-4" />
+                      ) : (
+                        <Eye className="w-4 h-4" />
+                      )}
+                    </button>
+                  </div>
                   {passwordError && (
                     <p
                       className="text-xs font-bold text-red-700 mt-1"
@@ -470,14 +491,31 @@ export default function RegisterPage() {
                   >
                     Confirm Password
                   </label>
-                  <input
-                    id="reg-confirm-password"
-                    type="password"
-                    value={confirmPassword}
-                    onChange={(e) => setConfirmPassword(e.target.value)}
-                    placeholder="Re-enter password"
-                    className="w-full px-3 py-2 text-sm bg-white text-ustp-text border border-slate-300 rounded focus:outline-none focus:border-ustp-navy"
-                  />
+                  <div className="relative">
+                    <input
+                      id="reg-confirm-password"
+                      type={showConfirmPassword ? 'text' : 'password'}
+                      value={confirmPassword}
+                      onChange={(e) => setConfirmPassword(e.target.value)}
+                      placeholder="Re-enter password"
+                      className="w-full pl-3 pr-11 py-2 text-sm bg-white text-ustp-text border border-slate-300 rounded focus:outline-none focus:border-ustp-navy"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowConfirmPassword((prev) => !prev)}
+                      aria-label={
+                        showConfirmPassword ? 'Hide password' : 'Show password'
+                      }
+                      aria-pressed={showConfirmPassword}
+                      className="absolute right-0.5 top-1/2 -translate-y-1/2 min-w-[40px] min-h-[40px] flex items-center justify-center rounded text-slate-500 hover:text-ustp-navy focus-visible:outline-2 focus-visible:outline-ustp-navy cursor-pointer"
+                    >
+                      {showConfirmPassword ? (
+                        <EyeOff className="w-4 h-4" />
+                      ) : (
+                        <Eye className="w-4 h-4" />
+                      )}
+                    </button>
+                  </div>
                   {confirmPasswordError && (
                     <p
                       className="text-xs font-bold text-red-700 mt-1"

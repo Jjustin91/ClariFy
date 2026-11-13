@@ -3,6 +3,7 @@
 import React, { useEffect, useState } from 'react';
 import {
   AlertCircle,
+  Check,
   FileText,
   Image as ImageIcon,
   Plus,
@@ -336,9 +337,9 @@ export function AnnouncementFormModal() {
       aria-modal="true"
       aria-labelledby="announcement-modal-title"
     >
-      <div className="bg-white border border-slate-300 rounded-lg shadow-xl w-full max-w-2xl overflow-hidden">
+      <div className="bg-white border border-slate-300 rounded-lg shadow-xl w-full max-w-2xl max-h-[90dvh] flex flex-col overflow-hidden">
         {/* Top bar */}
-        <div className="flex items-center justify-between px-6 py-3.5 bg-ustp-navy text-white">
+        <div className="flex items-center justify-between px-4 sm:px-6 py-3.5 bg-ustp-navy text-white shrink-0">
           <h2 id="announcement-modal-title" className="text-sm font-bold tracking-tight">
             {editingAnnouncement
               ? `Edit ${
@@ -359,7 +360,7 @@ export function AnnouncementFormModal() {
         </div>
 
         {/* Wireframe Page 6 Form Body */}
-        <form onSubmit={handleSubmit} className="p-6 space-y-4">
+        <form onSubmit={handleSubmit} className="p-4 sm:p-6 space-y-4 flex-1 min-h-0 overflow-y-auto">
           {generalError && (
             <div className="p-3 bg-red-50 border border-red-300 rounded text-xs text-red-800 flex items-center gap-2">
               <AlertCircle className="w-4 h-4 shrink-0 text-red-600" />
@@ -424,13 +425,14 @@ export function AnnouncementFormModal() {
                         key={dept}
                         type="button"
                         onClick={() => toggleTag(dept)}
-                        className={`px-2 py-0.5 rounded text-[11px] font-bold border transition-colors cursor-pointer ${
+                        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-bold border transition-colors cursor-pointer ${
                           isDeptActive
                             ? 'bg-ustp-navy text-ustp-gold border-ustp-navy'
                             : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-100'
                         }`}
                       >
-                        {isDeptActive ? `✓ ${dept}` : dept}
+                        {isDeptActive && <Check className="w-3 h-3 shrink-0" />}
+                        <span>{dept}</span>
                       </button>
                     );
                   })}
@@ -454,14 +456,20 @@ export function AnnouncementFormModal() {
                       key={ch.id}
                       type="button"
                       onClick={() => toggleCourseHubSelection(ch.id)}
-                      className={`px-2.5 py-1 rounded text-xs font-bold border transition-colors cursor-pointer ${
+                      className={`inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs font-bold border transition-colors cursor-pointer ${
                         isSelected
                           ? 'bg-ustp-navy text-ustp-gold border-ustp-navy'
                           : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'
                       }`}
                     >
-                      {isSelected ? '✓ ' : '+ '}
-                      {formatCourseHubName(ch)} ({ch.scope_section || 'IT3R2'})
+                      {isSelected ? (
+                        <Check className="w-3 h-3 shrink-0" />
+                      ) : (
+                        <Plus className="w-3 h-3 shrink-0" />
+                      )}
+                      <span>
+                        {formatCourseHubName(ch)} ({ch.scope_section || 'IT3R2'})
+                      </span>
                     </button>
                   );
                 })}
@@ -478,13 +486,18 @@ export function AnnouncementFormModal() {
                     key={tag}
                     type="button"
                     onClick={() => toggleTag(tag)}
-                    className={`px-2.5 py-1 rounded text-xs font-semibold border transition-colors cursor-pointer ${
+                    className={`inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs font-semibold border transition-colors cursor-pointer ${
                       active
                         ? 'bg-ustp-navy text-white border-ustp-navy'
                         : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'
                     }`}
                   >
-                    {active ? `✓ ${tag}` : `+ ${tag}`}
+                    {active ? (
+                      <Check className="w-3 h-3 shrink-0" />
+                    ) : (
+                      <Plus className="w-3 h-3 shrink-0" />
+                    )}
+                    <span>{tag}</span>
                   </button>
                 );
               })}

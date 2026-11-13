@@ -65,8 +65,10 @@ Route::prefix('v1')->group(function () {
         Route::middleware('channel.scope')->group(function () {
             Route::get('/channels/{channelId}/messages', [ChannelChatController::class, 'index']);
             Route::post('/channels/{channelId}/messages', [ChannelChatController::class, 'store']);
+            Route::delete('/channels/{channelId}/messages/{messageId}', [ChannelChatController::class, 'destroy']);
             Route::get('/channels/{channelId}/chat', [ChannelChatController::class, 'index']);
             Route::post('/channels/{channelId}/chat', [ChannelChatController::class, 'store']);
+            Route::delete('/channels/{channelId}/chat/{messageId}', [ChannelChatController::class, 'destroy']);
 
             // Isolated Q&A Threads per Channel
             Route::get('/channels/{channelId}/threads', [ThreadController::class, 'index']);

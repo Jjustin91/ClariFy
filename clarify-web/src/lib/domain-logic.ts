@@ -705,11 +705,35 @@ export function canPublishOrManageAnnouncements(role: UserRole): boolean {
 }
 
 /**
- * Only Department Heads can publish Campus-Wide Announcements on All Announcements / Dashboard.
+ * Only Department Heads can publish Campus-Wide Announcements on Announcements / Dashboard.
  * Instructors/Faculty publish course-specific announcements inside their handled Course Hubs.
  */
 export function canPublishCampusWideAnnouncements(role: UserRole): boolean {
   return role === 'dept_head';
+}
+
+/**
+ * Returns the muted placeholder string for an unsent chat message ("You unsent a message" or "<Name> unsent a message"),
+ * or null if the message is not unsent.
+ */
+export function getUnsentMessagePlaceholder(
+  msg: {
+    is_unsent?: boolean;
+    sender_id?: number;
+    author?: { id?: number | null; name?: string };
+  },
+  currentUserId?: number
+): string | null {
+  if (!msg.is_unsent) {
+    return null;
+  }
+  const senderId = Number(msg.author?.id ?? msg.sender_id ?? 0);
+  const viewerId = Number(currentUserId ?? 0);
+  if (senderId > 0 && viewerId > 0 && senderId === viewerId) {
+    return 'You unsent a message';
+  }
+  const senderName = (msg.author?.name || '').trim() || 'Campus Member';
+  return `${senderName} unsent a message`;
 }
 
 /**

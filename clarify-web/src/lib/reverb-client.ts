@@ -16,6 +16,7 @@ declare global {
 export interface ReverbBroadcastPayload {
   type: RealtimeEvent['type'];
   channel_id?: number;
+  message_id?: number;
   target_user_id?: number;
   action?: RealtimeEvent['action'];
   actor_id?: number;

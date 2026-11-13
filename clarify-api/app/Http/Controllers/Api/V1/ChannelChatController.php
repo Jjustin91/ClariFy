@@ -9,6 +9,7 @@ use App\Policies\ChannelPolicy;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
@@ -86,7 +87,7 @@ class ChannelChatController
         $limit = min(100, max(1, (int) $request->query('limit', 50)));
         $beforeId = $request->filled('before') ? (int) $request->query('before') : null;
 
-        $query = Message::query()
+        $query = Message::withTrashed()
             ->select([
                 'id',
                 'channel_id',
@@ -98,6 +99,7 @@ class ChannelChatController
                 'attachment_mime',
                 'attachment_size',
                 'created_at',
+                'deleted_at',
             ])
             ->with(['sender:id,name,role,avatar_url'])
             ->where('channel_id', $channel->id)
@@ -222,6 +224,97 @@ class ChannelChatController
     }
 
     /**
+     * DELETE /api/v1/channels/{channelId}/messages/{messageId} (and /chat/{messageId})
+     * Unsends a chat message authored by the current user, scrubbing content & attachment
+     * and soft-deleting the row so it renders as an unsent placeholder. Idempotent on repeat calls.
+     */
+    public function destroy(Request $request, int $channelId, int $messageId): JsonResponse
+    {
+        $channel = Channel::findOrFail($channelId);
+        $message = Message::withTrashed()
+            ->where('channel_id', $channel->id)
+            ->whereNull('parent_id')
+            ->where('subject_hashtag', '__CHAT__')
+            ->findOrFail($messageId);
+
+        $user = $request->user();
+        $policyResponse = $user
+            ? app(ChannelPolicy::class)->unsendMessage($user, $channel, $message)
+            : null;
+
+        if (! $policyResponse || $policyResponse->denied()) {
+            return response()->json([
+                'status' => 403,
+                'message' => $policyResponse?->message()
+                    ?? 'HTTP 403 Forbidden: Only the original sender can unsend this chat message.',
+            ], 403);
+        }
+
+        $message->loadMissing('sender:id,name,role,avatar_url');
+
+        // Idempotent: if already unsent, return 200 OK with scrubbed payload
+        if ($message->trashed()) {
+            return response()->json([
+                'message' => 'Chat message unsent.',
+                'data' => $this->formatMessagePayload($message),
+            ], 200);
+        }
+
+        $oldAttachmentPath = is_string($message->attachment_url)
+            ? trim($message->attachment_url)
+            : '';
+
+        DB::transaction(function () use ($message): void {
+            $message->content = '';
+            $message->attachment_url = null;
+            $message->attachment_name = null;
+            $message->attachment_type = null;
+            $message->attachment_mime = null;
+            $message->attachment_size = null;
+            $message->save();
+            $message->delete();
+        });
+
+        // Delete attachment file from public disk after commit if no other row references it
+        if (
+            $oldAttachmentPath !== '' &&
+            ! str_starts_with($oldAttachmentPath, 'http://') &&
+            ! str_starts_with($oldAttachmentPath, 'https://') &&
+            ! str_starts_with($oldAttachmentPath, 'data:')
+        ) {
+            $normalizedPath = ltrim(preg_replace('#^/storage/#', '', $oldAttachmentPath) ?? $oldAttachmentPath, '/');
+            $stillReferenced = Message::withTrashed()
+                ->where('id', '!=', $message->id)
+                ->where(function ($q) use ($oldAttachmentPath, $normalizedPath) {
+                    $q->where('attachment_url', $oldAttachmentPath)
+                        ->orWhere('attachment_url', $normalizedPath);
+                })
+                ->exists();
+
+            if (! $stillReferenced && $normalizedPath !== '') {
+                Storage::disk('public')->delete($normalizedPath);
+            }
+        }
+
+        RealtimeStateUpdated::safeDispatch(
+            'chat.message_unsent',
+            (int) $channel->id,
+            (int) $user->id,
+            null,
+            null,
+            null,
+            null,
+            null,
+            (int) $message->id
+        );
+
+        return response()->json([
+            'message' => 'Chat message unsent.',
+            'data' => $this->formatMessagePayload($message),
+        ], 200);
+    }
+
+    /**
      * Validation rules for the optional `attachment` upload.
      *
      * @return array<int, mixed>
@@ -307,17 +400,20 @@ class ChannelChatController
 
     /**
      * Formats a Message model into the additive API & broadcast payload.
-     * Never emits base64 or file bytes in `attachment`.
+     * Never emits base64 or file bytes in `attachment`, and never leaks content/attachment when unsent.
      *
      * @return array<string, mixed>
      */
     private function formatMessagePayload(Message $msg, ?string $tempId = null): array
     {
+        $isUnsent = $msg->trashed() || $msg->deleted_at !== null;
+
         $payload = [
             'id' => $msg->id,
             'channel_id' => $msg->channel_id,
-            'content' => (string) ($msg->content ?? ''),
-            'attachment' => $this->formatAttachmentMetadata($msg),
+            'is_unsent' => $isUnsent,
+            'content' => $isUnsent ? '' : (string) ($msg->content ?? ''),
+            'attachment' => $isUnsent ? null : $this->formatAttachmentMetadata($msg),
             'created_at' => $msg->created_at?->toIso8601String() ?? now()->toIso8601String(),
             'author' => [
                 'id' => $msg->sender?->id ?? $msg->sender_id,

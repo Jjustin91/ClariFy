@@ -145,8 +145,8 @@ export function ProfileSettingsModal() {
       aria-modal="true"
       aria-labelledby="profile-settings-title"
     >
-      <div className="bg-white border border-slate-300 rounded-lg shadow-xl w-full max-w-md overflow-hidden">
-        <div className="flex items-center justify-between px-6 py-4 bg-ustp-navy text-white">
+      <div className="bg-white border border-slate-300 rounded-lg shadow-xl w-full max-w-md max-h-[90dvh] flex flex-col overflow-hidden">
+        <div className="flex items-center justify-between px-4 sm:px-6 py-4 bg-ustp-navy text-white shrink-0">
           <div>
             <h2 id="profile-settings-title" className="text-sm font-bold">
               Profile &amp; SMS Fallback Settings
@@ -165,7 +165,7 @@ export function ProfileSettingsModal() {
           </button>
         </div>
 
-        <form onSubmit={handleSave} className="p-6 space-y-5">
+        <form onSubmit={handleSave} className="p-4 sm:p-6 space-y-5 flex-1 min-h-0 overflow-y-auto">
           <input
             ref={fileInputRef}
             type="file"

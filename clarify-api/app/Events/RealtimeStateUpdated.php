@@ -22,6 +22,7 @@ class RealtimeStateUpdated implements ShouldBroadcast, ShouldQueue, ShouldDispat
     public ?int $actorId;
     public ?int $targetUserId;
     public ?string $action;
+    public ?int $messageId;
     public ?array $announcement;
     public ?array $message;
     public ?array $thread;
@@ -38,7 +39,8 @@ class RealtimeStateUpdated implements ShouldBroadcast, ShouldQueue, ShouldDispat
         ?array $message = null,
         ?array $thread = null,
         ?int $targetUserId = null,
-        ?string $action = null
+        ?string $action = null,
+        ?int $messageId = null
     ) {
         $this->type = $type;
         $this->channelId = $channelId;
@@ -48,6 +50,7 @@ class RealtimeStateUpdated implements ShouldBroadcast, ShouldQueue, ShouldDispat
         $this->thread = $thread;
         $this->targetUserId = $targetUserId;
         $this->action = $action;
+        $this->messageId = $messageId;
         $this->timestamp = now()->toIso8601String();
     }
 
@@ -62,7 +65,8 @@ class RealtimeStateUpdated implements ShouldBroadcast, ShouldQueue, ShouldDispat
         ?array $message = null,
         ?array $thread = null,
         ?int $targetUserId = null,
-        ?string $action = null
+        ?string $action = null,
+        ?int $messageId = null
     ): void {
         try {
             event(new self(
@@ -73,7 +77,8 @@ class RealtimeStateUpdated implements ShouldBroadcast, ShouldQueue, ShouldDispat
                 $message,
                 $thread,
                 $targetUserId,
-                $action
+                $action,
+                $messageId
             ));
         } catch (\Throwable $e) {
             Log::warning('RealtimeStateUpdated broadcast dispatch failed: ' . $e->getMessage(), [
@@ -82,6 +87,7 @@ class RealtimeStateUpdated implements ShouldBroadcast, ShouldQueue, ShouldDispat
                 'actor_id' => $actorId,
                 'target_user_id' => $targetUserId,
                 'action' => $action,
+                'message_id' => $messageId,
             ]);
         }
     }
@@ -169,6 +175,16 @@ class RealtimeStateUpdated implements ShouldBroadcast, ShouldQueue, ShouldDispat
             ];
         }
 
+        if ($this->type === 'chat.message_unsent') {
+            return [
+                'type' => 'chat.message_unsent',
+                'channel_id' => $this->channelId,
+                'message_id' => $this->messageId,
+                'actor_id' => $this->actorId,
+                'timestamp' => $this->timestamp,
+            ];
+        }
+
         // Strip announcement body content on global notices unless on a scoped channel
         $safeAnnouncement = null;
         if ($this->announcement !== null) {
@@ -191,6 +207,7 @@ class RealtimeStateUpdated implements ShouldBroadcast, ShouldQueue, ShouldDispat
             'target_user_id' => $this->targetUserId,
             'action' => $this->action,
             'actor_id' => $this->actorId,
+            'message_id' => $this->messageId,
             'announcement' => $safeAnnouncement,
             'message' => $this->channelId !== null ? $this->message : null,
             'thread' => $this->channelId !== null ? $this->thread : null,

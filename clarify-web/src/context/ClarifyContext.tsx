@@ -677,6 +677,25 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
         return;
       }
 
+      if (event.type === 'chat.message_unsent') {
+        const targetChannelId = Number(
+          event.channel_id || event.message?.channel_id || 0
+        );
+        if (targetChannelId > 0) {
+          setChannels((prev) =>
+            prev.map((ch) => {
+              if (Number(ch.id) !== targetChannelId) return ch;
+              return {
+                ...ch,
+                latest_activity_preview: 'A message was unsent',
+                latest_activity_at: 'Just now',
+              };
+            })
+          );
+        }
+        return;
+      }
+
       if (event.type === 'membership.changed') {
         const targetChannelId = Number(event.channel_id || 0);
         const targetUserId = Number(event.target_user_id || 0);
@@ -863,6 +882,7 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
           revision: Date.now(),
           type: payload.type || 'db.changed',
           channel_id: payload.channel_id,
+          message_id: payload.message_id,
           target_user_id: payload.target_user_id,
           action: payload.action,
           actor_id: payload.actor_id,
@@ -896,6 +916,7 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
           revision: Date.now(),
           type: payload.type || 'channel.updated',
           channel_id: payload.channel_id ?? hubId,
+          message_id: payload.message_id,
           target_user_id: payload.target_user_id,
           action: payload.action,
           actor_id: payload.actor_id,
@@ -911,6 +932,7 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
     // 2. Cross-tab BroadcastChannel + Same-tab CustomEvent for instant zero-latency local browser sync
     const processMutationPayload = (
       msgData: {
+        method?: string;
         endpoint?: string;
         data?: Record<string, unknown>;
         requestBody?: Record<string, unknown>;
@@ -918,11 +940,13 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
       isFromCrossTab = false
     ) => {
       const endpoint = String(msgData?.endpoint || '');
+      const method = String(msgData?.method || 'POST').toUpperCase();
       let evType: RealtimeEvent['type'] = 'db.changed';
       let announcement: Announcement | undefined;
       let message: RealtimeEvent['message'];
       let thread: RealtimeEvent['thread'];
       let channelId: number | undefined;
+      let messageId: number | undefined;
       let targetUserId: number | undefined;
       let membershipAction: RealtimeEvent['action'] | undefined;
 
@@ -930,6 +954,10 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
       if (channelMatch) {
         channelId = Number(channelMatch[1]);
       }
+
+      const unsendMatch = endpoint.match(
+        /\/channels\/(\d+)\/(?:messages|chat)\/(\d+)/
+      );
 
       if (
         endpoint.includes('/announcements') &&
@@ -941,6 +969,11 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
         const ann = msgData?.data as unknown as Announcement | undefined;
         evType = ann?.is_urgent ? 'announcement.urgent' : 'announcement.created';
         announcement = ann;
+      } else if (method === 'DELETE' && unsendMatch) {
+        evType = 'chat.message_unsent';
+        channelId = Number(unsendMatch[1]);
+        messageId = Number(unsendMatch[2]);
+        message = msgData?.data as unknown as RealtimeEvent['message'];
       } else if (endpoint.includes('/chat') || endpoint.includes('/messages')) {
         evType = 'chat.message';
         message = msgData?.data as unknown as RealtimeEvent['message'];
@@ -991,6 +1024,7 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
           announcement?.channel_id ||
           message?.channel_id ||
           thread?.channel_id,
+        message_id: messageId || (message?.id ? Number(message.id) : undefined),
         target_user_id: targetUserId,
         action: membershipAction,
         announcement,

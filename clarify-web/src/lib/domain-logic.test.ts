@@ -13,10 +13,45 @@ import {
   formatSubjectHashtag,
   getChannelFacultyLabel,
   getFieldValidationError,
+  getUnsentMessagePlaceholder,
   isThreadVisibleToUser,
   validateChatAttachmentFile,
 } from './domain-logic';
 import type { Announcement, Channel, QaThread, User } from '../types/api';
+
+test('getUnsentMessagePlaceholder returns null for active messages and appropriate sender/viewer label when unsent', () => {
+  assert.equal(
+    getUnsentMessagePlaceholder(
+      { is_unsent: false, author: { id: 10, name: 'Kobeni Higashiyama' } },
+      10
+    ),
+    null
+  );
+
+  assert.equal(
+    getUnsentMessagePlaceholder(
+      { is_unsent: true, author: { id: 10, name: 'Kobeni Higashiyama' } },
+      10
+    ),
+    'You unsent a message'
+  );
+
+  assert.equal(
+    getUnsentMessagePlaceholder(
+      { is_unsent: true, author: { id: 10, name: 'Kobeni Higashiyama' } },
+      99
+    ),
+    'Kobeni Higashiyama unsent a message'
+  );
+
+  assert.equal(
+    getUnsentMessagePlaceholder(
+      { is_unsent: true, sender_id: 10, author: { id: null, name: '' } },
+      99
+    ),
+    'Campus Member unsent a message'
+  );
+});
 
 test('calculateAcknowledgedReadReach increments count, clamps to enrolled_total, and handles zero enrolled students', () => {
   const initial = {
