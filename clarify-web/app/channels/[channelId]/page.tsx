@@ -1316,15 +1316,21 @@ export default function CourseHubPage() {
           />
         </div>
 
-        {/* INNER-RIGHT PANEL: Class FAQs Accordion OR Faculty "Answer Ticket" Panel
+        {/* INNER-RIGHT PANEL: Side-Collapsible Class FAQs Panel OR Faculty "Answer Ticket" Panel
             - Mobile (<1024px): Slide-out right drawer
-            - Desktop (lg+): Sticky docked sidebar */}
+            - Desktop (lg+): Collapses horizontally to the right edge into a slim w-11 vertical tab when closed */}
         <aside
           aria-label="Class FAQs and Answer Ticket Panel"
-          className={`fixed lg:sticky right-0 top-14 z-40 lg:z-10 h-[calc(100dvh-3.5rem)] lg:h-full w-80 sm:w-88 lg:w-72 xl:w-80 overflow-y-auto lg:self-start bg-white border-l border-slate-200 shrink-0 p-4 space-y-4 transition-transform duration-200 ease-out shadow-2xl lg:shadow-none ${
+          className={`fixed lg:sticky right-0 top-14 z-40 lg:z-10 h-[calc(100dvh-3.5rem)] lg:h-full lg:self-start bg-white border-l border-slate-200 shrink-0 transition-[transform,width] duration-200 ease-out shadow-2xl lg:shadow-none ${
             isMobileFaqOpen
-              ? 'translate-x-0'
+              ? 'translate-x-0 w-80 sm:w-88 p-4 overflow-y-auto'
               : 'translate-x-full lg:translate-x-0 pointer-events-none lg:pointer-events-auto'
+          } ${
+            answeringThread && canResolve
+              ? 'lg:w-72 xl:w-80 lg:p-4 lg:overflow-y-auto'
+              : isFaqSectionOpen
+              ? 'lg:w-72 xl:w-80 lg:p-4 lg:overflow-y-auto'
+              : 'lg:w-11 lg:p-0 lg:overflow-hidden'
           }`}
         >
           {answeringThread && canResolve ? (
@@ -1429,117 +1435,134 @@ export default function CourseHubPage() {
               </form>
             </div>
           ) : (
-            /* CLASS FAQS ACCORDION matching Oct 22 MVP & Wireframe Page 7 */
-            <div className="space-y-3">
-              <div className="flex items-center justify-between border-b border-slate-200 pb-2.5 gap-2">
+            <>
+              {/* Desktop Slim Vertical Right-Edge Tab when Class FAQs is collapsed to the side */}
+              {!isFaqSectionOpen && (
                 <button
                   type="button"
-                  onClick={() => updateFaqSectionOpen(!isFaqSectionOpen)}
-                  aria-expanded={isFaqSectionOpen}
-                  className="flex-1 flex items-center justify-between gap-2 text-left py-1 rounded hover:bg-slate-50 focus-visible:outline-2 focus-visible:outline-ustp-navy cursor-pointer"
+                  onClick={() => updateFaqSectionOpen(true)}
+                  aria-expanded={false}
+                  aria-label={`Expand Class FAQs panel (${publishedFaqs.length} FAQs)`}
+                  title="Expand Class FAQs"
+                  className="hidden lg:flex flex-col items-center justify-start gap-3 w-11 h-full py-4 px-1 bg-white hover:bg-ustp-cream text-ustp-navy transition-colors cursor-pointer focus-visible:outline-2 focus-visible:outline-ustp-navy"
                 >
-                  <div className="flex items-center gap-2">
-                    <h2 className="text-sm font-extrabold text-ustp-text">
-                      Class FAQs
-                    </h2>
-                    <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-700 font-mono tabular-nums text-[11px] font-bold">
-                      {publishedFaqs.length}
-                    </span>
-                  </div>
-                  {isFaqSectionOpen ? (
-                    <ChevronUp className="w-4 h-4 text-slate-500 shrink-0" />
-                  ) : (
-                    <ChevronDown className="w-4 h-4 text-slate-500 shrink-0" />
-                  )}
+                  <ChevronLeft className="w-4 h-4 text-slate-500 shrink-0" />
+                  <BookOpen className="w-4 h-4 text-ustp-orange shrink-0" />
+                  <span className="px-1.5 py-0.5 rounded bg-slate-100 text-ustp-navy font-mono tabular-nums text-[10px] font-extrabold">
+                    {publishedFaqs.length}
+                  </span>
+                  <span className="text-xs font-extrabold tracking-wide text-ustp-navy [writing-mode:vertical-rl] rotate-180 select-none whitespace-nowrap">
+                    Class FAQs
+                  </span>
                 </button>
-                <button
-                  type="button"
-                  onClick={() => setIsMobileFaqOpen(false)}
-                  aria-label="Close Class FAQs drawer"
-                  className="lg:hidden p-1 rounded text-slate-500 hover:text-slate-800 cursor-pointer shrink-0"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-
-              {!isFaqSectionOpen ? (
-                <p className="text-xs text-slate-500 py-2">
-                  {publishedFaqs.length === 0
-                    ? 'No Class FAQs published yet.'
-                    : `${publishedFaqs.length} pinned FAQ${
-                        publishedFaqs.length === 1 ? '' : 's'
-                      } available. Click Class FAQs above to expand.`}
-                </p>
-              ) : !activeChannel ? (
-                <p className="text-xs text-slate-500 py-4 text-center">
-                  Join a Course Hub to view Class FAQs.
-                </p>
-              ) : publishedFaqs.length === 0 ? (
-                <p className="text-xs text-slate-500 py-4 text-center">
-                  No Class FAQs published for {activeChannel.name} yet.
-                </p>
-              ) : (
-                <div className="space-y-2.5">
-                  {publishedFaqs.map((faq) => {
-                    const isExpanded = openFaqIds.includes(faq.id);
-                    const latestReplyObj =
-                      faq.replies.length > 0
-                        ? faq.replies[faq.replies.length - 1]
-                        : undefined;
-                    const latestReply =
-                      latestReplyObj?.content ||
-                      'Resolved during consultation.';
-                    const facultyReplyHeader = latestReplyObj?.author?.name
-                      ? `Faculty reply · ${latestReplyObj.author.name}`
-                      : 'Faculty reply';
-
-                    return (
-                      <div
-                        key={faq.id}
-                        className="border border-slate-200 rounded-md overflow-hidden bg-slate-50/60"
-                      >
-                        <button
-                          type="button"
-                          onClick={() => toggleFaqAccordion(faq.id)}
-                          aria-expanded={isExpanded}
-                          className="w-full px-3 py-2.5 flex items-center justify-between text-left bg-white hover:bg-slate-50 transition-colors cursor-pointer"
-                        >
-                          <span className="text-xs font-extrabold text-ustp-navy truncate">
-                            {faq.subject_hashtag}
-                          </span>
-                          {isExpanded ? (
-                            <ChevronUp className="w-3.5 h-3.5 text-slate-500 shrink-0" />
-                          ) : (
-                            <ChevronDown className="w-3.5 h-3.5 text-slate-500 shrink-0" />
-                          )}
-                        </button>
-
-                        {isExpanded && (
-                          <div className="px-3 pb-3 pt-2 text-xs space-y-2.5 border-t border-slate-100 bg-white">
-                            <div className="space-y-1">
-                              <p className="text-[11px] font-semibold text-slate-500">
-                                Asked by: Anonymous Student
-                              </p>
-                              <p className="text-slate-700 leading-relaxed">
-                                {faq.content}
-                              </p>
-                            </div>
-                            <div className="bg-ustp-cream border border-amber-200/80 border-l-2 border-l-ustp-navy rounded p-2.5 space-y-1">
-                              <p className="text-[11px] font-extrabold text-ustp-navy">
-                                {facultyReplyHeader}
-                              </p>
-                              <p className="text-ustp-text font-medium leading-relaxed">
-                                {latestReply}
-                              </p>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
               )}
-            </div>
+
+              {/* Expanded Class FAQs Panel Content (always visible in mobile drawer, visible on desktop when expanded) */}
+              <div
+                className={`space-y-3 ${
+                  isFaqSectionOpen ? 'block' : 'block lg:hidden'
+                }`}
+              >
+                <div className="flex items-center justify-between border-b border-slate-200 pb-2.5 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => updateFaqSectionOpen(false)}
+                    aria-expanded={isFaqSectionOpen}
+                    aria-label="Collapse Class FAQs panel to the side"
+                    title="Collapse Class FAQs to the side"
+                    className="flex-1 flex items-center justify-between gap-2 text-left py-1 rounded hover:bg-slate-50 focus-visible:outline-2 focus-visible:outline-ustp-navy cursor-pointer"
+                  >
+                    <div className="flex items-center gap-2">
+                      <h2 className="text-sm font-extrabold text-ustp-text">
+                        Class FAQs
+                      </h2>
+                      <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-700 font-mono tabular-nums text-[11px] font-bold">
+                        {publishedFaqs.length}
+                      </span>
+                    </div>
+                    <ChevronRight className="hidden lg:block w-4 h-4 text-slate-500 shrink-0" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setIsMobileFaqOpen(false)}
+                    aria-label="Close Class FAQs drawer"
+                    className="lg:hidden p-1 rounded text-slate-500 hover:text-slate-800 cursor-pointer shrink-0"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+
+                {!activeChannel ? (
+                  <p className="text-xs text-slate-500 py-4 text-center">
+                    Join a Course Hub to view Class FAQs.
+                  </p>
+                ) : publishedFaqs.length === 0 ? (
+                  <p className="text-xs text-slate-500 py-4 text-center">
+                    No Class FAQs published yet.
+                  </p>
+                ) : (
+                  <div className="space-y-2.5">
+                    {publishedFaqs.map((faq) => {
+                      const isExpanded = openFaqIds.includes(faq.id);
+                      const latestReplyObj =
+                        faq.replies.length > 0
+                          ? faq.replies[faq.replies.length - 1]
+                          : undefined;
+                      const latestReply =
+                        latestReplyObj?.content ||
+                        'Resolved during consultation.';
+                      const facultyReplyHeader = latestReplyObj?.author?.name
+                        ? `Faculty reply · ${latestReplyObj.author.name}`
+                        : 'Faculty reply';
+
+                      return (
+                        <div
+                          key={faq.id}
+                          className="border border-slate-200 rounded-md overflow-hidden bg-slate-50/60"
+                        >
+                          <button
+                            type="button"
+                            onClick={() => toggleFaqAccordion(faq.id)}
+                            aria-expanded={isExpanded}
+                            className="w-full px-3 py-2.5 flex items-center justify-between text-left bg-white hover:bg-slate-50 transition-colors cursor-pointer"
+                          >
+                            <span className="text-xs font-extrabold text-ustp-navy truncate">
+                              {faq.subject_hashtag}
+                            </span>
+                            {isExpanded ? (
+                              <ChevronUp className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                            ) : (
+                              <ChevronDown className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                            )}
+                          </button>
+
+                          {isExpanded && (
+                            <div className="px-3 pb-3 pt-2 text-xs space-y-2.5 border-t border-slate-100 bg-white">
+                              <div className="space-y-1">
+                                <p className="text-[11px] font-semibold text-slate-500">
+                                  Asked by: Anonymous Student
+                                </p>
+                                <p className="text-slate-700 leading-relaxed">
+                                  {faq.content}
+                                </p>
+                              </div>
+                              <div className="bg-ustp-cream border border-amber-200/80 border-l-2 border-l-ustp-navy rounded p-2.5 space-y-1">
+                                <p className="text-[11px] font-extrabold text-ustp-navy">
+                                  {facultyReplyHeader}
+                                </p>
+                                <p className="text-ustp-text font-medium leading-relaxed">
+                                  {latestReply}
+                                </p>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </>
           )}
         </aside>
       </div>

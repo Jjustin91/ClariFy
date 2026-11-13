@@ -6,9 +6,11 @@ export const metadata: Metadata = {
   title: "ClariFy",
   description: "Official Academic Communication Hub & Broadcast Portal",
   icons: {
-    icon: "/assets/aistudio/image_87b1a0fe.png",
-    shortcut: "/assets/aistudio/image_87b1a0fe.png",
-    apple: "/assets/aistudio/image_87b1a0fe.png",
+    icon: [
+      { url: "/icon.svg", type: "image/svg+xml" },
+    ],
+    shortcut: ["/icon.svg"],
+    apple: ["/icon.svg"],
   },
 };
 
@@ -22,8 +24,8 @@ export default function RootLayout({
       <head>
         <link
           rel="icon"
-          href="/assets/aistudio/image_87b1a0fe.png"
-          type="image/png"
+          href="/icon.svg"
+          type="image/svg+xml"
         />
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link

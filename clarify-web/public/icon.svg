@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" fill="none">
+  <!-- Circular USTP Navy badge background complementing the C outer curve -->
+  <circle cx="32" cy="32" r="29" fill="#061547" />
+  <!-- Bold Gold/Orange "C" outer ring with speech-bubble inner cutout -->
+  <path
+    d="M 55.38 18.5 A 27 27 0 1 0 55.38 45.5 L 43.26 38.5 A 13 13 0 1 1 43.26 25.5 Z"
+    fill="#F7941D"
+  />
+  <!-- Inner speech-bubble bottom-left tail cutout in USTP Navy -->
+  <path
+    d="M 24.5 41.2 L 19.2 46.8 L 28.8 44.2 Z"
+    fill="#061547"
+  />
+  <!-- Three ellipsis chat dots inside the speech bubble -->
+  <circle cx="26.5" cy="32.5" r="2.2" fill="#F7941D" />
+  <circle cx="32" cy="32.5" r="2.2" fill="#F7941D" />
+  <circle cx="37.5" cy="32.5" r="2.2" fill="#F7941D" />
+</svg>

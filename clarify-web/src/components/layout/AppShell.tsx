@@ -222,22 +222,11 @@ export function AppShell({
           </h1>
         </div>
 
-        {/* Right: USTP Letters + Direct Logout Button + Hamburger Drawer Toggle Button */}
-        <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0">
-          <span className="hidden xs:inline text-sm sm:text-lg font-extrabold text-ustp-gold tracking-wider select-none">
+        {/* Right: USTP Letters + Hamburger Drawer Toggle Button (Mobile/Tablet) */}
+        <div className="flex items-center gap-2.5 shrink-0">
+          <span className="text-base sm:text-lg font-extrabold text-ustp-gold tracking-wider select-none">
             USTP
           </span>
-
-          <button
-            type="button"
-            onClick={(e) => openLogoutConfirm(e.currentTarget)}
-            aria-label="Log out of ClariFy"
-            title="Log out"
-            className="inline-flex items-center justify-center gap-1.5 min-h-[40px] min-w-[40px] px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-red-900/90 text-white border border-slate-700 hover:border-red-400 font-extrabold text-xs transition-colors cursor-pointer focus-visible:outline-2 focus-visible:outline-ustp-gold"
-          >
-            <LogOut className="w-4 h-4 text-ustp-gold shrink-0" />
-            <span className="hidden sm:inline">Log out</span>
-          </button>
 
           <button
             type="button"
