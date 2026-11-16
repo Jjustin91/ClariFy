@@ -262,39 +262,167 @@ class ChannelController
             );
         }
 
-        // Overlay current user's membership state fresh from DB on every request when full roster was not requested
-        if ($user && ! $includeRoster && ! empty($sharedData)) {
-            $pivots = DB::table('channel_user')
+        // Overlay current user's membership state and per-user unseen activity counts fresh from DB after cache read
+        if ($user && ! empty($sharedData)) {
+            $pivotRows = DB::table('channel_user')
                 ->where('user_id', $user->id)
-                ->pluck('approval_status', 'channel_id')
-                ->all();
+                ->get(['channel_id', 'approval_status', 'last_seen_at']);
 
-            $userProfile = $user->relationLoaded('academicProfile')
-                ? $user->academicProfile
-                : $user->academicProfile()->first();
+            $pivots = [];
+            $lastSeenByChannel = [];
+            foreach ($pivotRows as $pRow) {
+                $cid = (int) $pRow->channel_id;
+                $pivots[$cid] = (string) ($pRow->approval_status ?? 'approved');
+                $lastSeenByChannel[$cid] = $pRow->last_seen_at
+                    ? \Illuminate\Support\Carbon::parse($pRow->last_seen_at)
+                    : null;
+            }
 
-            $selfEntry = [
-                'id' => $user->id,
-                'institutional_id' => $user->institutional_id,
-                'name' => $user->name,
-                'role' => $user->role,
-                'section' => $userProfile?->section ?? 'IT3R2',
-                'department' => $userProfile?->department ?? 'CITC',
-            ];
+            if (! $includeRoster) {
+                $userProfile = $user->relationLoaded('academicProfile')
+                    ? $user->academicProfile
+                    : $user->academicProfile()->first();
+
+                $selfEntry = [
+                    'id' => $user->id,
+                    'institutional_id' => $user->institutional_id,
+                    'name' => $user->name,
+                    'role' => $user->role,
+                    'section' => $userProfile?->section ?? 'IT3R2',
+                    'department' => $userProfile?->department ?? 'CITC',
+                ];
+
+                foreach ($sharedData as &$channelItem) {
+                    $cid = (int) ($channelItem['id'] ?? 0);
+                    $status = $pivots[$cid] ?? null;
+                    if ($status === 'approved') {
+                        $channelItem['roster'] = [$selfEntry];
+                        $channelItem['pending_requests'] = [];
+                    } elseif ($status === 'pending') {
+                        $channelItem['roster'] = [];
+                        $channelItem['pending_requests'] = [$selfEntry];
+                    } else {
+                        $channelItem['roster'] = [];
+                        $channelItem['pending_requests'] = [];
+                    }
+                }
+                unset($channelItem);
+            }
+
+            // Compute per-user has_updates & new_activity_count in batched queries (zero N+1).
+            // Existing members with null last_seen_at are treated as having no new activity until first open.
+            $subChannelsByHubId = [];
+            foreach ($sharedData as $item) {
+                $itemId = (int) ($item['id'] ?? 0);
+                $parentHubId = isset($item['parent_hub_id']) && $item['parent_hub_id'] !== null
+                    ? (int) $item['parent_hub_id']
+                    : null;
+                if ($parentHubId !== null && $itemId > 0) {
+                    $subChannelsByHubId[$parentHubId][] = $itemId;
+                }
+            }
+
+            $seenHubCutoffByHubId = [];
+            $minLastSeenAt = null;
+            foreach ($sharedData as $item) {
+                $cid = (int) ($item['id'] ?? 0);
+                $parentHubId = isset($item['parent_hub_id']) && $item['parent_hub_id'] !== null
+                    ? (int) $item['parent_hub_id']
+                    : null;
+                if ($cid <= 0 || $parentHubId !== null) {
+                    continue;
+                }
+
+                $isApproved = ($pivots[$cid] ?? null) === 'approved'
+                    || ((int) ($item['created_by'] ?? 0) === (int) $user->id);
+                $seenAt = $lastSeenByChannel[$cid] ?? null;
+
+                if ($isApproved && $seenAt !== null) {
+                    $seenHubCutoffByHubId[$cid] = $seenAt;
+                    if ($minLastSeenAt === null || $seenAt->lt($minLastSeenAt)) {
+                        $minLastSeenAt = $seenAt;
+                    }
+                }
+            }
+
+            $newActivityByHub = [];
+            if (! empty($seenHubCutoffByHubId) && $minLastSeenAt !== null) {
+                $seenHubIds = array_keys($seenHubCutoffByHubId);
+                $channelToHubMap = [];
+                foreach ($seenHubIds as $hid) {
+                    $channelToHubMap[$hid] = $hid;
+                    foreach ($subChannelsByHubId[$hid] ?? [] as $subId) {
+                        $channelToHubMap[$subId] = $hid;
+                    }
+                }
+                $allSeenChannelIds = array_keys($channelToHubMap);
+
+                // 1. Batched new chat messages (excluding unsent and current user's own messages)
+                $chatRows = Message::query()
+                    ->whereIn('channel_id', $allSeenChannelIds)
+                    ->whereNull('parent_id')
+                    ->where('subject_hashtag', '__CHAT__')
+                    ->whereNull('deleted_at')
+                    ->where('sender_id', '!=', $user->id)
+                    ->where('created_at', '>', $minLastSeenAt)
+                    ->get(['id', 'channel_id', 'created_at']);
+
+                foreach ($chatRows as $row) {
+                    $hubId = $channelToHubMap[(int) $row->channel_id] ?? null;
+                    if ($hubId !== null && $row->created_at && $row->created_at->gt($seenHubCutoffByHubId[$hubId])) {
+                        $newActivityByHub[$hubId] = ($newActivityByHub[$hubId] ?? 0) + 1;
+                    }
+                }
+
+                // 2. Batched new published announcements (excluding current user's own announcements)
+                $annRows = Announcement::query()
+                    ->whereIn('channel_id', $seenHubIds)
+                    ->where('status', 'published')
+                    ->where('publisher_id', '!=', $user->id)
+                    ->where('published_at', '>', $minLastSeenAt)
+                    ->get(['id', 'channel_id', 'published_at']);
+
+                foreach ($annRows as $row) {
+                    $hubId = (int) $row->channel_id;
+                    if (isset($seenHubCutoffByHubId[$hubId]) && $row->published_at && $row->published_at->gt($seenHubCutoffByHubId[$hubId])) {
+                        $newActivityByHub[$hubId] = ($newActivityByHub[$hubId] ?? 0) + 1;
+                    }
+                }
+
+                // 3. Batched new or replied Q&A threads (excluding current user's own actions)
+                $threadRows = Message::query()
+                    ->whereIn('channel_id', $seenHubIds)
+                    ->where(function ($q) {
+                        $q->whereNull('subject_hashtag')
+                            ->orWhere('subject_hashtag', '!=', '__CHAT__');
+                    })
+                    ->whereNull('deleted_at')
+                    ->where('sender_id', '!=', $user->id)
+                    ->where('updated_at', '>', $minLastSeenAt)
+                    ->get(['id', 'channel_id', 'parent_id', 'is_private', 'sender_id', 'updated_at']);
+
+                $countedThreadIdsByHub = [];
+                foreach ($threadRows as $row) {
+                    $hubId = (int) $row->channel_id;
+                    if (! isset($seenHubCutoffByHubId[$hubId]) || ! $row->updated_at || ! $row->updated_at->gt($seenHubCutoffByHubId[$hubId])) {
+                        continue;
+                    }
+                    if ($user->role === 'student' && $row->parent_id === null && $row->is_private && (int) $row->sender_id !== (int) $user->id) {
+                        continue;
+                    }
+                    $rootThreadId = $row->parent_id ? (int) $row->parent_id : (int) $row->id;
+                    if (! isset($countedThreadIdsByHub[$hubId][$rootThreadId])) {
+                        $countedThreadIdsByHub[$hubId][$rootThreadId] = true;
+                        $newActivityByHub[$hubId] = ($newActivityByHub[$hubId] ?? 0) + 1;
+                    }
+                }
+            }
 
             foreach ($sharedData as &$channelItem) {
                 $cid = (int) ($channelItem['id'] ?? 0);
-                $status = $pivots[$cid] ?? null;
-                if ($status === 'approved') {
-                    $channelItem['roster'] = [$selfEntry];
-                    $channelItem['pending_requests'] = [];
-                } elseif ($status === 'pending') {
-                    $channelItem['roster'] = [];
-                    $channelItem['pending_requests'] = [$selfEntry];
-                } else {
-                    $channelItem['roster'] = [];
-                    $channelItem['pending_requests'] = [];
-                }
+                $count = (int) ($newActivityByHub[$cid] ?? 0);
+                $channelItem['new_activity_count'] = $count;
+                $channelItem['has_updates'] = $count > 0;
             }
             unset($channelItem);
         }
@@ -302,6 +430,37 @@ class ChannelController
         return response()->json([
             'data' => $sharedData,
         ]);
+    }
+
+    /**
+     * POST /api/v1/channels/{channelId}/seen
+     * Records last_seen_at = now() for the current user on existing channel_user rows for the Course Hub (and any sub-channel).
+     * Strictly UPDATE-only: never inserts or modifies membership rows.
+     * Authorized via ChannelPolicy::view and channel.scope middleware. Returns 204 No Content.
+     */
+    public function markSeen(Request $request, int $channelId): \Illuminate\Http\Response|\Illuminate\Http\JsonResponse
+    {
+        $channel = Channel::findOrFail($channelId);
+        $user = $request->user();
+
+        $authResponse = \Illuminate\Support\Facades\Gate::inspect('view', $channel);
+        if ($authResponse->denied()) {
+            return response()->json([
+                'status' => 403,
+                'message' => $authResponse->message(),
+            ], 403);
+        }
+
+        $parentHubId = ChannelPolicy::resolveParentHubId($channel);
+        $hubId = $parentHubId ?? (int) $channel->id;
+        $targetChannelIds = array_values(array_unique(array_filter([$hubId, (int) $channel->id])));
+
+        DB::table('channel_user')
+            ->whereIn('channel_id', $targetChannelIds)
+            ->where('user_id', $user->id)
+            ->update(['last_seen_at' => now()]);
+
+        return response()->noContent();
     }
 
     /**

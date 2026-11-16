@@ -59,11 +59,14 @@ export function AnnouncementCard({
   const [isAckLoading, setIsAckLoading] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isLightboxOpen, setIsLightboxOpen] = useState(false);
+  const [isAttachmentNameRevealed, setIsAttachmentNameRevealed] =
+    useState(false);
   const [optimisticReadReach, setOptimisticReadReach] =
     useState<ReadReach | null>(null);
 
   React.useEffect(() => {
     setOptimisticReadReach(null);
+    setIsAttachmentNameRevealed(false);
   }, [
     announcement.id,
     announcement.read_reach.acknowledged_count,
@@ -141,12 +144,16 @@ export function AnnouncementCard({
         ...(courseCode ? [courseCode] : []),
       ];
 
+  const resolvedDocumentFileName =
+    attachmentName ||
+    (isCampusWideMemo
+      ? 'Official_USTP_Attachment.pdf'
+      : 'Course_Hub_Attachment.pdf');
+
   const handleDownloadAttachment = () => {
-    const fileName =
-      attachmentName ||
-      (isCampusWideMemo
-        ? 'Official_USTP_Attachment.pdf'
-        : 'Course_Hub_Attachment.pdf');
+    const fileName = resolvedDocumentFileName;
+    setIsAttachmentNameRevealed(true);
+    showToast(`Downloading ${fileName}...`, 'info');
     if (
       attachmentUrl &&
       (attachmentUrl.startsWith('data:') ||
@@ -367,18 +374,16 @@ export function AnnouncementCard({
               <button
                 type="button"
                 onClick={() => setIsLightboxOpen(true)}
+                aria-label="View attachment"
                 className="group relative block rounded-lg overflow-hidden border border-slate-200 bg-slate-50 hover:border-ustp-navy transition-colors text-left cursor-pointer"
               >
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
                   src={attachmentUrl}
-                  alt={attachmentName || announcement.title}
+                  alt={announcement.title}
                   className="max-h-72 w-auto object-contain bg-slate-100"
                 />
-                <div className="px-3 py-1.5 bg-white border-t border-slate-200 flex items-center justify-between gap-2 text-xs">
-                  <span className="font-mono font-semibold text-ustp-text truncate">
-                    {attachmentName || 'Attached Image'}
-                  </span>
+                <div className="px-3 py-1.5 bg-white border-t border-slate-200 flex items-center justify-end gap-2 text-xs">
                   <span className="inline-flex items-center gap-1 text-[11px] font-bold text-ustp-navy shrink-0">
                     <Maximize2 className="w-3 h-3" />
                     View Full Size
@@ -392,14 +397,14 @@ export function AnnouncementCard({
                 <button
                   type="button"
                   onClick={handleDownloadAttachment}
+                  aria-label="View attachment"
                   className="inline-flex items-center gap-2 px-3 py-1.5 bg-slate-50 hover:bg-slate-100 border border-slate-300 rounded text-xs font-semibold text-ustp-blue transition-colors cursor-pointer"
                 >
                   <FileText className="w-3.5 h-3.5 shrink-0" />
-                  <span className="font-mono truncate max-w-xs">
-                    {attachmentName ||
-                      (isCampusWideMemo
-                        ? 'Official_USTP_Attachment.pdf'
-                        : 'Course_Hub_Attachment.pdf')}
+                  <span className="truncate max-w-xs">
+                    {isAttachmentNameRevealed
+                      ? resolvedDocumentFileName
+                      : 'View attachment'}
                   </span>
                   <Download className="w-3.5 h-3.5 shrink-0 text-ustp-navy" />
                 </button>
@@ -551,14 +556,14 @@ export function AnnouncementCard({
               <button
                 type="button"
                 onClick={() => setIsLightboxOpen(true)}
-                title={`Click to view ${attachmentName || 'image'} full size`}
+                aria-label="View attachment"
                 className="col-span-5 bg-slate-100 border border-slate-200 hover:border-ustp-navy rounded-md overflow-hidden flex flex-col justify-between min-h-[116px] cursor-pointer group relative"
               >
                 <div className="w-full h-24 bg-slate-200 overflow-hidden relative flex items-center justify-center">
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
                     src={attachmentUrl}
-                    alt={attachmentName || announcement.title}
+                    alt={announcement.title}
                     className="w-full h-full object-cover"
                   />
                   <span className="absolute top-1.5 right-1.5 p-1 rounded bg-ustp-navy/85 text-white opacity-90 group-hover:opacity-100">
@@ -566,8 +571,9 @@ export function AnnouncementCard({
                   </span>
                 </div>
                 <div className="p-1.5 bg-white border-t border-slate-200 w-full text-center">
-                  <p className="text-[10px] font-bold text-ustp-text truncate">
-                    {attachmentName || 'Attached Image'}
+                  <p className="text-[10px] font-bold text-ustp-navy inline-flex items-center justify-center gap-1">
+                    <Maximize2 className="w-2.5 h-2.5" />
+                    <span>View Full Size</span>
                   </p>
                 </div>
               </button>
@@ -575,16 +581,16 @@ export function AnnouncementCard({
               <button
                 type="button"
                 onClick={handleDownloadAttachment}
-                title={`Click to download ${
-                  attachmentName || defaultAttachmentLabel
-                }`}
+                aria-label="View attachment"
                 className="col-span-5 bg-slate-100 hover:bg-slate-200/70 border border-slate-200 hover:border-ustp-navy rounded-md p-3 flex flex-col items-center justify-center text-center min-h-[116px] overflow-hidden transition-colors cursor-pointer"
               >
                 <div className="w-9 h-9 rounded bg-ustp-navy text-ustp-gold flex items-center justify-center mb-1.5 shrink-0">
                   <FileText className="w-4 h-4" />
                 </div>
                 <p className="text-[11px] font-bold text-ustp-blue underline w-full truncate px-1">
-                  {attachmentName || defaultAttachmentLabel}
+                  {isAttachmentNameRevealed
+                    ? resolvedDocumentFileName
+                    : 'View attachment'}
                 </p>
                 <span className="text-[10px] font-mono text-slate-600 mt-0.5 inline-flex items-center gap-1">
                   <Download className="w-3 h-3" />

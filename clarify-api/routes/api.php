@@ -73,6 +73,9 @@ Route::prefix('v1')->group(function () {
             // Isolated Q&A Threads per Channel
             Route::get('/channels/{channelId}/threads', [ThreadController::class, 'index']);
             Route::post('/channels/{channelId}/threads', [ThreadController::class, 'store']);
+
+            // Per-user Course Hub last-seen marker (returns 204 No Content)
+            Route::post('/channels/{channelId}/seen', [ChannelController::class, 'markSeen']);
         });
 
         // Scoped Announcements, Read Reach & Audits
@@ -97,5 +100,6 @@ Route::prefix('v1')->group(function () {
         Route::post('/admin/sync-prisms', [AccountController::class, 'syncPrisms']);
         Route::get('/admin/metrics', [AccountController::class, 'metrics']);
         Route::post('/devices/tokens', [DeviceTokenController::class, 'store']);
+        Route::post('/devices/token', [DeviceTokenController::class, 'store']);
     });
 });

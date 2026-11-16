@@ -944,5 +944,393 @@ class ChannelAuthorizationTest extends TestCase
         $this->assertCount(1, $page2->json('data'));
         $this->assertSame($msg1Id, $page2->json('data.0.id'));
     }
+
+    public function test_course_hub_seen_and_has_updates_lifecycle(): void
+    {
+        $faculty = $this->createVerifiedUser('faculty', '10492', 'CITC');
+        $sameDeptUnenrolledFaculty = $this->createVerifiedUser('faculty', '10495', 'CITC');
+        $deptHeadUnenrolled = $this->createVerifiedUser('dept_head', '10400', 'CITC');
+        $student = $this->createVerifiedUser('student', '2020202020', 'CITC');
+        $outsider = $this->createVerifiedUser('student', '2020999999', 'CEA');
+        $hub = $this->createCourseHub($faculty, 'CITC');
+
+        DB::table('channel_user')->insert([
+            [
+                'channel_id' => $hub->id,
+                'user_id' => $faculty->id,
+                'can_publish' => true,
+                'approval_status' => 'approved',
+                'joined_at' => now()->subHour(),
+                'last_seen_at' => null,
+            ],
+            [
+                'channel_id' => $hub->id,
+                'user_id' => $student->id,
+                'can_publish' => false,
+                'approval_status' => 'approved',
+                'joined_at' => now()->subHour(),
+                'last_seen_at' => null,
+            ],
+        ]);
+
+        // 1. Non-member student gets 403 on POST /channels/{id}/seen and no channel_user row is created
+        Sanctum::actingAs($outsider);
+        $this->postJson("/api/v1/channels/{$hub->id}/seen")->assertStatus(403);
+        $this->assertDatabaseMissing('channel_user', [
+            'channel_id' => $hub->id,
+            'user_id' => $outsider->id,
+        ]);
+
+        // 2. Users who pass Gate::view without a channel_user row (same-dept faculty, dept_head)
+        // receive 204 No Content and markSeen NEVER creates a channel_user row for them
+        Sanctum::actingAs($sameDeptUnenrolledFaculty);
+        $this->postJson("/api/v1/channels/{$hub->id}/seen")->assertStatus(204);
+        $this->assertDatabaseMissing('channel_user', [
+            'channel_id' => $hub->id,
+            'user_id' => $sameDeptUnenrolledFaculty->id,
+        ]);
+
+        Sanctum::actingAs($deptHeadUnenrolled);
+        $this->postJson("/api/v1/channels/{$hub->id}/seen")->assertStatus(204);
+        $this->assertDatabaseMissing('channel_user', [
+            'channel_id' => $hub->id,
+            'user_id' => $deptHeadUnenrolled->id,
+        ]);
+
+        // 3. Existing member with null last_seen_at starts with has_updates = false and new_activity_count = 0
+        Sanctum::actingAs($student);
+        $initialList = collect($this->getJson('/api/v1/channels')->assertStatus(200)->json('data'));
+        $initialHub = $initialList->firstWhere('id', $hub->id);
+        $this->assertNotNull($initialHub);
+        $this->assertFalse($initialHub['has_updates']);
+        $this->assertSame(0, $initialHub['new_activity_count']);
+
+        // 4. Student opens hub -> marks seen (204 No Content) and updates last_seen_at on existing pivot row
+        $this->postJson("/api/v1/channels/{$hub->id}/seen")->assertStatus(204);
+        $studentPivot = DB::table('channel_user')
+            ->where('channel_id', $hub->id)
+            ->where('user_id', $student->id)
+            ->first();
+        $this->assertNotNull($studentPivot?->last_seen_at);
+
+        // Travel 5 seconds forward so subsequent activity is strictly after last_seen_at
+        $this->travel(5)->seconds();
+
+        // Faculty posts a chat message and a published announcement
+        Sanctum::actingAs($faculty);
+        $this->postJson("/api/v1/channels/{$hub->id}/messages", [
+            'content' => 'Welcome to class!',
+        ])->assertStatus(201);
+        $this->postJson('/api/v1/announcements', [
+            'channel_id' => $hub->id,
+            'title' => 'Quiz 1 Schedule',
+            'content' => 'Quiz 1 is on Monday.',
+        ])->assertStatus(201);
+
+        // Student now sees has_updates = true and new_activity_count = 2
+        Sanctum::actingAs($student);
+        $updatedList = collect($this->getJson('/api/v1/channels')->assertStatus(200)->json('data'));
+        $updatedHub = $updatedList->firstWhere('id', $hub->id);
+        $this->assertNotNull($updatedHub);
+        $this->assertTrue($updatedHub['has_updates']);
+        $this->assertSame(2, $updatedHub['new_activity_count']);
+
+        // Faculty (who authored both items) does NOT see their own posts counted as unseen activity
+        Sanctum::actingAs($faculty);
+        $this->postJson("/api/v1/channels/{$hub->id}/seen")->assertStatus(204);
+        $facultyList = collect($this->getJson('/api/v1/channels')->assertStatus(200)->json('data'));
+        $facultyHub = $facultyList->firstWhere('id', $hub->id);
+        $this->assertFalse($facultyHub['has_updates']);
+        $this->assertSame(0, $facultyHub['new_activity_count']);
+
+        // Student opens hub again -> POST /seen resets has_updates = false and new_activity_count = 0
+        Sanctum::actingAs($student);
+        $this->travel(2)->seconds();
+        $this->postJson("/api/v1/channels/{$hub->id}/seen")->assertStatus(204);
+        $clearedList = collect($this->getJson('/api/v1/channels')->assertStatus(200)->json('data'));
+        $clearedHub = $clearedList->firstWhere('id', $hub->id);
+        $this->assertFalse($clearedHub['has_updates']);
+        $this->assertSame(0, $clearedHub['new_activity_count']);
+    }
+
+    public function test_ustp_email_validator_and_registration_domain_rules(): void
+    {
+        // Unit assertions for UstpEmailValidator
+        $this->assertTrue(\App\Support\UstpEmailValidator::isValid('student@ustp.edu.ph'));
+        $this->assertTrue(\App\Support\UstpEmailValidator::isValid('STUDENT@USTP.EDU.PH'));
+        $this->assertTrue(\App\Support\UstpEmailValidator::isValid('  student.name@ustp.edu.ph  '));
+        $this->assertSame('student.name@ustp.edu.ph', \App\Support\UstpEmailValidator::normalize('  STUDENT.NAME@USTP.EDU.PH  '));
+
+        $this->assertFalse(\App\Support\UstpEmailValidator::isValid('student@gmail.com'));
+        $this->assertFalse(\App\Support\UstpEmailValidator::isValid('x@mail.ustp.edu.ph'));
+        $this->assertFalse(\App\Support\UstpEmailValidator::isValid('x@ustp.edu.ph.evil.com'));
+        $this->assertFalse(\App\Support\UstpEmailValidator::isValid('@ustp.edu.ph'));
+        $this->assertFalse(\App\Support\UstpEmailValidator::isValid(''));
+
+        // Feature assertions for /api/v1/auth/register
+        $this->postJson('/api/v1/auth/register', [
+            'name' => 'Outside User',
+            'institutional_id' => '2026000001',
+            'email' => 'outside@gmail.com',
+            'password' => 'password123',
+            'role' => 'student',
+            'department' => 'CITC',
+            'section' => 'IT3R2',
+        ])->assertStatus(422)
+          ->assertJsonValidationErrors(['email'])
+          ->assertJsonPath('errors.email.0', 'Only @ustp.edu.ph email addresses can create an account.');
+
+        $this->postJson('/api/v1/auth/register', [
+            'name' => 'Lookalike User',
+            'institutional_id' => '2026000002',
+            'email' => 'x@ustp.edu.ph.evil.com',
+            'password' => 'password123',
+            'role' => 'student',
+            'department' => 'CITC',
+            'section' => 'IT3R2',
+        ])->assertStatus(422)
+          ->assertJsonValidationErrors(['email']);
+
+        $this->postJson('/api/v1/auth/register', [
+            'name' => 'Subdomain User',
+            'institutional_id' => '2026000003',
+            'email' => 'x@mail.ustp.edu.ph',
+            'password' => 'password123',
+            'role' => 'student',
+            'department' => 'CITC',
+            'section' => 'IT3R2',
+        ])->assertStatus(422)
+          ->assertJsonValidationErrors(['email']);
+
+        \Illuminate\Support\Facades\RateLimiter::clear('register:127.0.0.1');
+        $res = $this->postJson('/api/v1/auth/register', [
+            'name' => 'Valid USTP Student',
+            'institutional_id' => '2026000004',
+            'email' => '  VALID.STUDENT@USTP.EDU.PH  ',
+            'password' => 'password123',
+            'role' => 'student',
+            'department' => 'CITC',
+            'section' => 'IT3R2',
+        ])->assertStatus(201);
+
+        $this->assertSame('valid.student@ustp.edu.ph', $res->json('data.email'));
+    }
+
+    public function test_phone_normalizer_formats_and_rejects_invalid_numbers(): void
+    {
+        $this->assertSame('+639171234567', \App\Support\PhoneNormalizer::normalize('09171234567'));
+        $this->assertSame('+639171234567', \App\Support\PhoneNormalizer::normalize('9171234567'));
+        $this->assertSame('+639171234567', \App\Support\PhoneNormalizer::normalize('639171234567'));
+        $this->assertSame('+639171234567', \App\Support\PhoneNormalizer::normalize('+63 917 123 4567'));
+
+        // Reject letters, too short, too long, or non-mobile prefixes
+        $this->assertNull(\App\Support\PhoneNormalizer::normalize('0917abc4567'));
+        $this->assertNull(\App\Support\PhoneNormalizer::normalize('091712345'));
+        $this->assertNull(\App\Support\PhoneNormalizer::normalize('0917123456789'));
+        $this->assertNull(\App\Support\PhoneNormalizer::normalize(''));
+        $this->assertNull(\App\Support\PhoneNormalizer::normalize(null));
+    }
+
+    public function test_semaphore_sms_provider_defensive_response_parsing_and_error_handling(): void
+    {
+        // 1. Empty API key throws RuntimeException
+        $emptyKeyProvider = new \App\Services\Sms\SemaphoreSmsProvider('', 'USTPClariFy');
+        $this->expectException(\RuntimeException::class);
+        $emptyKeyProvider->sendBatch(['+639171234567'], 'Test message');
+    }
+
+    public function test_semaphore_sms_provider_handles_status_list_unknown_body_and_non_2xx(): void
+    {
+        $provider = new \App\Services\Sms\SemaphoreSmsProvider(
+            'test-semaphore-key',
+            'USTPClariFy',
+            'https://api.semaphore.co/api/v4/messages'
+        );
+
+        // 1. 2xx with a list of message objects carrying status (counts failed/refused/error case-insensitively)
+        \Illuminate\Support\Facades\Http::fakeSequence()
+            ->push([
+                ['message_id' => 101, 'status' => 'Queued'],
+                ['message_id' => 102, 'status' => 'Pending'],
+                ['message_id' => 103, 'status' => 'Failed'],
+                ['message_id' => 104, 'status' => 'REFUSED'],
+                ['message_id' => 105, 'status' => 'error'],
+            ], 200)
+            // 2. 2xx with unknown object body (falls back to all sent without throwing)
+            ->push(['ok' => true, 'batch_id' => 999], 200)
+            // 3. 2xx with list of objects lacking a status field (falls back to all sent without throwing)
+            ->push([['message_id' => 201], ['message_id' => 202]], 200)
+            // 4. Non-2xx response throws RuntimeException
+            ->push(['error' => 'Server Error'], 500);
+
+        $resWithStatuses = $provider->sendBatch([
+            '+639170000001',
+            '+639170000002',
+            '+639170000003',
+            '+639170000004',
+            '+639170000005',
+        ], 'Status list test');
+        $this->assertSame(['sent' => 2, 'failed' => 3], $resWithStatuses);
+
+        $resUnknownObject = $provider->sendBatch(['+639170000001', '+639170000002'], 'Unknown object test');
+        $this->assertSame(['sent' => 2, 'failed' => 0], $resUnknownObject);
+
+        $resListWithoutStatus = $provider->sendBatch(['+639170000001', '+639170000002'], 'List without status test');
+        $this->assertSame(['sent' => 2, 'failed' => 0], $resListWithoutStatus);
+
+        $this->expectException(\RuntimeException::class);
+        $provider->sendBatch(['+639170000001'], 'Non-2xx test');
+    }
+
+    public function test_sms_fallback_batch_filters_recipients_and_enforces_partial_vs_total_failure_retry_safety(): void
+    {
+        $authorFaculty = $this->createVerifiedUser('faculty', '10492', 'CITC');
+        $authorFaculty->contact_number = '09170000001';
+        $authorFaculty->save();
+
+        // Create 102 valid approved students + 1 duplicate + 1 invalid + 1 pending + 1 unverified user
+        $hub = $this->createCourseHub($authorFaculty, 'CITC');
+
+        $pivotInserts = [[
+            'channel_id' => $hub->id,
+            'user_id' => $authorFaculty->id,
+            'can_publish' => true,
+            'approval_status' => 'approved',
+            'joined_at' => now(),
+        ]];
+
+        for ($i = 1; $i <= 102; $i++) {
+            $instId = sprintf('20208%05d', $i);
+            $student = $this->createVerifiedUser('student', $instId, 'CITC');
+            $student->contact_number = sprintf('0917%07d', $i);
+            $student->save();
+
+            $pivotInserts[] = [
+                'channel_id' => $hub->id,
+                'user_id' => $student->id,
+                'can_publish' => false,
+                'approval_status' => 'approved',
+                'joined_at' => now(),
+            ];
+        }
+
+        // Duplicate of student #1 (+63 format) -> skipped
+        $studentDuplicate = $this->createVerifiedUser('student', '2020900001', 'CITC');
+        $studentDuplicate->contact_number = '+63 917 000 0001';
+        $studentDuplicate->save();
+        $pivotInserts[] = [
+            'channel_id' => $hub->id,
+            'user_id' => $studentDuplicate->id,
+            'can_publish' => false,
+            'approval_status' => 'approved',
+            'joined_at' => now(),
+        ];
+
+        // Invalid phone number -> skipped
+        $studentInvalid = $this->createVerifiedUser('student', '2020900002', 'CITC');
+        $studentInvalid->contact_number = 'invalid-phone';
+        $studentInvalid->save();
+        $pivotInserts[] = [
+            'channel_id' => $hub->id,
+            'user_id' => $studentInvalid->id,
+            'can_publish' => false,
+            'approval_status' => 'approved',
+            'joined_at' => now(),
+        ];
+
+        // Pending channel membership -> excluded by query
+        $pendingStudent = $this->createVerifiedUser('student', '2020900003', 'CITC');
+        $pendingStudent->contact_number = '09189998888';
+        $pendingStudent->save();
+        $pivotInserts[] = [
+            'channel_id' => $hub->id,
+            'user_id' => $pendingStudent->id,
+            'can_publish' => false,
+            'approval_status' => 'pending',
+            'joined_at' => now(),
+        ];
+
+        // Unverified account even though channel_user row is approved -> excluded by query
+        $unverifiedStudent = $this->createVerifiedUser('student', '2020900004', 'CITC');
+        $unverifiedStudent->verification_status = 'pending';
+        $unverifiedStudent->contact_number = '09187776666';
+        $unverifiedStudent->save();
+        $pivotInserts[] = [
+            'channel_id' => $hub->id,
+            'user_id' => $unverifiedStudent->id,
+            'can_publish' => false,
+            'approval_status' => 'approved',
+            'joined_at' => now(),
+        ];
+
+        DB::table('channel_user')->insert($pivotInserts);
+
+        $longBody = str_repeat('Classes suspended due to heavy rainfall across CDO Campus. ', 5);
+        $ann = \App\Models\Announcement::create([
+            'channel_id' => $hub->id,
+            'publisher_id' => $authorFaculty->id,
+            'title' => 'Severe Weather Advisory',
+            'content' => $longBody,
+            'is_urgent' => true,
+            'trigger_sms_fallback' => true,
+            'status' => 'published',
+            'published_at' => now(),
+        ]);
+
+        // 1. Formatted SMS message is <= 160 chars
+        $formatted = \App\Jobs\TriggerSmsFallbackBatch::formatSmsMessage($ann);
+        $this->assertLessThanOrEqual(160, mb_strlen($formatted));
+
+        // 2. Log driver executes cleanly with zero external HTTP requests
+        \Illuminate\Support\Facades\Http::fake();
+        config(['services.sms.driver' => 'log']);
+        $job = new \App\Jobs\TriggerSmsFallbackBatch($ann);
+        $job->handle();
+        \Illuminate\Support\Facades\Http::assertNothingSent();
+
+        // 3. Partial failure: Chunk 1 (100 recipients) succeeds, Chunk 2 (2 recipients) throws.
+        // The job MUST NOT throw (so the queue does not retry and resend to Chunk 1), and logs sent=100, failed=2, skipped=2.
+        \Illuminate\Support\Facades\Log::spy();
+        $partialCallBatchSizes = [];
+        $partialProvider = new class($partialCallBatchSizes) implements \App\Services\Sms\SmsProviderInterface {
+            private int $calls = 0;
+            public function __construct(public array &$batchSizes) {}
+            public function sendBatch(array $recipients, string $message): array
+            {
+                $this->calls++;
+                $this->batchSizes[] = count($recipients);
+                if ($this->calls === 2) {
+                    throw new \RuntimeException('Second chunk gateway timeout.');
+                }
+                return ['sent' => count($recipients), 'failed' => 0];
+            }
+        };
+
+        $job->handle($partialProvider);
+        $this->assertSame([100, 2], $partialCallBatchSizes);
+        \Illuminate\Support\Facades\Log::shouldHaveReceived('info')
+            ->withArgs(function (string $message, array $context) use ($ann): bool {
+                return $message === 'SMS Fallback Batch (NFR-02) completed.'
+                    && ($context['announcement_id'] ?? null) === $ann->id
+                    && ($context['sent'] ?? null) === 100
+                    && ($context['failed'] ?? null) === 2
+                    && ($context['skipped'] ?? null) === 2;
+            })
+            ->once();
+
+        // 4. Total failure: All chunks throw ($sent === 0). The job MUST rethrow so the queue retries.
+        $allFailingProvider = new class implements \App\Services\Sms\SmsProviderInterface {
+            public function sendBatch(array $recipients, string $message): array
+            {
+                throw new \RuntimeException('Gateway completely unreachable.');
+            }
+        };
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('Gateway completely unreachable.');
+        $job->handle($allFailingProvider);
+    }
 }
+
+
 

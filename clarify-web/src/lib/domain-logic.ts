@@ -755,7 +755,7 @@ export function canStudentModifyOwnInquiry(user: User, thread: QaThread): boolea
 }
 
 /**
- * Privacy filter for Isolated Q&A Threads (Stakeholder Review Table E):
+ * Privacy filter for Isolated Q&A Threads:
  * Private inquiries (`is_private === true`) are visible only to instructors/admins
  * or the student who authored them.
  */
@@ -874,3 +874,82 @@ export function getFieldValidationError(
   }
   return errors[field][0];
 }
+
+export const USTP_EMAIL_ERROR_MESSAGE =
+  'Only @ustp.edu.ph email addresses can create an account.';
+
+/**
+ * Normalizes an institutional email address by trimming whitespace and lowercasing.
+ */
+export function normalizeUstpEmail(raw: string): string {
+  return (raw || '').trim().toLowerCase();
+}
+
+/**
+ * Validates that an email address has a non-empty local part and an exact `@ustp.edu.ph` domain.
+ * Rejects `@gmail.com`, `@mail.ustp.edu.ph`, `@ustp.edu.ph.evil.com`, and `@ustp.edu.ph` without a local part.
+ */
+export function isValidUstpEmail(raw: string): boolean {
+  const normalized = normalizeUstpEmail(raw);
+  if (!normalized || normalized.length > 255) {
+    return false;
+  }
+  if (/\s/.test(normalized)) {
+    return false;
+  }
+  const parts = normalized.split('@');
+  if (parts.length !== 2) {
+    return false;
+  }
+  const [localPart, domainPart] = parts;
+  if (!localPart || localPart.startsWith('.') || localPart.endsWith('.') || localPart.includes('..')) {
+    return false;
+  }
+  if (!/^[a-z0-9.!#$%&'*+/=?^_`{|}~-]+$/i.test(localPart)) {
+    return false;
+  }
+  return domainPart === 'ustp.edu.ph';
+}
+
+/**
+ * Returns the validation error message if the email is not a valid `@ustp.edu.ph` address, or null if valid.
+ */
+export function validateUstpEmail(raw: string): string | null {
+  return isValidUstpEmail(raw) ? null : USTP_EMAIL_ERROR_MESSAGE;
+}
+
+/**
+ * Normalizes a Philippine mobile number (`09XXXXXXXXX`, `9XXXXXXXXX`, `639XXXXXXXXX`, `+63 9XX XXX XXXX`)
+ * into canonical `+639XXXXXXXXX` format, or returns null if invalid.
+ */
+export function normalizePhilippineMobileNumber(
+  raw: string | null | undefined
+): string | null {
+  if (raw === null || raw === undefined) {
+    return null;
+  }
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return null;
+  }
+  if (/[^\d\s\-+()]/.test(trimmed)) {
+    return null;
+  }
+  const hasPlus = trimmed.startsWith('+');
+  const digits = trimmed.replace(/\D+/g, '');
+  if (!digits) {
+    return null;
+  }
+  if (hasPlus) {
+    const m = digits.match(/^63(9\d{9})$/);
+    return m ? `+63${m[1]}` : null;
+  }
+  const m09 = digits.match(/^0(9\d{9})$/);
+  if (m09) return `+63${m09[1]}`;
+  const m63 = digits.match(/^63(9\d{9})$/);
+  if (m63) return `+63${m63[1]}`;
+  const m9 = digits.match(/^(9\d{9})$/);
+  if (m9) return `+63${m9[1]}`;
+  return null;
+}
+

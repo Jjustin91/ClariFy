@@ -209,69 +209,72 @@ export default function DashboardPage() {
               </div>
             </div>
           ) : (
-            <div className="space-y-3">
-              {courseHubs.map((ch) => {
-                const titleDisplay = ch.course_code
-                  ? `${ch.scope_section || 'IT3R2'}-${ch.course_code} ${ch.name.replace(
-                      /^#\s*\S+\s*/,
-                      ''
-                    )}`
-                  : ch.name;
+            (() => {
+              const updatedHubs = courseHubs.filter(
+                (ch) => ch.has_updates === true
+              );
 
-                const openInquiries = ch.unread_count || 0;
-                const totalChats = ch.chat_messages_count || 0;
-                const hasActivity = openInquiries > 0 || totalChats > 0;
-
-                let badgeCount = '0 inquiries · 0 chats';
-                if (openInquiries > 0 && totalChats > 0) {
-                  badgeCount = `${openInquiries} ${
-                    openInquiries === 1 ? 'inquiry' : 'inquiries'
-                  } · ${totalChats} ${totalChats === 1 ? 'chat' : 'chats'}`;
-                } else if (openInquiries > 0) {
-                  badgeCount = `${openInquiries} ${
-                    openInquiries === 1 ? 'inquiry' : 'inquiries'
-                  }`;
-                } else if (totalChats > 0) {
-                  badgeCount = `${totalChats} ${
-                    totalChats === 1 ? 'chat' : 'chats'
-                  }`;
-                }
-
+              if (updatedHubs.length === 0) {
                 return (
-                  <Link
-                    key={ch.id}
-                    href={`/channels/${ch.id}`}
-                    className="block bg-white border border-slate-200/90 hover:border-ustp-navy rounded-lg px-5 py-3.5 shadow-xs hover:shadow-md transition-all"
-                  >
-                    <div className="flex items-center justify-between gap-4">
-                      <div className="min-w-0">
-                        <p className="text-sm font-extrabold text-ustp-text truncate">
-                          {titleDisplay}
-                        </p>
-                        <p className="text-xs text-slate-500 truncate mt-0.5">
-                          {ch.latest_activity_preview ||
-                            `${ch.instructor_name || 'Instructor'}: Course Hub active for ${
-                              ch.scope_section || 'IT3R2'
-                            }`}
-                        </p>
-                      </div>
-                      <div className="text-right shrink-0 font-mono tabular-nums">
-                        <span
-                          className={`block text-xs font-bold ${
-                            hasActivity ? 'text-red-600' : 'text-slate-500'
-                          }`}
-                        >
-                          {badgeCount}
-                        </span>
-                        <span className="block text-[11px] text-slate-400 mt-0.5">
-                          {ch.latest_activity_at || 'No activity yet'}
-                        </span>
-                      </div>
-                    </div>
-                  </Link>
+                  <div className="bg-white border border-slate-200/90 rounded-lg p-6 text-center space-y-1.5">
+                    <p className="text-sm font-extrabold text-ustp-navy">
+                      You&apos;re all caught up
+                    </p>
+                    <p className="text-xs text-slate-500 max-w-md mx-auto">
+                      None of your enrolled Course Hubs have new messages, announcements, or Q&amp;A activity since your last visit.
+                    </p>
+                  </div>
                 );
-              })}
-            </div>
+              }
+
+              return (
+                <div className="space-y-3">
+                  {updatedHubs.map((ch) => {
+                    const titleDisplay = ch.course_code
+                      ? `${ch.scope_section || 'IT3R2'}-${ch.course_code} ${ch.name.replace(
+                          /^#\s*\S+\s*/,
+                          ''
+                        )}`
+                      : ch.name;
+
+                    const newCount = Math.max(1, ch.new_activity_count || 0);
+                    const badgeLabel = `${newCount} new ${
+                      newCount === 1 ? 'update' : 'updates'
+                    }`;
+
+                    return (
+                      <Link
+                        key={ch.id}
+                        href={`/channels/${ch.id}`}
+                        className="block bg-white border border-red-300 hover:border-red-600 rounded-lg px-5 py-3.5 transition-all"
+                      >
+                        <div className="flex items-center justify-between gap-4">
+                          <div className="min-w-0">
+                            <p className="text-sm font-extrabold text-ustp-text truncate">
+                              {titleDisplay}
+                            </p>
+                            <p className="text-xs text-slate-500 truncate mt-0.5">
+                              {ch.latest_activity_preview ||
+                                `${ch.instructor_name || 'Instructor'}: Course Hub active for ${
+                                  ch.scope_section || 'IT3R2'
+                                }`}
+                            </p>
+                          </div>
+                          <div className="text-right shrink-0 font-mono tabular-nums">
+                            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold bg-red-100 text-red-700 border border-red-300">
+                              {badgeLabel}
+                            </span>
+                            <span className="block text-[11px] text-slate-500 mt-1">
+                              {ch.latest_activity_at || 'Just now'}
+                            </span>
+                          </div>
+                        </div>
+                      </Link>
+                    );
+                  })}
+                </div>
+              );
+            })()
           )}
         </section>
       </div>

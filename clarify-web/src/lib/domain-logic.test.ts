@@ -15,7 +15,12 @@ import {
   getFieldValidationError,
   getUnsentMessagePlaceholder,
   isThreadVisibleToUser,
+  isValidUstpEmail,
+  normalizePhilippineMobileNumber,
+  normalizeUstpEmail,
+  USTP_EMAIL_ERROR_MESSAGE,
   validateChatAttachmentFile,
+  validateUstpEmail,
 } from './domain-logic';
 import type { Announcement, Channel, QaThread, User } from '../types/api';
 
@@ -389,6 +394,49 @@ test('buildChatMessageFormData builds multipart fields without base64-encoding c
   assert.equal(retryStore.has('temp-retry-99'), false);
   assert.equal(retryStore.getForRetry('temp-retry-99'), undefined);
 });
+
+test('isValidUstpEmail and validateUstpEmail accept only exact @ustp.edu.ph addresses and normalize case/whitespace', () => {
+  assert.equal(normalizeUstpEmail('  USER.NAME@USTP.EDU.PH  '), 'user.name@ustp.edu.ph');
+  assert.equal(isValidUstpEmail('student@ustp.edu.ph'), true);
+  assert.equal(isValidUstpEmail('USER@USTP.EDU.PH'), true);
+  assert.equal(isValidUstpEmail('  faculty.10492@ustp.edu.ph  '), true);
+  assert.equal(validateUstpEmail('  USER@USTP.EDU.PH  '), null);
+
+  // Rejections: wrong domain, lookalike domain, subdomain, empty local part
+  assert.equal(isValidUstpEmail('student@gmail.com'), false);
+  assert.equal(isValidUstpEmail('student@ustp.edu.ph.evil.com'), false);
+  assert.equal(isValidUstpEmail('student@mail.ustp.edu.ph'), false);
+  assert.equal(isValidUstpEmail('@ustp.edu.ph'), false);
+  assert.equal(isValidUstpEmail(''), false);
+
+  assert.equal(
+    validateUstpEmail('student@gmail.com'),
+    USTP_EMAIL_ERROR_MESSAGE
+  );
+  assert.equal(
+    validateUstpEmail('student@ustp.edu.ph.evil.com'),
+    USTP_EMAIL_ERROR_MESSAGE
+  );
+  assert.equal(
+    validateUstpEmail('student@mail.ustp.edu.ph'),
+    USTP_EMAIL_ERROR_MESSAGE
+  );
+});
+
+test('normalizePhilippineMobileNumber normalizes valid PH mobile numbers to +639XXXXXXXXX and rejects invalid inputs', () => {
+  assert.equal(normalizePhilippineMobileNumber('09171234567'), '+639171234567');
+  assert.equal(normalizePhilippineMobileNumber('9171234567'), '+639171234567');
+  assert.equal(normalizePhilippineMobileNumber('639171234567'), '+639171234567');
+  assert.equal(normalizePhilippineMobileNumber('+63 917 123 4567'), '+639171234567');
+  assert.equal(normalizePhilippineMobileNumber('  +63-917-123-4567  '), '+639171234567');
+
+  assert.equal(normalizePhilippineMobileNumber(''), null);
+  assert.equal(normalizePhilippineMobileNumber('12345'), null);
+  assert.equal(normalizePhilippineMobileNumber('+14155552671'), null);
+  assert.equal(normalizePhilippineMobileNumber('08171234567'), null);
+  assert.equal(normalizePhilippineMobileNumber('+63917123456789'), null);
+});
+
 
 
 

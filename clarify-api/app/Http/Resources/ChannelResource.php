@@ -178,6 +178,8 @@ class ChannelResource extends JsonResource
             'scope_section' => $this->scope_section,
             'unread_count' => $openThreadsCount,
             'chat_messages_count' => $chatMessagesCount,
+            'has_updates' => (bool) ($this->precomputed_has_updates ?? false),
+            'new_activity_count' => (int) ($this->precomputed_new_activity_count ?? 0),
             'members_count' => $membersCount,
             'students_count' => $studentsCount,
             'faculty' => $faculty,

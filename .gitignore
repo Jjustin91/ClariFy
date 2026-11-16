@@ -1,4 +1,3 @@
-cat << 'EOF' > .gitignore
 # Dependencies
 **/node_modules/
 **/vendor/
@@ -8,6 +7,13 @@ cat << 'EOF' > .gitignore
 **/.expo/
 **/dist/
 **/build/
+
+# Laravel runtime caches, framework storage & public symlink
+clarify-api/bootstrap/cache/*.php
+clarify-api/storage/framework/cache/
+clarify-api/storage/framework/views/
+clarify-api/storage/framework/sessions/
+clarify-api/public/storage
 
 # Environment variables (keep .env.example tracked!)
 **/.env
@@ -21,4 +27,3 @@ Thumbs.db
 .idea/
 .vscode/
 *.log
-EOF

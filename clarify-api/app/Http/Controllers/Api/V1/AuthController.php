@@ -6,6 +6,9 @@ use App\Events\RealtimeStateUpdated;
 use App\Http\Resources\UserResource;
 use App\Models\AcademicProfile;
 use App\Models\User;
+use App\Support\PhoneNormalizer;
+use App\Support\UstpEmailValidator;
+use Closure;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
@@ -32,10 +35,48 @@ class AuthController
         }
         RateLimiter::hit($throttleKey, 60);
 
+        // Normalize email (trim + lowercase) BEFORE validation
+        if ($request->has('email')) {
+            $request->merge([
+                'email' => UstpEmailValidator::normalize((string) $request->input('email')),
+            ]);
+        }
+
+        if ($request->filled('contact_number')) {
+            $trimmedContact = trim((string) $request->input('contact_number'));
+            $normalizedContact = PhoneNormalizer::normalize($trimmedContact);
+            if ($normalizedContact !== null) {
+                $request->merge(['contact_number' => $normalizedContact]);
+            }
+        }
+
         $validated = $request->validate([
             'name' => ['required', 'string', 'max:150'],
             'institutional_id' => ['required', 'string', 'max:32', 'unique:users,institutional_id'],
-            'email' => ['required', 'email', 'max:255', 'unique:users,email'],
+            'email' => [
+                'required',
+                'string',
+                'max:255',
+                function (string $attribute, mixed $value, Closure $fail): void {
+                    if (! UstpEmailValidator::isValid(is_string($value) ? $value : '')) {
+                        $fail(UstpEmailValidator::ERROR_MESSAGE);
+                    }
+                },
+                'unique:users,email',
+            ],
+            'contact_number' => [
+                'nullable',
+                'string',
+                'max:32',
+                function (string $attribute, mixed $value, Closure $fail): void {
+                    if ($value === null || trim((string) $value) === '') {
+                        return;
+                    }
+                    if (! PhoneNormalizer::isValid((string) $value)) {
+                        $fail('Please enter a valid Philippine mobile number (e.g., +639171234567 or 09171234567).');
+                    }
+                },
+            ],
             'password' => ['required', 'string', 'min:8', 'max:255'],
             'role' => ['required', 'in:student,faculty'],
             'department' => ['required', 'string', 'max:32'],
@@ -47,10 +88,15 @@ class AuthController
             'role.in' => 'Only Student and Faculty accounts can be registered on this page.',
         ]);
 
+        $normalizedPhone = ! empty($validated['contact_number'])
+            ? PhoneNormalizer::normalize($validated['contact_number'])
+            : null;
+
         $user = new User([
             'institutional_id' => trim($validated['institutional_id']),
             'name' => trim($validated['name']),
-            'email' => strtolower(trim($validated['email'])),
+            'email' => UstpEmailValidator::normalize($validated['email']),
+            'contact_number' => $normalizedPhone,
             'password' => $validated['password'],
         ]);
         $user->role = $validated['role'];
@@ -180,4 +226,3 @@ class AuthController
         ]);
     }
 }
-

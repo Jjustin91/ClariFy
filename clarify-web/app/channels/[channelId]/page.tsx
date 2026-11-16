@@ -89,6 +89,7 @@ export default function CourseHubPage() {
     activeHubTab: activeTab,
     setActiveHubTab: setActiveTab,
     refreshChannels,
+    markChannelSeen,
     subscribeRealtimeEvents,
     showToast,
   } = useClarify();
@@ -263,9 +264,11 @@ export default function CourseHubPage() {
       setIsLoading(false);
       return;
     }
+    markChannelSeen(channelId);
     void loadHubData(channelId);
   }, [
     loadHubData,
+    markChannelSeen,
     channelId,
     announcementVersion,
     isAuthReady,
@@ -1012,7 +1015,7 @@ export default function CourseHubPage() {
                       )}
                     </div>
 
-                    {/* Private Inquiry Toggle (Stakeholder Table E) */}
+                    {/* Private Inquiry Toggle */}
                     <label className="flex items-center gap-2 text-xs font-semibold text-ustp-text cursor-pointer">
                       <input
                         type="checkbox"
@@ -1022,7 +1025,7 @@ export default function CourseHubPage() {
                       />
                       <Lock className="w-3.5 h-3.5 text-slate-600" />
                       <span>
-                        Make Inquiry Private (Visible only to Instructor — Table E)
+                        Make Inquiry Private (Visible only to Instructor)
                       </span>
                     </label>
 

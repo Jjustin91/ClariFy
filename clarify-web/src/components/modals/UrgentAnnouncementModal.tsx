@@ -136,18 +136,35 @@ export function UrgentAnnouncementModal() {
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
                 src={attachmentUrl}
-                alt={attachmentName || urgentPopupAnnouncement.title}
+                alt={urgentPopupAnnouncement.title}
                 className="max-h-52 w-auto object-contain"
               />
             </div>
           ) : (
             (attachmentUrl || attachmentName) && (
-              <div className="inline-flex items-center gap-2 px-3 py-1.5 bg-slate-50 border border-slate-200 rounded text-xs font-semibold text-ustp-blue">
+              <button
+                type="button"
+                aria-label="View attachment"
+                onClick={() => {
+                  const fileName =
+                    attachmentName || 'Official_USTP_Attachment.pdf';
+                  showToast(`Attachment: ${fileName}`, 'info');
+                  if (attachmentUrl) {
+                    const link = document.createElement('a');
+                    link.href = attachmentUrl;
+                    link.download = fileName;
+                    link.target = '_blank';
+                    link.rel = 'noopener noreferrer';
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                  }
+                }}
+                className="inline-flex items-center gap-2 px-3 py-1.5 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded text-xs font-semibold text-ustp-blue cursor-pointer"
+              >
                 <FileText className="w-3.5 h-3.5 shrink-0" />
-                <span className="font-mono">
-                  {attachmentName || 'Official_USTP_Attachment.pdf'}
-                </span>
-              </div>
+                <span>View attachment</span>
+              </button>
             )
           )}
 

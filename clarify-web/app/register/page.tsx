@@ -13,7 +13,11 @@ import {
   ShieldCheck,
 } from 'lucide-react';
 import { registerApi } from '@/src/lib/api-client';
-import { getFieldValidationError } from '@/src/lib/domain-logic';
+import {
+  getFieldValidationError,
+  normalizeUstpEmail,
+  validateUstpEmail,
+} from '@/src/lib/domain-logic';
 import { useClarify } from '@/src/context/ClarifyContext';
 import type { LaravelValidationError, User } from '@/src/types/api';
 
@@ -47,10 +51,36 @@ export default function RegisterPage() {
     }
   };
 
+  const handleEmailBlur = () => {
+    const raw = email.trim();
+    if (!raw) return;
+    const normalized = normalizeUstpEmail(raw);
+    setEmail(normalized);
+    const err = validateUstpEmail(normalized);
+    setFieldErrors((prev) => {
+      const next = { ...prev };
+      if (err) {
+        next.email = [err];
+      } else {
+        delete next.email;
+      }
+      return next;
+    });
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setFieldErrors({});
     setGeneralError(null);
+
+    const normalizedEmail = normalizeUstpEmail(email);
+    const emailDomainErr = validateUstpEmail(normalizedEmail);
+    if (emailDomainErr) {
+      setFieldErrors({
+        email: [emailDomainErr],
+      });
+      return;
+    }
 
     if (password !== confirmPassword) {
       setFieldErrors({
@@ -64,7 +94,7 @@ export default function RegisterPage() {
       const res = await registerApi({
         name,
         institutional_id: institutionalId,
-        email,
+        email: normalizedEmail,
         password,
         role,
         department,
@@ -372,10 +402,23 @@ export default function RegisterPage() {
                     id="reg-email"
                     type="email"
                     value={email}
-                    onChange={(e) => setEmail(e.target.value)}
+                    onChange={(e) => {
+                      setEmail(e.target.value);
+                      if (fieldErrors.email) {
+                        setFieldErrors((prev) => {
+                          const next = { ...prev };
+                          delete next.email;
+                          return next;
+                        });
+                      }
+                    }}
+                    onBlur={handleEmailBlur}
                     placeholder="name@ustp.edu.ph"
                     className="w-full px-3 py-2 text-sm bg-white text-ustp-text border border-slate-300 rounded focus:outline-none focus:border-ustp-navy"
                   />
+                  <p className="text-[11px] text-slate-600 mt-1">
+                    Must be an official @ustp.edu.ph address
+                  </p>
                   {emailError && (
                     <p
                       className="text-xs font-bold text-red-700 mt-1"

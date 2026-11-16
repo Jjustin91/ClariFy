@@ -22,11 +22,14 @@ jobs:
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_KEY }}
           port: ${{ secrets.SSH_PORT }}
+          script_stop: true
           script: |
+            set -euo pipefail
             cd /var/www/clarify/ClariFy/clarify-api
 
-            # Put Laravel into maintenance mode
+            # Put Laravel into maintenance mode and guarantee recovery on exit
             php artisan down || true
+            trap 'php artisan up' EXIT
 
             # Pull latest changes
             git pull origin jonathan
@@ -58,3 +61,6 @@ jobs:
 
             # Bring Laravel back online
             php artisan up
+
+            # Print deployed commit in the workflow log
+            git log -1 --oneline

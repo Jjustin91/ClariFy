@@ -40,7 +40,7 @@ class ThreadController
             }
         }
 
-        // Enforce Private Inquiry visibility (Stakeholder Table E)
+        // Enforce Private Inquiry visibility
         if ($user->role === 'student') {
             $query->where(function ($q) use ($user) {
                 $q->where('is_private', false)
@@ -256,6 +256,7 @@ class ThreadController
         if ($thread->is_pinned_faq) {
             $thread->is_private = false;
         }
+        $thread->updated_at = now();
         $thread->save();
 
         $threadPayload = (new ThreadResource($thread->fresh(['sender', 'replies.sender'])))->resolve($request);

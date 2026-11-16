@@ -230,6 +230,7 @@ async function requestLaravel<T>(
   if (
     method !== 'GET' &&
     method !== 'HEAD' &&
+    !endpoint.endsWith('/seen') &&
     typeof window !== 'undefined'
   ) {
     let parsedBody: Record<string, unknown> | undefined;
@@ -444,6 +445,27 @@ export async function manageChannelMemberApi(
       body: JSON.stringify(payload),
     }
   );
+}
+
+/**
+ * Marks a Course Hub as seen (`last_seen_at = now()`) for the authenticated user (returns 204 No Content).
+ */
+export async function markChannelSeenApi(channelId: number): Promise<void> {
+  const numericId = Number(channelId);
+  if (!numericId || numericId <= 0) return;
+
+  try {
+    await requestLaravel<void>(`/channels/${numericId}/seen`, {
+      method: 'POST',
+    });
+  } catch (err) {
+    const apiErr = err as LaravelValidationError;
+    // Ignore 404 when running against legacy local route adapter
+    if (apiErr?.status === 404) {
+      return;
+    }
+    throw err;
+  }
 }
 
 // ============================================================================

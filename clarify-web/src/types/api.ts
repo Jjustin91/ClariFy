@@ -51,6 +51,8 @@ export interface Channel {
   scope_section: string | null;
   unread_count?: number;
   chat_messages_count?: number;
+  has_updates?: boolean;
+  new_activity_count?: number;
   members_count?: number;
   students_count?: number;
   faculty?: ChannelFacultyMember[];

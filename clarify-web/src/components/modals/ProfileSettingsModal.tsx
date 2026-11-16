@@ -4,7 +4,10 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Camera, Phone, ShieldCheck, Trash2, X } from 'lucide-react';
 import { useClarify } from '../../context/ClarifyContext';
 import { updateProfileApi } from '../../lib/api-client';
-import { getFieldValidationError } from '../../lib/domain-logic';
+import {
+  getFieldValidationError,
+  normalizePhilippineMobileNumber,
+} from '../../lib/domain-logic';
 import type { LaravelValidationError } from '../../types/api';
 
 async function compressAvatarFileToDataUrl(file: File): Promise<string> {
@@ -73,7 +76,7 @@ export function ProfileSettingsModal() {
   useEffect(() => {
     if (isSettingsModalOpen && !wasOpenRef.current) {
       wasOpenRef.current = true;
-      setContactNumber(user.contact_number || '+63 917 842 2020');
+      setContactNumber(user.contact_number || '');
       setAvatarPreview(user.avatar_url || null);
       setFieldErrors({});
     } else if (!isSettingsModalOpen) {
@@ -109,12 +112,27 @@ export function ProfileSettingsModal() {
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    setIsSaving(true);
     setFieldErrors({});
 
+    const trimmedContact = contactNumber.trim();
+    let normalizedPhone = '';
+    if (trimmedContact !== '') {
+      const normalized = normalizePhilippineMobileNumber(trimmedContact);
+      if (!normalized) {
+        setFieldErrors({
+          contact_number: [
+            'Please enter a valid Philippine mobile number (e.g., +639171234567 or 09171234567).',
+          ],
+        });
+        return;
+      }
+      normalizedPhone = normalized;
+    }
+
+    setIsSaving(true);
     try {
       const formData = new FormData();
-      formData.set('contact_number', contactNumber);
+      formData.set('contact_number', normalizedPhone);
       formData.set('avatar_preview_url', avatarPreview || '');
       const res = await updateProfileApi(formData);
       setUser(res.data);
@@ -238,10 +256,10 @@ export function ProfileSettingsModal() {
               <Phone className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
               <input
                 id="profile-contact-number"
-                type="text"
+                type="tel"
                 value={contactNumber}
                 onChange={(e) => setContactNumber(e.target.value)}
-                placeholder="+63 917 842 2020"
+                placeholder="+63 9XX XXX XXXX"
                 className="w-full pl-9 pr-3 py-2 text-sm font-mono tabular-nums bg-white text-ustp-text border border-slate-300 rounded focus:outline-none focus:border-ustp-navy"
               />
             </div>
@@ -250,7 +268,10 @@ export function ProfileSettingsModal() {
                 {contactError}
               </p>
             )}
-            <p className="text-[11px] text-slate-600 mt-1.5 flex items-center gap-1">
+            <p className="text-[11px] text-slate-600 mt-1.5">
+              Urgent SMS alerts require a real Philippine mobile number (e.g., <span className="font-mono tabular-nums">+639XXXXXXXXX</span> or <span className="font-mono tabular-nums">09XXXXXXXXX</span>).
+            </p>
+            <p className="text-[11px] text-slate-600 mt-1 flex items-center gap-1">
               <ShieldCheck className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
               Protected under Philippine Data Privacy Act of 2012 (RA 10173).
             </p>
