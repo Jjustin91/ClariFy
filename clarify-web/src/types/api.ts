@@ -38,6 +38,12 @@ export interface ChannelFacultyMember {
   role: UserRole;
 }
 
+export interface NewActivityBreakdown {
+  chat: number;
+  announcements: number;
+  qa: number;
+}
+
 export interface Channel {
   id: number;
   parent_hub_id?: number | null;
@@ -53,6 +59,9 @@ export interface Channel {
   chat_messages_count?: number;
   has_updates?: boolean;
   new_activity_count?: number;
+  new_activity_breakdown?: NewActivityBreakdown;
+  new_activity_sub_channel_id?: number | null;
+  last_seen_at?: string | null;
   members_count?: number;
   students_count?: number;
   faculty?: ChannelFacultyMember[];

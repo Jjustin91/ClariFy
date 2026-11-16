@@ -1330,7 +1330,162 @@ class ChannelAuthorizationTest extends TestCase
         $this->expectExceptionMessage('Gateway completely unreachable.');
         $job->handle($allFailingProvider);
     }
+
+    public function test_channel_index_activity_breakdown_sub_channel_and_private_qa_exclusion(): void
+    {
+        $faculty = $this->createVerifiedUser('faculty', '10492', 'CITC');
+        $studentA = $this->createVerifiedUser('student', '2020202020', 'CITC');
+        $studentB = $this->createVerifiedUser('student', '2020303030', 'CITC');
+        $hub = $this->createCourseHub($faculty, 'CITC');
+
+        $subGeneral = Channel::create([
+            'parent_hub_id' => $hub->id,
+            'course_code' => 'IT314',
+            'name' => '# general',
+            'description' => 'General discussion',
+            'channel_type' => 'course_hub',
+            'scope_college' => 'CITC',
+            'scope_department' => 'CITC',
+            'scope_section' => 'IT3R2',
+            'instructor_name' => $faculty->name,
+            'created_by' => $faculty->id,
+        ]);
+
+        $subLabs = Channel::create([
+            'parent_hub_id' => $hub->id,
+            'course_code' => 'IT314',
+            'name' => '# labs',
+            'description' => 'Lab discussion',
+            'channel_type' => 'course_hub',
+            'scope_college' => 'CITC',
+            'scope_department' => 'CITC',
+            'scope_section' => 'IT3R2',
+            'instructor_name' => $faculty->name,
+            'created_by' => $faculty->id,
+        ]);
+
+        DB::table('channel_user')->insert([
+            [
+                'channel_id' => $hub->id,
+                'user_id' => $faculty->id,
+                'can_publish' => true,
+                'approval_status' => 'approved',
+                'joined_at' => now()->subHour(),
+                'last_seen_at' => null,
+            ],
+            [
+                'channel_id' => $hub->id,
+                'user_id' => $studentA->id,
+                'can_publish' => false,
+                'approval_status' => 'approved',
+                'joined_at' => now()->subHour(),
+                'last_seen_at' => null,
+            ],
+            [
+                'channel_id' => $hub->id,
+                'user_id' => $studentB->id,
+                'can_publish' => false,
+                'approval_status' => 'approved',
+                'joined_at' => now()->subHour(),
+                'last_seen_at' => null,
+            ],
+        ]);
+
+        // Both students mark the hub seen first
+        Sanctum::actingAs($studentA);
+        $firstSeen = $this->postJson("/api/v1/channels/{$hub->id}/seen?include_previous=1")->assertStatus(200);
+        $this->assertNull($firstSeen->json('data.previous_seen_at'));
+
+        Sanctum::actingAs($studentB);
+        $this->postJson("/api/v1/channels/{$hub->id}/seen")->assertStatus(204);
+
+        $this->travel(5)->seconds();
+
+        // Faculty posts 1 chat message in #general, then 1 newer chat message in #labs, plus 1 announcement
+        Sanctum::actingAs($faculty);
+        $this->postJson("/api/v1/channels/{$subGeneral->id}/messages", [
+            'content' => 'Welcome to #general!',
+        ])->assertStatus(201);
+
+        $this->travel(2)->seconds();
+        $this->postJson("/api/v1/channels/{$subLabs->id}/messages", [
+            'content' => 'Lab 1 instructions uploaded in #labs!',
+        ])->assertStatus(201);
+
+        $this->postJson('/api/v1/announcements', [
+            'channel_id' => $hub->id,
+            'title' => 'Midterm Coverage',
+            'content' => 'Chapters 1 to 4.',
+        ])->assertStatus(201);
+
+        // Student A submits 1 public Q&A inquiry and 1 private Q&A inquiry
+        Sanctum::actingAs($studentA);
+        $this->postJson("/api/v1/channels/{$hub->id}/threads", [
+            'subject_hashtag' => '#MidtermScope',
+            'content' => 'Is Chapter 5 included?',
+            'is_private' => false,
+        ])->assertStatus(201);
+
+        $privateRes = $this->postJson("/api/v1/channels/{$hub->id}/threads", [
+            'subject_hashtag' => '#MedicalExcuse',
+            'content' => 'Private medical excuse note.',
+            'is_private' => true,
+        ])->assertStatus(201);
+        $privateThreadId = (int) $privateRes->json('data.id');
+
+        // Faculty replies to Student A's private thread
+        $this->travel(2)->seconds();
+        Sanctum::actingAs($faculty);
+        $this->postJson("/api/v1/threads/{$privateThreadId}/replies", [
+            'content' => 'Noted, please bring the certificate.',
+            'mark_resolved' => true,
+            'pin_to_faq' => false,
+        ])->assertStatus(200);
+
+        // Student B checks GET /api/v1/channels:
+        // Should see chat=2, announcements=1, qa=1 (ONLY the public thread, NOT Student A's private thread or its reply!),
+        // new_activity_count=4, and new_activity_sub_channel_id = $subLabs->id (most recent chat sub-channel).
+        Sanctum::actingAs($studentB);
+        $studentBChannels = collect($this->getJson('/api/v1/channels')->assertStatus(200)->json('data'));
+        $studentBHub = $studentBChannels->firstWhere('id', $hub->id);
+        $this->assertNotNull($studentBHub);
+        $this->assertTrue($studentBHub['has_updates']);
+        $this->assertSame(4, $studentBHub['new_activity_count']);
+        $this->assertSame([
+            'chat' => 2,
+            'announcements' => 1,
+            'qa' => 1,
+        ], $studentBHub['new_activity_breakdown']);
+        $this->assertSame($subLabs->id, $studentBHub['new_activity_sub_channel_id']);
+        $this->assertNotEmpty($studentBHub['last_seen_at']);
+
+        // Student A checks GET /api/v1/channels:
+        // Student A authored both threads, so Student A's own thread creations are excluded,
+        // EXCEPT Faculty's reply on Student A's private thread counts as 1 unseen Q&A update for Student A!
+        Sanctum::actingAs($studentA);
+        $studentAChannels = collect($this->getJson('/api/v1/channels')->assertStatus(200)->json('data'));
+        $studentAHub = $studentAChannels->firstWhere('id', $hub->id);
+        $this->assertNotNull($studentAHub);
+        $this->assertSame([
+            'chat' => 2,
+            'announcements' => 1,
+            'qa' => 1,
+        ], $studentAHub['new_activity_breakdown']);
+
+        // When Student B marks seen with ?include_previous=1, previous_seen_at is returned and breakdown resets to 0
+        Sanctum::actingAs($studentB);
+        $seenRes = $this->postJson("/api/v1/channels/{$hub->id}/seen?include_previous=1")->assertStatus(200);
+        $this->assertSame($studentBHub['last_seen_at'], $seenRes->json('data.previous_seen_at'));
+
+        $afterSeenHub = collect($this->getJson('/api/v1/channels')->assertStatus(200)->json('data'))
+            ->firstWhere('id', $hub->id);
+        $this->assertFalse($afterSeenHub['has_updates']);
+        $this->assertSame(0, $afterSeenHub['new_activity_count']);
+        $this->assertSame(['chat' => 0, 'announcements' => 0, 'qa' => 0], $afterSeenHub['new_activity_breakdown']);
+        $this->assertNull($afterSeenHub['new_activity_sub_channel_id']);
+    }
 }
+
 
 
 

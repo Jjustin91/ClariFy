@@ -54,14 +54,20 @@ import {
   canPublishOrManageAnnouncements,
   canResolveOrPinThreads,
   canStudentModifyOwnInquiry,
+  filterQaThreads,
   formatCourseHubName,
   formatEnrolledRosterSummary,
   formatSubChannelDisplayName,
   getChannelFacultyLabel,
   getFieldValidationError,
+  getQaThreadFilterCounts,
   getSubChannelsForHub,
+  getThreadStatusLabel,
+  isThreadResolved,
+  isThreadUnread,
   isThreadVisibleToUser,
   isUserCourseAdmin,
+  type QaThreadStatusFilter,
   resolveCourseHubSelection,
 } from '@/src/lib/domain-logic';
 import type {
@@ -90,6 +96,7 @@ export default function CourseHubPage() {
     setActiveHubTab: setActiveTab,
     refreshChannels,
     markChannelSeen,
+    previousSeenAtByHubId,
     subscribeRealtimeEvents,
     showToast,
   } = useClarify();
@@ -107,8 +114,16 @@ export default function CourseHubPage() {
   const [isDeletingHubId, setIsDeletingHubId] = useState<number | null>(null);
   const [isMobileChannelsOpen, setIsMobileChannelsOpen] = useState(false);
   const [isMobileFaqOpen, setIsMobileFaqOpen] = useState(false);
+  const [qaStatusFilter, setQaStatusFilter] =
+    useState<QaThreadStatusFilter>('all');
+  const [qaUnreadOnly, setQaUnreadOnly] = useState<boolean>(false);
 
-  // Sync activeTab with ?tab= query parameter; open Noticeboard Feed by default on top-level Course Hubs, and switch to messenger only when navigating to a custom sub-channel URL
+  useEffect(() => {
+    setQaStatusFilter('all');
+    setQaUnreadOnly(false);
+  }, [channelId]);
+
+  // Sync activeTab with ?tab= query parameter; open Noticeboard Feed by default on top-level Course Hubs, and switch to messenger when navigating to a custom sub-channel URL or ?tab=messenger
   useEffect(() => {
     if (parentHubId !== null) {
       setActiveTab('messenger');
@@ -120,7 +135,8 @@ export default function CourseHubPage() {
       if (
         tabParam === 'feed' ||
         tabParam === 'threads' ||
-        tabParam === 'send_inquiry'
+        tabParam === 'send_inquiry' ||
+        tabParam === 'messenger'
       ) {
         setActiveTab(tabParam);
         return;
@@ -372,6 +388,20 @@ export default function CourseHubPage() {
   });
 
   const visibleThreads = threads.filter((t) => isThreadVisibleToUser(t, user));
+  const hubPreviousSeenAt =
+    previousSeenAtByHubId[parentHubId ?? channelId] ??
+    activeChannel?.last_seen_at ??
+    null;
+  const qaFilterCounts = getQaThreadFilterCounts(
+    threads,
+    user,
+    hubPreviousSeenAt
+  );
+  const filteredVisibleThreads = filterQaThreads(threads, user, {
+    statusFilter: qaStatusFilter,
+    unreadOnly: qaUnreadOnly,
+    previousSeenAt: hubPreviousSeenAt,
+  });
   const publishedFaqs = threads.filter((t) => t.is_pinned_faq);
 
   const toggleFaqAccordion = (id: number) => {
@@ -447,7 +477,7 @@ export default function CourseHubPage() {
         mark_resolved: markResolved,
         pin_to_faq: pinTicketToFaq,
       });
-      showToast(res.message || 'Ticket answered.', 'success');
+      showToast(res.message || 'Ticket resolved.', 'success');
       if (pinTicketToFaq) {
         updateFaqSectionOpen(true);
         setOpenFaqIds([answeringThread.id]);
@@ -1111,8 +1141,8 @@ export default function CourseHubPage() {
                 <div className="space-y-4">
                   <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-slate-200">
                     <div>
-                      <h3 className="text-sm sm:text-base font-extrabold text-ustp-navy">
-                        Isolated Q&amp;A Threads ({visibleThreads.length})
+                      <h3 className="text-sm sm:text-base font-extrabold text-ustp-navy tabular-nums">
+                        Isolated Q&amp;A Threads ({qaFilterCounts.all})
                       </h3>
                       <p className="text-xs text-slate-500">
                         Structured academic inquiries and clarifications for{' '}
@@ -1125,12 +1155,122 @@ export default function CourseHubPage() {
                       <button
                         type="button"
                         onClick={() => setActiveTab('send_inquiry')}
-                        className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-md text-xs font-extrabold bg-ustp-gold text-ustp-navy hover:opacity-95 whitespace-nowrap shrink-0 cursor-pointer"
+                        className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-md text-xs font-extrabold bg-ustp-gold text-ustp-navy hover:opacity-95 focus-visible:outline-2 focus-visible:outline-ustp-navy whitespace-nowrap shrink-0 cursor-pointer"
                       >
                         <MessageSquarePlus className="w-3.5 h-3.5" />
                         <span>Ask in Q&amp;A Thread</span>
                       </button>
                     )}
+                  </div>
+
+                  {/* Filter Bar: All | Unresolved | Resolved + Unread Toggle, plus Legend */}
+                  <div className="bg-white border border-slate-200 rounded-lg p-3 space-y-2.5">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div
+                        role="group"
+                        aria-label="Filter Q&A threads by resolution status"
+                        className="flex flex-wrap items-center gap-1.5"
+                      >
+                        <button
+                          type="button"
+                          onClick={() => setQaStatusFilter('all')}
+                          aria-pressed={qaStatusFilter === 'all'}
+                          className={`px-3 py-1.5 rounded text-xs font-extrabold tabular-nums transition-colors cursor-pointer focus-visible:outline-2 focus-visible:outline-ustp-navy ${
+                            qaStatusFilter === 'all'
+                              ? 'bg-ustp-navy text-white border border-ustp-navy'
+                              : 'bg-slate-50 text-ustp-text border border-slate-200 hover:bg-slate-100'
+                          }`}
+                        >
+                          All ({qaFilterCounts.all})
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setQaStatusFilter('unresolved')}
+                          aria-pressed={qaStatusFilter === 'unresolved'}
+                          className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-extrabold tabular-nums transition-colors cursor-pointer focus-visible:outline-2 focus-visible:outline-ustp-navy ${
+                            qaStatusFilter === 'unresolved'
+                              ? 'bg-ustp-navy text-ustp-gold border border-ustp-navy'
+                              : canResolve && qaFilterCounts.unresolved > 0
+                              ? 'bg-amber-100 text-amber-950 border border-amber-400 hover:bg-amber-200'
+                              : 'bg-slate-50 text-ustp-text border border-slate-200 hover:bg-slate-100'
+                          }`}
+                        >
+                          <span>Unresolved ({qaFilterCounts.unresolved})</span>
+                          {canResolve && qaFilterCounts.unresolved > 0 && (
+                            <span className="px-1.5 py-0.2 rounded text-[10px] font-extrabold bg-ustp-gold text-ustp-navy">
+                              Needs Triage
+                            </span>
+                          )}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setQaStatusFilter('resolved')}
+                          aria-pressed={qaStatusFilter === 'resolved'}
+                          className={`px-3 py-1.5 rounded text-xs font-extrabold tabular-nums transition-colors cursor-pointer focus-visible:outline-2 focus-visible:outline-ustp-navy ${
+                            qaStatusFilter === 'resolved'
+                              ? 'bg-ustp-navy text-white border border-ustp-navy'
+                              : 'bg-slate-50 text-ustp-text border border-slate-200 hover:bg-slate-100'
+                          }`}
+                        >
+                          Resolved ({qaFilterCounts.resolved})
+                        </button>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => setQaUnreadOnly((prev) => !prev)}
+                        aria-pressed={qaUnreadOnly}
+                        className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-extrabold tabular-nums transition-colors cursor-pointer focus-visible:outline-2 focus-visible:outline-ustp-navy ${
+                          qaUnreadOnly
+                            ? 'bg-red-700 text-white border border-red-700'
+                            : qaFilterCounts.unread > 0
+                            ? 'bg-red-50 text-red-800 border border-red-300 hover:bg-red-100'
+                            : 'bg-slate-50 text-slate-600 border border-slate-200 hover:bg-slate-100'
+                        }`}
+                      >
+                        <span
+                          aria-hidden="true"
+                          className={`w-2 h-2 rounded-full ${
+                            qaUnreadOnly
+                              ? 'bg-white'
+                              : qaFilterCounts.unread > 0
+                              ? 'bg-red-600'
+                              : 'bg-slate-400'
+                          }`}
+                        />
+                        <span>Unread ({qaFilterCounts.unread})</span>
+                      </button>
+                    </div>
+
+                    {/* Legend explaining NEW dot + badge, UNRESOLVED, and RESOLVED */}
+                    <div
+                      aria-label="Q&A status legend"
+                      className="flex flex-wrap items-center gap-x-4 gap-y-1 pt-2 border-t border-slate-100 text-[11px] text-slate-600"
+                    >
+                      <span className="font-bold text-slate-500">Legend:</span>
+                      <span className="inline-flex items-center gap-1.5">
+                        <span className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded text-[10px] font-extrabold bg-red-100 text-red-700 border border-red-300">
+                          <span
+                            aria-hidden="true"
+                            className="w-1.5 h-1.5 rounded-full bg-red-600"
+                          />
+                          NEW
+                        </span>
+                        <span>Unread inquiry or reply since last visit</span>
+                      </span>
+                      <span className="inline-flex items-center gap-1.5">
+                        <span className="px-1.5 py-0.2 rounded text-[10px] font-extrabold bg-amber-100 text-amber-900 border border-amber-300">
+                          UNRESOLVED
+                        </span>
+                        <span>Awaiting faculty resolution</span>
+                      </span>
+                      <span className="inline-flex items-center gap-1.5">
+                        <span className="px-1.5 py-0.2 rounded text-[10px] font-extrabold bg-emerald-100 text-emerald-800 border border-emerald-300">
+                          RESOLVED
+                        </span>
+                        <span>Marked resolved by faculty</span>
+                      </span>
+                    </div>
                   </div>
 
                   {visibleThreads.length === 0 ? (
@@ -1144,173 +1284,224 @@ export default function CourseHubPage() {
                           : undefined
                       }
                     />
+                  ) : filteredVisibleThreads.length === 0 ? (
+                    qaUnreadOnly ? (
+                      <EmptyState
+                        title="No Unread Q&A Inquiries"
+                        description="You have caught up on all new questions and faculty replies in this Course Hub."
+                        actionLabel="Show All Inquiries"
+                        onAction={() => {
+                          setQaUnreadOnly(false);
+                          setQaStatusFilter('all');
+                        }}
+                      />
+                    ) : qaStatusFilter === 'unresolved' ? (
+                      <EmptyState
+                        title="No Unresolved Inquiries"
+                        description="Every visible academic inquiry in this Course Hub has been resolved by the instructor."
+                        actionLabel="View All Inquiries"
+                        onAction={() => setQaStatusFilter('all')}
+                      />
+                    ) : (
+                      <EmptyState
+                        title="No Resolved Inquiries Yet"
+                        description="Inquiries marked resolved by the course instructor will appear under this filter."
+                        actionLabel="View All Inquiries"
+                        onAction={() => setQaStatusFilter('all')}
+                      />
+                    )
                   ) : (
                     <div className="space-y-4">
-                      {visibleThreads.map((thread) => {
-                    const canStudentEdit = canStudentModifyOwnInquiry(
-                      user,
-                      thread
-                    );
-                    const authorLabel = thread.is_pinned_faq
-                      ? 'Anonymous Student'
-                      : thread.author.name;
-                    const threadTime = formatShortTime(thread.created_at);
+                      {filteredVisibleThreads.map((thread) => {
+                        const canStudentEdit = canStudentModifyOwnInquiry(
+                          user,
+                          thread
+                        );
+                        const authorLabel = thread.is_pinned_faq
+                          ? 'Anonymous Student'
+                          : thread.author.name;
+                        const threadTime = formatShortTime(thread.created_at);
+                        const isUnread = isThreadUnread(
+                          thread,
+                          user.id,
+                          hubPreviousSeenAt
+                        );
+                        const isResolved = isThreadResolved(thread);
+                        const statusLabel = getThreadStatusLabel(thread);
 
-                    return (
-                      <article
-                        key={thread.id}
-                        className="bg-white border border-slate-200 rounded-lg p-5 space-y-3"
-                      >
-                        {/* Top Row: Subject Hashtag in bold navy + right-aligned RESOLVED / Private badges */}
-                        <div className="flex items-start justify-between gap-3">
-                          <div>
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <h3 className="text-base font-extrabold text-ustp-navy tracking-tight">
-                                {thread.subject_hashtag}
-                              </h3>
-                              {thread.is_private && (
-                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-bold bg-slate-100 text-slate-700 border border-slate-300">
-                                  <Lock className="w-3 h-3" />
-                                  Private Inquiry
-                                </span>
-                              )}
+                        return (
+                          <article
+                            key={thread.id}
+                            className={`bg-white border rounded-lg p-5 space-y-3 ${
+                              isUnread
+                                ? 'border-red-300'
+                                : 'border-slate-200'
+                            }`}
+                          >
+                            {/* Top Row: Subject Hashtag in bold navy + right-aligned NEW / RESOLVED / UNRESOLVED / Private badges */}
+                            <div className="flex items-start justify-between gap-3">
+                              <div>
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <h3 className="text-base font-extrabold text-ustp-navy tracking-tight">
+                                    {thread.subject_hashtag}
+                                  </h3>
+                                  {isUnread && (
+                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-extrabold bg-red-100 text-red-700 border border-red-300">
+                                      <span
+                                        aria-hidden="true"
+                                        className="w-1.5 h-1.5 rounded-full bg-red-600"
+                                      />
+                                      NEW
+                                    </span>
+                                  )}
+                                  {thread.is_private && (
+                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-bold bg-slate-100 text-slate-700 border border-slate-300">
+                                      <Lock className="w-3 h-3" />
+                                      Private Inquiry
+                                    </span>
+                                  )}
+                                </div>
+                                <p className="text-xs text-slate-500 mt-0.5 font-medium tabular-nums">
+                                  From: {authorLabel} • {threadTime}
+                                </p>
+                              </div>
+
+                              <div className="flex items-center gap-2 shrink-0">
+                                {isResolved ? (
+                                  <span className="px-2.5 py-0.5 rounded text-[11px] font-extrabold bg-emerald-100 text-emerald-800 border border-emerald-300">
+                                    {statusLabel}
+                                  </span>
+                                ) : (
+                                  <span className="px-2.5 py-0.5 rounded text-[11px] font-extrabold bg-amber-100 text-amber-900 border border-amber-300">
+                                    {statusLabel}
+                                  </span>
+                                )}
+
+                                {/* Student Edit/Delete Own Unresolved Inquiry (Workflow 3 Activity Diagram) */}
+                                {canStudentEdit && (
+                                  <div className="flex items-center gap-1">
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setEditingThreadId(thread.id);
+                                        setEditingThreadContent(thread.content);
+                                      }}
+                                      aria-label={`Edit inquiry ${thread.subject_hashtag}`}
+                                      className="p-1 text-slate-500 hover:text-ustp-navy rounded cursor-pointer"
+                                    >
+                                      <Edit3 className="w-3.5 h-3.5" />
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        handleDeleteInquiry(thread.id)
+                                      }
+                                      aria-label={`Delete inquiry ${thread.subject_hashtag}`}
+                                      className="p-1 text-slate-500 hover:text-red-700 rounded cursor-pointer"
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5" />
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
                             </div>
-                            <p className="text-xs text-slate-500 mt-0.5 font-medium tabular-nums">
-                              From: {authorLabel} • {threadTime}
-                            </p>
-                          </div>
 
-                          <div className="flex items-center gap-2 shrink-0">
-                            {thread.is_resolved ? (
-                              <span className="px-2.5 py-0.5 rounded text-[11px] font-extrabold bg-amber-100 text-amber-900 border border-amber-300">
-                                RESOLVED
-                              </span>
+                            {/* Student Inquiry Body or Inline Edit Box */}
+                            {editingThreadId === thread.id ? (
+                              <div className="space-y-2">
+                                <textarea
+                                  rows={3}
+                                  value={editingThreadContent}
+                                  onChange={(e) =>
+                                    setEditingThreadContent(e.target.value)
+                                  }
+                                  className="w-full p-2.5 text-sm border border-slate-300 rounded"
+                                />
+                                <div className="flex gap-2 justify-end">
+                                  <button
+                                    type="button"
+                                    onClick={() => setEditingThreadId(null)}
+                                    className="px-3 py-1 text-xs font-semibold text-slate-600 cursor-pointer"
+                                  >
+                                    Cancel
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      handleSaveEditedInquiry(thread.id)
+                                    }
+                                    className="px-3 py-1 text-xs font-bold bg-ustp-navy text-white rounded cursor-pointer"
+                                  >
+                                    Save Inquiry
+                                  </button>
+                                </div>
+                              </div>
                             ) : (
-                              <span className="px-2.5 py-0.5 rounded text-[11px] font-bold bg-sky-100 text-sky-900 border border-sky-300">
-                                OPEN TICKET
-                              </span>
+                              <p className="text-sm text-ustp-text leading-relaxed max-w-[70ch]">
+                                {thread.content}
+                              </p>
                             )}
 
-                            {/* Student Edit/Delete Own Unresolved Inquiry (Workflow 3 Activity Diagram) */}
-                            {canStudentEdit && (
-                              <div className="flex items-center gap-1">
+                            {/* Nested Faculty Reply Block matching Oct 22 MVP Screenshot */}
+                            {thread.replies.length > 0 && (
+                              <div className="pl-4 py-2 bg-amber-50/60 border border-amber-200 rounded-md space-y-1">
+                                {thread.replies.map((reply) => (
+                                  <div key={reply.id}>
+                                    <p className="text-xs sm:text-sm text-ustp-text">
+                                      <span className="font-extrabold text-ustp-navy">
+                                        {reply.author.role === 'student'
+                                          ? `Student Reply (${reply.author.name}): `
+                                          : `Faculty Reply (${reply.author.name}): `}
+                                      </span>
+                                      {reply.content}
+                                    </p>
+                                  </div>
+                                ))}
+                                {thread.is_pinned_faq && (
+                                  <p className="text-[11px] font-bold text-amber-700 flex items-center gap-1 pt-0.5">
+                                    <Star className="w-3 h-3 fill-ustp-gold text-ustp-gold" />
+                                    <span>
+                                      Pinned to Class FAQs (Student Identity
+                                      Masked)
+                                    </span>
+                                  </p>
+                                )}
+                              </div>
+                            )}
+
+                            {/* Faculty Answer / Pin Controls (Wireframe Page 8 & Oct 22 MVP) */}
+                            {canResolve && (
+                              <div className="pt-2 border-t border-slate-100 flex items-center justify-end gap-2">
+                                {!thread.is_pinned_faq && (
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      handleOneClickConvertFaq(thread.id)
+                                    }
+                                    className="px-3 py-1.5 text-xs font-bold bg-amber-100 hover:bg-amber-200 text-amber-900 border border-amber-300 rounded cursor-pointer"
+                                  >
+                                    ★ Pin to Class FAQs
+                                  </button>
+                                )}
                                 <button
                                   type="button"
                                   onClick={() => {
-                                    setEditingThreadId(thread.id);
-                                    setEditingThreadContent(thread.content);
+                                    setAnsweringThread(thread);
+                                    setReplyContent('');
+                                    setMarkResolved(true);
+                                    setPinTicketToFaq(true);
+                                    setReplyErrors({});
+                                    setIsMobileFaqOpen(true);
                                   }}
-                                  aria-label={`Edit inquiry ${thread.subject_hashtag}`}
-                                  className="p-1 text-slate-500 hover:text-ustp-navy rounded cursor-pointer"
+                                  className="px-4 py-1.5 text-xs font-extrabold bg-ustp-navy text-white rounded hover:opacity-95 cursor-pointer"
                                 >
-                                  <Edit3 className="w-3.5 h-3.5" />
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => handleDeleteInquiry(thread.id)}
-                                  aria-label={`Delete inquiry ${thread.subject_hashtag}`}
-                                  className="p-1 text-slate-500 hover:text-red-700 rounded cursor-pointer"
-                                >
-                                  <Trash2 className="w-3.5 h-3.5" />
+                                  Answer
                                 </button>
                               </div>
                             )}
-                          </div>
-                        </div>
-
-                        {/* Student Inquiry Body or Inline Edit Box */}
-                        {editingThreadId === thread.id ? (
-                          <div className="space-y-2">
-                            <textarea
-                              rows={3}
-                              value={editingThreadContent}
-                              onChange={(e) =>
-                                setEditingThreadContent(e.target.value)
-                              }
-                              className="w-full p-2.5 text-sm border border-slate-300 rounded"
-                            />
-                            <div className="flex gap-2 justify-end">
-                              <button
-                                type="button"
-                                onClick={() => setEditingThreadId(null)}
-                                className="px-3 py-1 text-xs font-semibold text-slate-600 cursor-pointer"
-                              >
-                                Cancel
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => handleSaveEditedInquiry(thread.id)}
-                                className="px-3 py-1 text-xs font-bold bg-ustp-navy text-white rounded cursor-pointer"
-                              >
-                                Save Inquiry
-                              </button>
-                            </div>
-                          </div>
-                        ) : (
-                          <p className="text-sm text-ustp-text leading-relaxed max-w-[70ch]">
-                            {thread.content}
-                          </p>
-                        )}
-
-                        {/* Nested Faculty Reply Block matching Oct 22 MVP Screenshot */}
-                        {thread.replies.length > 0 && (
-                          <div className="pl-4 py-2 bg-amber-50/60 border border-amber-200 rounded-md space-y-1">
-                            {thread.replies.map((reply) => (
-                              <div key={reply.id}>
-                                <p className="text-xs sm:text-sm text-ustp-text">
-                                  <span className="font-extrabold text-ustp-navy">
-                                    {reply.author.role === 'student'
-                                      ? `Student Reply (${reply.author.name}): `
-                                      : `Faculty Reply (${reply.author.name}): `}
-                                  </span>
-                                  {reply.content}
-                                </p>
-                              </div>
-                            ))}
-                            {thread.is_pinned_faq && (
-                              <p className="text-[11px] font-bold text-amber-700 flex items-center gap-1 pt-0.5">
-                                <Star className="w-3 h-3 fill-ustp-gold text-ustp-gold" />
-                                <span>
-                                  Pinned to Class FAQs (Student Identity Masked)
-                                </span>
-                              </p>
-                            )}
-                          </div>
-                        )}
-
-                        {/* Faculty Answer / Pin Controls (Wireframe Page 8 & Oct 22 MVP) */}
-                        {canResolve && (
-                          <div className="pt-2 border-t border-slate-100 flex items-center justify-end gap-2">
-                            {!thread.is_pinned_faq && (
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  handleOneClickConvertFaq(thread.id)
-                                }
-                                className="px-3 py-1.5 text-xs font-bold bg-amber-100 hover:bg-amber-200 text-amber-900 border border-amber-300 rounded cursor-pointer"
-                              >
-                                ★ Pin to Class FAQs
-                              </button>
-                            )}
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setAnsweringThread(thread);
-                                setReplyContent('');
-                                setMarkResolved(true);
-                                setPinTicketToFaq(true);
-                                setReplyErrors({});
-                                setIsMobileFaqOpen(true);
-                              }}
-                              className="px-4 py-1.5 text-xs font-extrabold bg-ustp-navy text-white rounded hover:opacity-95 cursor-pointer"
-                            >
-                              Answer
-                            </button>
-                          </div>
-                        )}
-                      </article>
-                    );
-                  })}
+                          </article>
+                        );
+                      })}
                     </div>
                   )}
                 </div>

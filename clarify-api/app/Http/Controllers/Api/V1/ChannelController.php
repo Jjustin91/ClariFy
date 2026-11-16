@@ -346,6 +346,8 @@ class ChannelController
             }
 
             $newActivityByHub = [];
+            $breakdownByHub = [];
+            $latestChatSubChannelByHub = [];
             if (! empty($seenHubCutoffByHubId) && $minLastSeenAt !== null) {
                 $seenHubIds = array_keys($seenHubCutoffByHubId);
                 $channelToHubMap = [];
@@ -365,12 +367,19 @@ class ChannelController
                     ->whereNull('deleted_at')
                     ->where('sender_id', '!=', $user->id)
                     ->where('created_at', '>', $minLastSeenAt)
+                    ->orderBy('created_at', 'asc')
+                    ->orderBy('id', 'asc')
                     ->get(['id', 'channel_id', 'created_at']);
 
                 foreach ($chatRows as $row) {
-                    $hubId = $channelToHubMap[(int) $row->channel_id] ?? null;
+                    $msgChannelId = (int) $row->channel_id;
+                    $hubId = $channelToHubMap[$msgChannelId] ?? null;
                     if ($hubId !== null && $row->created_at && $row->created_at->gt($seenHubCutoffByHubId[$hubId])) {
                         $newActivityByHub[$hubId] = ($newActivityByHub[$hubId] ?? 0) + 1;
+                        $breakdownByHub[$hubId]['chat'] = ($breakdownByHub[$hubId]['chat'] ?? 0) + 1;
+                        if ($msgChannelId !== (int) $hubId) {
+                            $latestChatSubChannelByHub[$hubId] = $msgChannelId;
+                        }
                     }
                 }
 
@@ -386,10 +395,11 @@ class ChannelController
                     $hubId = (int) $row->channel_id;
                     if (isset($seenHubCutoffByHubId[$hubId]) && $row->published_at && $row->published_at->gt($seenHubCutoffByHubId[$hubId])) {
                         $newActivityByHub[$hubId] = ($newActivityByHub[$hubId] ?? 0) + 1;
+                        $breakdownByHub[$hubId]['announcements'] = ($breakdownByHub[$hubId]['announcements'] ?? 0) + 1;
                     }
                 }
 
-                // 3. Batched new or replied Q&A threads (excluding current user's own actions)
+                // 3. Batched new or replied Q&A threads (excluding current user's own actions and other students' private threads)
                 $threadRows = Message::query()
                     ->whereIn('channel_id', $seenHubIds)
                     ->where(function ($q) {
@@ -401,19 +411,47 @@ class ChannelController
                     ->where('updated_at', '>', $minLastSeenAt)
                     ->get(['id', 'channel_id', 'parent_id', 'is_private', 'sender_id', 'updated_at']);
 
+                $parentRootMetaById = [];
+                if ($user->role === 'student') {
+                    $replyParentIds = $threadRows
+                        ->pluck('parent_id')
+                        ->filter(fn ($pid) => $pid !== null)
+                        ->map(fn ($pid) => (int) $pid)
+                        ->unique()
+                        ->values()
+                        ->all();
+                    if (! empty($replyParentIds)) {
+                        $parentRootMetaById = Message::query()
+                            ->whereIn('id', $replyParentIds)
+                            ->get(['id', 'is_private', 'sender_id'])
+                            ->keyBy('id')
+                            ->all();
+                    }
+                }
+
                 $countedThreadIdsByHub = [];
                 foreach ($threadRows as $row) {
                     $hubId = (int) $row->channel_id;
                     if (! isset($seenHubCutoffByHubId[$hubId]) || ! $row->updated_at || ! $row->updated_at->gt($seenHubCutoffByHubId[$hubId])) {
                         continue;
                     }
-                    if ($user->role === 'student' && $row->parent_id === null && $row->is_private && (int) $row->sender_id !== (int) $user->id) {
-                        continue;
+                    if ($user->role === 'student') {
+                        if ($row->parent_id === null) {
+                            if ($row->is_private && (int) $row->sender_id !== (int) $user->id) {
+                                continue;
+                            }
+                        } else {
+                            $parentMeta = $parentRootMetaById[(int) $row->parent_id] ?? null;
+                            if ($parentMeta && $parentMeta->is_private && (int) $parentMeta->sender_id !== (int) $user->id) {
+                                continue;
+                            }
+                        }
                     }
                     $rootThreadId = $row->parent_id ? (int) $row->parent_id : (int) $row->id;
                     if (! isset($countedThreadIdsByHub[$hubId][$rootThreadId])) {
                         $countedThreadIdsByHub[$hubId][$rootThreadId] = true;
                         $newActivityByHub[$hubId] = ($newActivityByHub[$hubId] ?? 0) + 1;
+                        $breakdownByHub[$hubId]['qa'] = ($breakdownByHub[$hubId]['qa'] ?? 0) + 1;
                     }
                 }
             }
@@ -421,8 +459,20 @@ class ChannelController
             foreach ($sharedData as &$channelItem) {
                 $cid = (int) ($channelItem['id'] ?? 0);
                 $count = (int) ($newActivityByHub[$cid] ?? 0);
+                $breakdown = $breakdownByHub[$cid] ?? [];
                 $channelItem['new_activity_count'] = $count;
                 $channelItem['has_updates'] = $count > 0;
+                $channelItem['new_activity_breakdown'] = [
+                    'chat' => (int) ($breakdown['chat'] ?? 0),
+                    'announcements' => (int) ($breakdown['announcements'] ?? 0),
+                    'qa' => (int) ($breakdown['qa'] ?? 0),
+                ];
+                $channelItem['new_activity_sub_channel_id'] = isset($latestChatSubChannelByHub[$cid])
+                    ? (int) $latestChatSubChannelByHub[$cid]
+                    : null;
+                $channelItem['last_seen_at'] = isset($lastSeenByChannel[$cid]) && $lastSeenByChannel[$cid] !== null
+                    ? $lastSeenByChannel[$cid]->toIso8601String()
+                    : null;
             }
             unset($channelItem);
         }
@@ -436,7 +486,8 @@ class ChannelController
      * POST /api/v1/channels/{channelId}/seen
      * Records last_seen_at = now() for the current user on existing channel_user rows for the Course Hub (and any sub-channel).
      * Strictly UPDATE-only: never inserts or modifies membership rows.
-     * Authorized via ChannelPolicy::view and channel.scope middleware. Returns 204 No Content.
+     * Authorized via ChannelPolicy::view and channel.scope middleware.
+     * Returns 204 No Content by default (with X-Previous-Seen-At header), or 200 JSON with previous_seen_at when ?include_previous=1.
      */
     public function markSeen(Request $request, int $channelId): \Illuminate\Http\Response|\Illuminate\Http\JsonResponse
     {
@@ -455,12 +506,30 @@ class ChannelController
         $hubId = $parentHubId ?? (int) $channel->id;
         $targetChannelIds = array_values(array_unique(array_filter([$hubId, (int) $channel->id])));
 
+        $existingPivot = DB::table('channel_user')
+            ->where('channel_id', $hubId)
+            ->where('user_id', $user->id)
+            ->first(['last_seen_at']);
+
+        $previousSeenAt = null;
+        if ($existingPivot && ! empty($existingPivot->last_seen_at)) {
+            $previousSeenAt = \Illuminate\Support\Carbon::parse($existingPivot->last_seen_at)->toIso8601String();
+        }
+
         DB::table('channel_user')
             ->whereIn('channel_id', $targetChannelIds)
             ->where('user_id', $user->id)
             ->update(['last_seen_at' => now()]);
 
-        return response()->noContent();
+        if ($request->boolean('include_previous')) {
+            return response()->json([
+                'data' => [
+                    'previous_seen_at' => $previousSeenAt,
+                ],
+            ]);
+        }
+
+        return response()->noContent()->header('X-Previous-Seen-At', $previousSeenAt ?? '');
     }
 
     /**

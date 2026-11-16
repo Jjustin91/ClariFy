@@ -15,8 +15,11 @@ import { useClarify } from '@/src/context/ClarifyContext';
 import { getAnnouncementsApi } from '@/src/lib/api-client';
 import {
   canPublishCampusWideAnnouncements,
+  formatHubActivityBreakdownChips,
   getJoinedCourseHubs,
+  getSubChannelsForHub,
   getTopLevelCourseHubs,
+  resolveHubUpdateDestination,
 } from '@/src/lib/domain-logic';
 import type { Announcement, LaravelValidationError } from '@/src/types/api';
 
@@ -241,12 +244,23 @@ export default function DashboardPage() {
                     const badgeLabel = `${newCount} new ${
                       newCount === 1 ? 'update' : 'updates'
                     }`;
+                    const hubSubChannels = getSubChannelsForHub(
+                      channels,
+                      ch.id
+                    );
+                    const destinationHref = resolveHubUpdateDestination(
+                      ch,
+                      hubSubChannels
+                    );
+                    const breakdownChips = formatHubActivityBreakdownChips(
+                      ch.new_activity_breakdown
+                    );
 
                     return (
                       <Link
                         key={ch.id}
-                        href={`/channels/${ch.id}`}
-                        className="block bg-white border border-red-300 hover:border-red-600 rounded-lg px-5 py-3.5 transition-all"
+                        href={destinationHref}
+                        className="block bg-white border border-red-300 hover:border-red-600 focus-visible:outline-2 focus-visible:outline-ustp-navy rounded-lg px-5 py-3.5 transition-all"
                       >
                         <div className="flex items-center justify-between gap-4">
                           <div className="min-w-0">
@@ -261,9 +275,19 @@ export default function DashboardPage() {
                             </p>
                           </div>
                           <div className="text-right shrink-0 font-mono tabular-nums">
-                            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold bg-red-100 text-red-700 border border-red-300">
-                              {badgeLabel}
-                            </span>
+                            <div className="flex items-center justify-end gap-1.5 flex-wrap">
+                              {breakdownChips.map((chip) => (
+                                <span
+                                  key={chip.key}
+                                  className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-bold bg-slate-100 text-ustp-navy border border-slate-300"
+                                >
+                                  {chip.label}
+                                </span>
+                              ))}
+                              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold bg-red-100 text-red-700 border border-red-300">
+                                {badgeLabel}
+                              </span>
+                            </div>
                             <span className="block text-[11px] text-slate-500 mt-1">
                               {ch.latest_activity_at || 'Just now'}
                             </span>

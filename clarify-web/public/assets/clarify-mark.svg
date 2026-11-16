@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160" fill="none" role="img" aria-label="ClariFy Emblem">
+  <!-- Circular USTP Navy Badge -->
+  <circle cx="80" cy="80" r="76" fill="#1a1851" />
+  <!-- Gold/Orange C with Speech Bubble Inner Counter -->
+  <path
+    fill="#ff9718"
+    fill-rule="evenodd"
+    clip-rule="evenodd"
+    d="M136 44C123.8 26.2 103.3 14.5 80 14.5C42.7 14.5 12.5 44.7 12.5 82C12.5 119.3 42.7 149.5 80 149.5C103.3 149.5 123.8 137.8 136 120L109.2 103.5C102.1 112.1 91.6 117.2 79.8 117.2H45L57.1 104.3C49.2 97.6 44.2 87.6 44.2 76.4C44.2 56.3 60.3 40 80.2 40C92.3 40 102.9 45.9 109.5 55L136 44Z"
+  />
+  <!-- Speech Bubble Ellipsis Dots -->
+  <circle cx="64" cy="79" r="6.5" fill="#ff9718" />
+  <circle cx="80" cy="79" r="6.5" fill="#ff9718" />
+  <circle cx="96" cy="79" r="6.5" fill="#ff9718" />
+</svg>

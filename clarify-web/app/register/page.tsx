@@ -137,10 +137,11 @@ export default function RegisterPage() {
         <div className="bg-slate-100 text-ustp-text border-2 border-ustp-gold rounded-lg p-8 sm:p-10 max-w-xl w-full text-center shadow-lg">
           <div className="inline-flex items-center justify-center mb-3">
             <Image
-              src="/assets/aistudio/image_07899ab9.png"
+              src="/assets/clarify-logo.svg"
               alt="ClariFy"
               width={200}
               height={68}
+              priority
               unoptimized
               className="h-12 sm:h-14 w-auto object-contain"
             />
@@ -207,10 +208,11 @@ export default function RegisterPage() {
           <div className="flex flex-col items-center text-center">
             <div className="px-5 py-2.5 rounded-2xl bg-ustp-navy border-4 border-ustp-gold flex flex-col items-center justify-center shadow-md">
               <Image
-                src="/assets/aistudio/image_07899ab9.png"
+                src="/assets/clarify-logo.svg"
                 alt="ClariFy"
                 width={130}
                 height={40}
+                priority
                 unoptimized
                 className="h-10 w-auto object-contain"
               />

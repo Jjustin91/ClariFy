@@ -1,6 +1,7 @@
 import type {
   Announcement,
   Channel,
+  NewActivityBreakdown,
   QaThread,
   ReadReach,
   User,
@@ -952,4 +953,238 @@ export function normalizePhilippineMobileNumber(
   if (m9) return `+63${m9[1]}`;
   return null;
 }
+
+export type HubActivityCategory = 'qa' | 'chat' | 'announcements';
+
+export interface HubActivityBreakdownChip {
+  key: HubActivityCategory;
+  label: string;
+  count: number;
+}
+
+/**
+ * Formats non-zero activity breakdown categories into small labeled chips
+ * ("2 chat", "1 Q&A", "1 announcement").
+ */
+export function formatHubActivityBreakdownChips(
+  breakdown?: NewActivityBreakdown | null
+): HubActivityBreakdownChip[] {
+  if (!breakdown) return [];
+  const chips: HubActivityBreakdownChip[] = [];
+  const qa = Number(breakdown.qa || 0);
+  const chat = Number(breakdown.chat || 0);
+  const announcements = Number(breakdown.announcements || 0);
+
+  if (qa > 0) {
+    chips.push({ key: 'qa', label: `${qa} Q&A`, count: qa });
+  }
+  if (chat > 0) {
+    chips.push({ key: 'chat', label: `${chat} chat`, count: chat });
+  }
+  if (announcements > 0) {
+    chips.push({
+      key: 'announcements',
+      label: `${announcements} ${announcements === 1 ? 'announcement' : 'announcements'}`,
+      count: announcements,
+    });
+  }
+  return chips;
+}
+
+/**
+ * Resolves the deep-link destination URL for a Course Hub card on the Dashboard:
+ * - If new_activity_breakdown is absent or all counts are 0, falls back to `/channels/{id}`.
+ * - If one category has activity, routes directly to it:
+ *   - chat -> `/channels/{new_activity_sub_channel_id || firstSubChannelId || id}?tab=messenger` (or `/channels/{subId}` for a sub-channel)
+ *   - announcements -> `/channels/{id}?tab=feed`
+ *   - qa -> `/channels/{id}?tab=threads`
+ * - If multiple categories have activity, picks the highest count; tie-break order: qa, chat, announcements.
+ */
+export function resolveHubUpdateDestination(
+  channel: Channel,
+  subChannels: Channel[] = []
+): string {
+  const breakdown = channel.new_activity_breakdown;
+  if (!breakdown) {
+    return `/channels/${channel.id}`;
+  }
+
+  const qa = Math.max(0, Number(breakdown.qa || 0));
+  const chat = Math.max(0, Number(breakdown.chat || 0));
+  const announcements = Math.max(0, Number(breakdown.announcements || 0));
+
+  if (qa === 0 && chat === 0 && announcements === 0) {
+    return `/channels/${channel.id}`;
+  }
+
+  // Tie-break order: qa, chat, announcements
+  const ordered: { category: HubActivityCategory; count: number }[] = [
+    { category: 'qa', count: qa },
+    { category: 'chat', count: chat },
+    { category: 'announcements', count: announcements },
+  ];
+
+  let winner: HubActivityCategory = 'qa';
+  let maxCount = -1;
+  for (const entry of ordered) {
+    if (entry.count > maxCount) {
+      maxCount = entry.count;
+      winner = entry.category;
+    }
+  }
+
+  if (winner === 'qa') {
+    return `/channels/${channel.id}?tab=threads`;
+  }
+  if (winner === 'announcements') {
+    return `/channels/${channel.id}?tab=feed`;
+  }
+
+  // winner === 'chat'
+  const preferredSubId =
+    typeof channel.new_activity_sub_channel_id === 'number' &&
+    channel.new_activity_sub_channel_id > 0 &&
+    channel.new_activity_sub_channel_id !== channel.id
+      ? channel.new_activity_sub_channel_id
+      : subChannels.length > 0
+      ? subChannels[0].id
+      : null;
+
+  if (preferredSubId !== null) {
+    return `/channels/${preferredSubId}`;
+  }
+
+  return `/channels/${channel.id}?tab=messenger`;
+}
+
+export type QaThreadStatusFilter = 'all' | 'unresolved' | 'resolved';
+
+/**
+ * Resolved: thread.is_resolved === true (which includes is_pinned_faq === true threads).
+ */
+export function isThreadResolved(thread: QaThread): boolean {
+  return Boolean(thread.is_resolved || thread.is_pinned_faq);
+}
+
+/**
+ * Unresolved: thread.is_resolved === false (and not a pinned FAQ).
+ * A reply alone does NOT change status unless the thread is resolved.
+ */
+export function isThreadUnresolved(thread: QaThread): boolean {
+  return !isThreadResolved(thread);
+}
+
+/**
+ * Returns the canonical status badge label for Isolated Q&A cards and filter bar.
+ */
+export function getThreadStatusLabel(thread: QaThread): 'RESOLVED' | 'UNRESOLVED' {
+  return isThreadResolved(thread) ? 'RESOLVED' : 'UNRESOLVED';
+}
+
+/**
+ * Unread: thread (or a reply on it) from someone other than the current user,
+ * updated/created strictly after the user's previous last_seen_at for that hub.
+ */
+export function isThreadUnread(
+  thread: QaThread,
+  currentUserId: number,
+  previousSeenAt?: string | null
+): boolean {
+  if (!previousSeenAt) return false;
+  const cutoffMs = Date.parse(previousSeenAt);
+  if (Number.isNaN(cutoffMs)) return false;
+
+  const isOtherAuthor = Number(thread.author?.id ?? 0) !== Number(currentUserId);
+  const createdMs = Date.parse(thread.created_at);
+  if (isOtherAuthor && !Number.isNaN(createdMs) && createdMs > cutoffMs) {
+    return true;
+  }
+
+  const replies = Array.isArray(thread.replies) ? thread.replies : [];
+  for (const reply of replies) {
+    const isOtherReplier = Number(reply.author?.id ?? 0) !== Number(currentUserId);
+    const replyMs = Date.parse(reply.created_at);
+    if (isOtherReplier && !Number.isNaN(replyMs) && replyMs > cutoffMs) {
+      return true;
+    }
+  }
+
+  if (replies.length === 0 && thread.updated_at) {
+    const updatedMs = Date.parse(thread.updated_at);
+    if (isOtherAuthor && !Number.isNaN(updatedMs) && updatedMs > cutoffMs) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+export interface QaThreadFilterCounts {
+  all: number;
+  unresolved: number;
+  resolved: number;
+  unread: number;
+}
+
+/**
+ * Computes All / Unresolved / Resolved / Unread counts strictly across threads visible to `user`
+ * (reusing `isThreadVisibleToUser` so students never see other students' private threads or their unread counts).
+ */
+export function getQaThreadFilterCounts(
+  threads: QaThread[],
+  user: User | null,
+  previousSeenAt?: string | null
+): QaThreadFilterCounts {
+  const visible = threads.filter((t) =>
+    user ? isThreadVisibleToUser(t, user) : !t.is_private
+  );
+  let unresolved = 0;
+  let resolved = 0;
+  let unread = 0;
+
+  for (const t of visible) {
+    if (isThreadResolved(t)) {
+      resolved += 1;
+    } else {
+      unresolved += 1;
+    }
+    if (user && isThreadUnread(t, user.id, previousSeenAt)) {
+      unread += 1;
+    }
+  }
+
+  return {
+    all: visible.length,
+    unresolved,
+    resolved,
+    unread,
+  };
+}
+
+/**
+ * Filters Q&A threads by visibility (`isThreadVisibleToUser`), status (`all` | `unresolved` | `resolved`),
+ * and optional `unreadOnly` toggle.
+ */
+export function filterQaThreads(
+  threads: QaThread[],
+  user: User | null,
+  options: {
+    statusFilter?: QaThreadStatusFilter;
+    unreadOnly?: boolean;
+    previousSeenAt?: string | null;
+  } = {}
+): QaThread[] {
+  const { statusFilter = 'all', unreadOnly = false, previousSeenAt = null } = options;
+  return threads.filter((t) => {
+    const isVisible = user ? isThreadVisibleToUser(t, user) : !t.is_private;
+    if (!isVisible) return false;
+    if (statusFilter === 'resolved' && !isThreadResolved(t)) return false;
+    if (statusFilter === 'unresolved' && !isThreadUnresolved(t)) return false;
+    if (unreadOnly) {
+      if (!user || !isThreadUnread(t, user.id, previousSeenAt)) return false;
+    }
+    return true;
+  });
+}
+
 

@@ -33,6 +33,7 @@ import {
 import {
   formatCourseHubName,
   getTopLevelCourseHubs,
+  isThreadVisibleToUser,
   isUserCourseAdmin,
 } from '../lib/domain-logic';
 import {
@@ -89,6 +90,7 @@ interface ClarifyContextValue {
   channels: Channel[];
   refreshChannels: (options?: { forceImmediate?: boolean }) => Promise<Channel[]>;
   markChannelSeen: (channelId: number) => void;
+  previousSeenAtByHubId: Record<number, string | null>;
   rosterChannelById: Record<number, Channel>;
   isLoadingRosterById: Record<number, boolean>;
   refreshChannelRoster: (channelId: number) => Promise<Channel | null>;
@@ -193,8 +195,13 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
   const [announcementVersion, setAnnouncementVersion] = useState<number>(0);
   const [toasts, setToasts] = useState<ToastItem[]>([]);
 
+  const [previousSeenAtByHubId, setPreviousSeenAtByHubId] = useState<
+    Record<number, string | null>
+  >({});
+
   const channelsRef = useRef<Channel[]>([]);
   const rosterChannelByIdRef = useRef<Record<number, Channel>>({});
+  const previousSeenAtByHubIdRef = useRef<Record<number, string | null>>({});
   const pathnameRef = useRef<string>(pathname || '/');
   const markSeenTimersRef = useRef<Map<number, ReturnType<typeof setTimeout>>>(
     new Map()
@@ -239,6 +246,25 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
         ? Number(matched.parent_hub_id)
         : numericId;
 
+    const parentHub = channelsRef.current.find(
+      (c) => Number(c.id) === parentHubId
+    );
+    if (
+      parentHub?.last_seen_at &&
+      (previousSeenAtByHubIdRef.current[parentHubId] === undefined ||
+        parentHub.has_updates ||
+        (parentHub.new_activity_count ?? 0) > 0)
+    ) {
+      const snap = parentHub.last_seen_at;
+      previousSeenAtByHubIdRef.current = {
+        ...previousSeenAtByHubIdRef.current,
+        [parentHubId]: snap,
+      };
+      setPreviousSeenAtByHubId((prev) =>
+        prev[parentHubId] === snap ? prev : { ...prev, [parentHubId]: snap }
+      );
+    }
+
     localActivityCountByHubRef.current.set(parentHubId, 0);
     localActivityCountByHubRef.current.set(numericId, 0);
 
@@ -246,15 +272,26 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
       let changed = false;
       const next = prev.map((ch) => {
         const cid = Number(ch.id);
+        const breakdown = ch.new_activity_breakdown;
+        const hasBreakdown =
+          Boolean(breakdown) &&
+          ((breakdown?.chat ?? 0) > 0 ||
+            (breakdown?.announcements ?? 0) > 0 ||
+            (breakdown?.qa ?? 0) > 0);
         if (
           (cid === parentHubId || cid === numericId) &&
-          (ch.has_updates || (ch.new_activity_count ?? 0) > 0)
+          (ch.has_updates ||
+            (ch.new_activity_count ?? 0) > 0 ||
+            hasBreakdown ||
+            ch.new_activity_sub_channel_id != null)
         ) {
           changed = true;
           return {
             ...ch,
             has_updates: false,
             new_activity_count: 0,
+            new_activity_breakdown: { chat: 0, announcements: 0, qa: 0 },
+            new_activity_sub_channel_id: null,
           };
         }
         return ch;
@@ -272,9 +309,25 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
     }
     const timer = setTimeout(() => {
       markSeenTimersRef.current.delete(parentHubId);
-      void markChannelSeenApi(parentHubId).catch(() => {
-        // Non-fatal network error
-      });
+      void markChannelSeenApi(parentHubId)
+        .then((serverPreviousSeenAt) => {
+          if (
+            serverPreviousSeenAt &&
+            !previousSeenAtByHubIdRef.current[parentHubId]
+          ) {
+            previousSeenAtByHubIdRef.current = {
+              ...previousSeenAtByHubIdRef.current,
+              [parentHubId]: serverPreviousSeenAt,
+            };
+            setPreviousSeenAtByHubId((prev) => ({
+              ...prev,
+              [parentHubId]: serverPreviousSeenAt,
+            }));
+          }
+        })
+        .catch(() => {
+          // Non-fatal network error
+        });
     }, 350);
     markSeenTimersRef.current.set(parentHubId, timer);
   }, []);
@@ -439,10 +492,32 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
               typeof ch.has_updates === 'boolean'
                 ? ch.has_updates
                 : resolvedCount > 0;
+            const resolvedBreakdown = ch.new_activity_breakdown
+              ? {
+                  chat: Number(ch.new_activity_breakdown.chat ?? 0),
+                  announcements: Number(
+                    ch.new_activity_breakdown.announcements ?? 0
+                  ),
+                  qa: Number(ch.new_activity_breakdown.qa ?? 0),
+                }
+              : { chat: 0, announcements: 0, qa: 0 };
+            if (
+              ch.last_seen_at &&
+              previousSeenAtByHubIdRef.current[Number(ch.id)] === undefined
+            ) {
+              previousSeenAtByHubIdRef.current = {
+                ...previousSeenAtByHubIdRef.current,
+                [Number(ch.id)]: ch.last_seen_at,
+              };
+            }
             const withUpdates: Channel = {
               ...ch,
               has_updates: resolvedHasUpdates,
               new_activity_count: resolvedCount,
+              new_activity_breakdown: resolvedBreakdown,
+              new_activity_sub_channel_id:
+                ch.new_activity_sub_channel_id ?? null,
+              last_seen_at: ch.last_seen_at ?? null,
             };
             if (isAdmin && rosterSnap?.pending_requests) {
               return {
@@ -455,6 +530,7 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
             }
             return withUpdates;
           });
+          setPreviousSeenAtByHubId({ ...previousSeenAtByHubIdRef.current });
           setChannels(mergedList);
           channelsRef.current = mergedList;
 
@@ -789,12 +865,32 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
                 isUnseenHub && cid === targetHubId
                   ? (ch.new_activity_count ?? 0) + 1
                   : ch.new_activity_count ?? 0;
+              const prevBreakdown = ch.new_activity_breakdown ?? {
+                chat: 0,
+                announcements: 0,
+                qa: 0,
+              };
+              const nextBreakdown =
+                isUnseenHub && cid === targetHubId
+                  ? {
+                      ...prevBreakdown,
+                      chat: (prevBreakdown.chat ?? 0) + 1,
+                    }
+                  : prevBreakdown;
+              const nextSubChannelId =
+                isUnseenHub && cid === targetHubId
+                  ? targetChannelId !== targetHubId
+                    ? targetChannelId
+                    : ch.new_activity_sub_channel_id ?? null
+                  : ch.new_activity_sub_channel_id ?? null;
               return {
                 ...ch,
                 chat_messages_count: (ch.chat_messages_count ?? 0) + 1,
                 has_updates:
                   isUnseenHub && cid === targetHubId ? true : ch.has_updates,
                 new_activity_count: nextActivityCount,
+                new_activity_breakdown: nextBreakdown,
+                new_activity_sub_channel_id: nextSubChannelId,
                 latest_activity_preview: previewText,
                 latest_activity_at: 'Just now',
               };
@@ -978,15 +1074,23 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
                 (localActivityCountByHubRef.current.get(targetHubId) ?? 0) + 1;
               localActivityCountByHubRef.current.set(targetHubId, nextCount);
               setChannels((prev) => {
-                const next = prev.map((ch) =>
-                  Number(ch.id) === targetHubId
-                    ? {
-                        ...ch,
-                        has_updates: true,
-                        new_activity_count: (ch.new_activity_count ?? 0) + 1,
-                      }
-                    : ch
-                );
+                const next = prev.map((ch) => {
+                  if (Number(ch.id) !== targetHubId) return ch;
+                  const prevBreakdown = ch.new_activity_breakdown ?? {
+                    chat: 0,
+                    announcements: 0,
+                    qa: 0,
+                  };
+                  return {
+                    ...ch,
+                    has_updates: true,
+                    new_activity_count: (ch.new_activity_count ?? 0) + 1,
+                    new_activity_breakdown: {
+                      ...prevBreakdown,
+                      announcements: (prevBreakdown.announcements ?? 0) + 1,
+                    },
+                  };
+                });
                 channelsRef.current = next;
                 return next;
               });
@@ -1035,8 +1139,12 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
           const actorId = Number(
             event.actor_id || event.thread?.author?.id || 0
           );
+          const isVisibleThread = event.thread
+            ? isThreadVisibleToUser(event.thread, activeUser)
+            : true;
           if (
             thChannelId > 0 &&
+            isVisibleThread &&
             (actorId === 0 || actorId !== Number(activeUser.id))
           ) {
             const targetHubId = resolveParentHubForChannel(thChannelId);
@@ -1045,15 +1153,23 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
                 (localActivityCountByHubRef.current.get(targetHubId) ?? 0) + 1;
               localActivityCountByHubRef.current.set(targetHubId, nextCount);
               setChannels((prev) => {
-                const next = prev.map((ch) =>
-                  Number(ch.id) === targetHubId
-                    ? {
-                        ...ch,
-                        has_updates: true,
-                        new_activity_count: (ch.new_activity_count ?? 0) + 1,
-                      }
-                    : ch
-                );
+                const next = prev.map((ch) => {
+                  if (Number(ch.id) !== targetHubId) return ch;
+                  const prevBreakdown = ch.new_activity_breakdown ?? {
+                    chat: 0,
+                    announcements: 0,
+                    qa: 0,
+                  };
+                  return {
+                    ...ch,
+                    has_updates: true,
+                    new_activity_count: (ch.new_activity_count ?? 0) + 1,
+                    new_activity_breakdown: {
+                      ...prevBreakdown,
+                      qa: (prevBreakdown.qa ?? 0) + 1,
+                    },
+                  };
+                });
                 channelsRef.current = next;
                 return next;
               });
@@ -1453,6 +1569,7 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
         channels,
         refreshChannels,
         markChannelSeen,
+        previousSeenAtByHubId,
         rosterChannelById,
         isLoadingRosterById,
         refreshChannelRoster,

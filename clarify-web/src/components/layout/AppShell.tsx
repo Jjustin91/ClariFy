@@ -125,10 +125,11 @@ export function AppShell({
       <div className="min-h-screen flex items-center justify-center bg-ustp-navy text-white p-6">
         <div className="text-center space-y-3">
           <Image
-            src="/assets/aistudio/image_07899ab9.png"
+            src="/assets/clarify-logo.svg"
             alt="ClariFy Logo"
             width={180}
             height={56}
+            priority
             unoptimized
             className="h-14 w-auto mx-auto object-contain"
           />
@@ -202,10 +203,11 @@ export function AppShell({
             className="inline-flex items-center hover:opacity-95 whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-ustp-gold rounded"
           >
             <Image
-              src="/assets/aistudio/image_07899ab9.png"
+              src="/assets/clarify-logo.svg"
               alt="ClariFy"
               width={120}
               height={36}
+              priority
               unoptimized
               className="h-8 sm:h-9 w-auto object-contain"
             />

@@ -89,10 +89,11 @@ export default function LoginPage() {
         <div className="bg-slate-100 text-ustp-text border-2 border-ustp-gold rounded-lg p-5 sm:p-12 max-w-xl w-full text-center shadow-lg">
           <div className="inline-flex items-center justify-center mb-3">
             <Image
-              src="/assets/aistudio/image_07899ab9.png"
+              src="/assets/clarify-logo.svg"
               alt="ClariFy"
               width={220}
               height={76}
+              priority
               unoptimized
               className="h-12 sm:h-16 w-auto object-contain"
             />
@@ -133,10 +134,11 @@ export default function LoginPage() {
           <div className="flex flex-col items-center">
             <div className="w-20 h-20 rounded-full bg-[#000b3d] border-4 border-ustp-gold flex items-center justify-center shadow-md overflow-hidden p-2.5">
               <Image
-                src="/assets/aistudio/image_87b1a0fe.png"
-                alt="ClariFy Logo"
+                src="/assets/clarify-mark.svg"
+                alt="ClariFy Emblem"
                 width={64}
                 height={64}
+                priority
                 unoptimized
                 className="w-full h-full object-contain"
               />

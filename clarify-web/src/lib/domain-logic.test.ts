@@ -9,15 +9,23 @@ import {
   createRetryableChatFileStore,
   enforceFaqAnonymity,
   filterAndSortAnnouncements,
+  filterQaThreads,
   formatEnrolledRosterSummary,
+  formatHubActivityBreakdownChips,
   formatSubjectHashtag,
   getChannelFacultyLabel,
   getFieldValidationError,
+  getQaThreadFilterCounts,
+  getThreadStatusLabel,
   getUnsentMessagePlaceholder,
+  isThreadResolved,
+  isThreadUnresolved,
+  isThreadUnread,
   isThreadVisibleToUser,
   isValidUstpEmail,
   normalizePhilippineMobileNumber,
   normalizeUstpEmail,
+  resolveHubUpdateDestination,
   USTP_EMAIL_ERROR_MESSAGE,
   validateChatAttachmentFile,
   validateUstpEmail,
@@ -436,6 +444,298 @@ test('normalizePhilippineMobileNumber normalizes valid PH mobile numbers to +639
   assert.equal(normalizePhilippineMobileNumber('08171234567'), null);
   assert.equal(normalizePhilippineMobileNumber('+63917123456789'), null);
 });
+
+test('resolveHubUpdateDestination routes single-category, highest-count, tie-breaks (qa > chat > announcements), and fallback correctly', () => {
+  const baseHub: Channel = {
+    id: 10,
+    course_code: 'IT314',
+    name: '# IT314 SoftEng',
+    description: 'Scoped Hub',
+    channel_type: 'course_hub',
+    scope_college: 'CITC',
+    scope_department: 'CITC',
+    scope_section: 'IT3R2',
+  };
+  const subGeneral: Channel = {
+    ...baseHub,
+    id: 101,
+    parent_hub_id: 10,
+    name: '# general',
+  };
+  const subLabs: Channel = {
+    ...baseHub,
+    id: 102,
+    parent_hub_id: 10,
+    name: '# labs',
+  };
+
+  // 1. Fallback when new_activity_breakdown is absent or all 0
+  assert.equal(resolveHubUpdateDestination(baseHub, [subGeneral, subLabs]), '/channels/10');
+  assert.equal(
+    resolveHubUpdateDestination(
+      {
+        ...baseHub,
+        new_activity_breakdown: { chat: 0, announcements: 0, qa: 0 },
+      },
+      [subGeneral, subLabs]
+    ),
+    '/channels/10'
+  );
+
+  // 2. Single category: Q&A -> ?tab=threads
+  assert.equal(
+    resolveHubUpdateDestination({
+      ...baseHub,
+      new_activity_breakdown: { chat: 0, announcements: 0, qa: 1 },
+    }),
+    '/channels/10?tab=threads'
+  );
+
+  // 3. Single category: Announcements -> ?tab=feed
+  assert.equal(
+    resolveHubUpdateDestination({
+      ...baseHub,
+      new_activity_breakdown: { chat: 0, announcements: 2, qa: 0 },
+    }),
+    '/channels/10?tab=feed'
+  );
+
+  // 4. Single category: Chat with new_activity_sub_channel_id -> /channels/{subId}
+  assert.equal(
+    resolveHubUpdateDestination(
+      {
+        ...baseHub,
+        new_activity_breakdown: { chat: 3, announcements: 0, qa: 0 },
+        new_activity_sub_channel_id: 102,
+      },
+      [subGeneral, subLabs]
+    ),
+    '/channels/102'
+  );
+
+  // 5. Single category: Chat without new_activity_sub_channel_id falls back to first subChannel or ?tab=messenger
+  assert.equal(
+    resolveHubUpdateDestination(
+      {
+        ...baseHub,
+        new_activity_breakdown: { chat: 1, announcements: 0, qa: 0 },
+        new_activity_sub_channel_id: null,
+      },
+      [subGeneral, subLabs]
+    ),
+    '/channels/101'
+  );
+  assert.equal(
+    resolveHubUpdateDestination(
+      {
+        ...baseHub,
+        new_activity_breakdown: { chat: 1, announcements: 0, qa: 0 },
+        new_activity_sub_channel_id: null,
+      },
+      []
+    ),
+    '/channels/10?tab=messenger'
+  );
+
+  // 6. Multiple categories: highest count wins
+  assert.equal(
+    resolveHubUpdateDestination(
+      {
+        ...baseHub,
+        new_activity_breakdown: { chat: 4, announcements: 1, qa: 2 },
+        new_activity_sub_channel_id: 102,
+      },
+      [subGeneral, subLabs]
+    ),
+    '/channels/102'
+  );
+
+  // 7. Tie-break order: qa > chat > announcements
+  assert.equal(
+    resolveHubUpdateDestination(
+      {
+        ...baseHub,
+        new_activity_breakdown: { chat: 2, announcements: 2, qa: 2 },
+        new_activity_sub_channel_id: 102,
+      },
+      [subGeneral, subLabs]
+    ),
+    '/channels/10?tab=threads'
+  );
+  assert.equal(
+    resolveHubUpdateDestination(
+      {
+        ...baseHub,
+        new_activity_breakdown: { chat: 2, announcements: 2, qa: 0 },
+        new_activity_sub_channel_id: 102,
+      },
+      [subGeneral, subLabs]
+    ),
+    '/channels/102'
+  );
+
+  // 8. Breakdown chips formatting
+  assert.deepEqual(
+    formatHubActivityBreakdownChips({ chat: 2, announcements: 1, qa: 1 }),
+    [
+      { key: 'qa', label: '1 Q&A', count: 1 },
+      { key: 'chat', label: '2 chat', count: 2 },
+      { key: 'announcements', label: '1 announcement', count: 1 },
+    ]
+  );
+});
+
+test('Q&A resolved/unresolved/unread markers and filter helpers enforce resolution rules and student privacy', () => {
+  const studentA: User = {
+    id: 21,
+    institutional_id: '2020202020',
+    name: 'Kobeni Higashiyama',
+    email: 'kobeni@ustp.edu.ph',
+    contact_number: null,
+    role: 'student',
+    verification_status: 'approved',
+  };
+  const studentB: User = {
+    ...studentA,
+    id: 22,
+    institutional_id: '2020303030',
+    name: 'Denji Hayakawa',
+  };
+  const faculty: User = {
+    ...studentA,
+    id: 99,
+    institutional_id: '10492',
+    name: 'Aki Hayakawa',
+    role: 'faculty',
+  };
+
+  const prevSeenAt = '2026-11-16T10:00:00.000Z';
+
+  // Thread 1: Public unresolved thread with a faculty reply (reply alone does NOT mark it resolved!)
+  const unresolvedWithReply: QaThread = {
+    id: 1,
+    channel_id: 10,
+    announcement_id: null,
+    subject_hashtag: '#MidtermScope',
+    content: 'Is Chapter 5 included?',
+    is_private: false,
+    is_resolved: false,
+    is_pinned_faq: false,
+    created_at: '2026-11-16T09:00:00.000Z',
+    updated_at: '2026-11-16T10:05:00.000Z',
+    author: { id: 21, name: 'Kobeni Higashiyama', role: 'student', avatar_url: null },
+    replies: [
+      {
+        id: 101,
+        thread_id: 1,
+        content: 'Let me check the syllabus and confirm.',
+        created_at: '2026-11-16T10:05:00.000Z',
+        author: { id: 99, name: 'Aki Hayakawa', role: 'faculty', avatar_url: null },
+      },
+    ],
+  };
+
+  // Thread 2: Public resolved thread created before prevSeenAt with no new replies
+  const resolvedReadThread: QaThread = {
+    id: 2,
+    channel_id: 10,
+    announcement_id: null,
+    subject_hashtag: '#LabSubmission',
+    content: 'Where do we upload Lab 2?',
+    is_private: false,
+    is_resolved: true,
+    is_pinned_faq: true,
+    created_at: '2026-11-16T08:00:00.000Z',
+    updated_at: '2026-11-16T08:30:00.000Z',
+    author: { id: 0, name: 'Anonymous Student', role: 'student', avatar_url: null },
+    replies: [
+      {
+        id: 102,
+        thread_id: 2,
+        content: 'Upload to USTP STEP.',
+        created_at: '2026-11-16T08:30:00.000Z',
+        author: { id: 99, name: 'Aki Hayakawa', role: 'faculty', avatar_url: null },
+      },
+    ],
+  };
+
+  // Thread 3: Private thread owned by Student A, created after prevSeenAt
+  const privateStudentAThread: QaThread = {
+    id: 3,
+    channel_id: 10,
+    announcement_id: null,
+    subject_hashtag: '#MedicalExcuse',
+    content: 'Private medical certificate question.',
+    is_private: true,
+    is_resolved: false,
+    is_pinned_faq: false,
+    created_at: '2026-11-16T10:10:00.000Z',
+    updated_at: '2026-11-16T10:10:00.000Z',
+    author: { id: 21, name: 'Kobeni Higashiyama', role: 'student', avatar_url: null },
+    replies: [],
+  };
+
+  // 1. Resolved vs Unresolved rules
+  assert.equal(isThreadResolved(unresolvedWithReply), false);
+  assert.equal(isThreadUnresolved(unresolvedWithReply), true);
+  assert.equal(getThreadStatusLabel(unresolvedWithReply), 'UNRESOLVED');
+
+  assert.equal(isThreadResolved(resolvedReadThread), true);
+  assert.equal(isThreadUnresolved(resolvedReadThread), false);
+  assert.equal(getThreadStatusLabel(resolvedReadThread), 'RESOLVED');
+
+  // 2. Unread rules:
+  // - Thread 1 has a faculty reply after prevSeenAt -> unread for Student A & Student B, but NOT unread for Faculty (who authored the reply after prevSeenAt)
+  assert.equal(isThreadUnread(unresolvedWithReply, studentA.id, prevSeenAt), true);
+  assert.equal(isThreadUnread(unresolvedWithReply, studentB.id, prevSeenAt), true);
+  assert.equal(isThreadUnread(unresolvedWithReply, faculty.id, prevSeenAt), false);
+  assert.equal(isThreadUnread(unresolvedWithReply, studentA.id, null), false);
+
+  // - Thread 2 was created and replied before prevSeenAt -> read for everyone
+  assert.equal(isThreadUnread(resolvedReadThread, studentA.id, prevSeenAt), false);
+
+  // - Thread 3 was created by Student A after prevSeenAt -> unread for Faculty, NOT unread for Student A (author)
+  assert.equal(isThreadUnread(privateStudentAThread, studentA.id, prevSeenAt), false);
+  assert.equal(isThreadUnread(privateStudentAThread, faculty.id, prevSeenAt), true);
+
+  // 3. Filter counts and privacy for Student B vs Faculty:
+  // Student B MUST NOT see Thread 3 (Student A's private thread) in `all`, `unresolved`, or `unread`!
+  const allThreads = [unresolvedWithReply, resolvedReadThread, privateStudentAThread];
+  const studentBCounts = getQaThreadFilterCounts(allThreads, studentB, prevSeenAt);
+  assert.deepEqual(studentBCounts, {
+    all: 2,
+    unresolved: 1,
+    resolved: 1,
+    unread: 1,
+  });
+
+  const facultyCounts = getQaThreadFilterCounts(allThreads, faculty, prevSeenAt);
+  assert.deepEqual(facultyCounts, {
+    all: 3,
+    unresolved: 2,
+    resolved: 1,
+    unread: 1, // Thread 3 is unread for faculty; Thread 1 reply was authored by faculty
+  });
+
+  // 4. filterQaThreads combinations
+  assert.deepEqual(
+    filterQaThreads(allThreads, studentB, {
+      statusFilter: 'unresolved',
+      unreadOnly: true,
+      previousSeenAt: prevSeenAt,
+    }).map((t) => t.id),
+    [1]
+  );
+  assert.deepEqual(
+    filterQaThreads(allThreads, faculty, {
+      statusFilter: 'unresolved',
+      unreadOnly: false,
+      previousSeenAt: prevSeenAt,
+    }).map((t) => t.id),
+    [1, 3]
+  );
+});
+
 
 
 

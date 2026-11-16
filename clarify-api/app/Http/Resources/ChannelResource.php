@@ -180,6 +180,15 @@ class ChannelResource extends JsonResource
             'chat_messages_count' => $chatMessagesCount,
             'has_updates' => (bool) ($this->precomputed_has_updates ?? false),
             'new_activity_count' => (int) ($this->precomputed_new_activity_count ?? 0),
+            'new_activity_breakdown' => $this->precomputed_new_activity_breakdown ?? [
+                'chat' => 0,
+                'announcements' => 0,
+                'qa' => 0,
+            ],
+            'new_activity_sub_channel_id' => $this->precomputed_new_activity_sub_channel_id !== null
+                ? (int) $this->precomputed_new_activity_sub_channel_id
+                : null,
+            'last_seen_at' => $this->precomputed_last_seen_at ?? null,
             'members_count' => $membersCount,
             'students_count' => $studentsCount,
             'faculty' => $faculty,

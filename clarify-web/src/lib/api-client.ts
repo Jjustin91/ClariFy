@@ -448,21 +448,27 @@ export async function manageChannelMemberApi(
 }
 
 /**
- * Marks a Course Hub as seen (`last_seen_at = now()`) for the authenticated user (returns 204 No Content).
+ * Marks a Course Hub as seen (`last_seen_at = now()`) for the authenticated user
+ * and returns the previous `last_seen_at` ISO timestamp (or null).
  */
-export async function markChannelSeenApi(channelId: number): Promise<void> {
+export async function markChannelSeenApi(
+  channelId: number
+): Promise<string | null> {
   const numericId = Number(channelId);
-  if (!numericId || numericId <= 0) return;
+  if (!numericId || numericId <= 0) return null;
 
   try {
-    await requestLaravel<void>(`/channels/${numericId}/seen`, {
+    const res = await requestLaravel<
+      SingleResourceResponse<{ previous_seen_at?: string | null }> | undefined
+    >(`/channels/${numericId}/seen?include_previous=1`, {
       method: 'POST',
     });
+    return res?.data?.previous_seen_at ?? null;
   } catch (err) {
     const apiErr = err as LaravelValidationError;
     // Ignore 404 when running against legacy local route adapter
     if (apiErr?.status === 404) {
-      return;
+      return null;
     }
     throw err;
   }
