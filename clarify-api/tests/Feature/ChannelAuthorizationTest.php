@@ -1484,6 +1484,118 @@ class ChannelAuthorizationTest extends TestCase
         $this->assertSame(['chat' => 0, 'announcements' => 0, 'qa' => 0], $afterSeenHub['new_activity_breakdown']);
         $this->assertNull($afterSeenHub['new_activity_sub_channel_id']);
     }
+
+    public function test_isolated_qa_unread_count_badge_warm_cache_private_exclusion_resolve_delete_and_404(): void
+    {
+        $faculty = $this->createVerifiedUser('faculty', '10492', 'CITC');
+        $studentA = $this->createVerifiedUser('student', '2020202020', 'CITC');
+        $studentB = $this->createVerifiedUser('student', '2020303030', 'CITC');
+        $hub = $this->createCourseHub($faculty, 'CITC');
+
+        DB::table('channel_user')->insert([
+            [
+                'channel_id' => $hub->id,
+                'user_id' => $faculty->id,
+                'can_publish' => true,
+                'approval_status' => 'approved',
+                'joined_at' => now()->subHour(),
+            ],
+            [
+                'channel_id' => $hub->id,
+                'user_id' => $studentA->id,
+                'can_publish' => false,
+                'approval_status' => 'approved',
+                'joined_at' => now()->subHour(),
+            ],
+            [
+                'channel_id' => $hub->id,
+                'user_id' => $studentB->id,
+                'can_publish' => false,
+                'approval_status' => 'approved',
+                'joined_at' => now()->subHour(),
+            ],
+        ]);
+
+        // 0. Warm the shared channels cache as Faculty (unread_count = 0)
+        Sanctum::actingAs($faculty);
+        $warmHub = collect($this->getJson('/api/v1/channels')->assertStatus(200)->json('data'))
+            ->firstWhere('id', $hub->id);
+        $this->assertNotNull($warmHub);
+        $this->assertSame(0, $warmHub['unread_count']);
+
+        // 1. Student B posts a public thread while cache was warm -> Faculty immediately sees unread_count = 1
+        Sanctum::actingAs($studentB);
+        $pubThreadRes = $this->postJson("/api/v1/channels/{$hub->id}/threads", [
+            'subject_hashtag' => '#ScheduleQuestion',
+            'content' => 'Is our lab class online tomorrow?',
+            'is_private' => false,
+        ])->assertStatus(201);
+        $publicThreadId = (int) $pubThreadRes->json('data.id');
+
+        Sanctum::actingAs($faculty);
+        $afterPublicFacultyHub = collect($this->getJson('/api/v1/channels')->assertStatus(200)->json('data'))
+            ->firstWhere('id', $hub->id);
+        $this->assertSame(1, $afterPublicFacultyHub['unread_count']);
+
+        // 2. Student B posts a PRIVATE thread -> Faculty & Student B see unread_count = 2,
+        //    but Student A MUST NOT count Student B's private thread (Student A sees unread_count = 1)
+        Sanctum::actingAs($studentB);
+        $privThreadRes = $this->postJson("/api/v1/channels/{$hub->id}/threads", [
+            'subject_hashtag' => '#GradeAppeal',
+            'content' => 'Private grade inquiry from Student B.',
+            'is_private' => true,
+        ])->assertStatus(201);
+        $privateThreadId = (int) $privThreadRes->json('data.id');
+
+        $studentBHub = collect($this->getJson('/api/v1/channels')->assertStatus(200)->json('data'))
+            ->firstWhere('id', $hub->id);
+        $this->assertSame(2, $studentBHub['unread_count']);
+
+        Sanctum::actingAs($faculty);
+        $facultyHub = collect($this->getJson('/api/v1/channels')->assertStatus(200)->json('data'))
+            ->firstWhere('id', $hub->id);
+        $this->assertSame(2, $facultyHub['unread_count']);
+
+        Sanctum::actingAs($studentA);
+        $studentAHub = collect($this->getJson('/api/v1/channels')->assertStatus(200)->json('data'))
+            ->firstWhere('id', $hub->id);
+        $this->assertSame(1, $studentAHub['unread_count']);
+
+        // 3. Resolving the public thread decrements unread_count for Faculty (2 -> 1) and Student A (1 -> 0)
+        Sanctum::actingAs($faculty);
+        $this->postJson("/api/v1/threads/{$publicThreadId}/replies", [
+            'content' => 'We will meet in Lab 3.',
+            'mark_resolved' => true,
+            'pin_to_faq' => false,
+        ])->assertStatus(200);
+
+        $facultyAfterResolve = collect($this->getJson('/api/v1/channels')->assertStatus(200)->json('data'))
+            ->firstWhere('id', $hub->id);
+        $this->assertSame(1, $facultyAfterResolve['unread_count']);
+
+        Sanctum::actingAs($studentA);
+        $studentAAfterResolve = collect($this->getJson('/api/v1/channels')->assertStatus(200)->json('data'))
+            ->firstWhere('id', $hub->id);
+        $this->assertSame(0, $studentAAfterResolve['unread_count']);
+
+        // Deleting the remaining unresolved private thread decrements Faculty's unread_count (1 -> 0)
+        Sanctum::actingAs($studentB);
+        $this->deleteJson("/api/v1/threads/{$privateThreadId}")->assertStatus(200);
+
+        Sanctum::actingAs($faculty);
+        $facultyAfterDelete = collect($this->getJson('/api/v1/channels')->assertStatus(200)->json('data'))
+            ->firstWhere('id', $hub->id);
+        $this->assertSame(0, $facultyAfterDelete['unread_count']);
+
+        // 4. Wrong channel id returns 404
+        Sanctum::actingAs($studentA);
+        $this->getJson('/api/v1/channels/999999/threads')->assertStatus(404);
+        $this->postJson('/api/v1/channels/999999/threads', [
+            'subject_hashtag' => '#MissingHub',
+            'content' => 'Should 404.',
+            'is_private' => false,
+        ])->assertStatus(404);
+    }
 }
 
 

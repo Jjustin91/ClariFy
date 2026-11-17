@@ -32,9 +32,11 @@ import {
 } from '../lib/api-client';
 import {
   formatCourseHubName,
+  getSubscribableCourseHubIds,
   getTopLevelCourseHubs,
-  isThreadVisibleToUser,
   isUserCourseAdmin,
+  patchChannelsOnThreadEvent,
+  reconcileFetchedChannelsWithStaleGuard,
 } from '../lib/domain-logic';
 import {
   type ReverbBroadcastPayload,
@@ -233,6 +235,10 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
   );
   const pendingVisibilityRefreshRef = useRef<boolean>(false);
   const recentMembershipToastKeysRef = useRef<Map<string, number>>(new Map());
+  const recentThreadPatchKeysRef = useRef<Map<string, number>>(new Map());
+  const realtimeMutationGenRef = useRef<number>(0);
+  const lastRealtimeMutationAtRef = useRef<number>(0);
+  const scheduleDebouncedRefreshFnRef = useRef<(() => void) | null>(null);
 
   const markChannelSeen = useCallback((channelId: number) => {
     const numericId = Number(channelId);
@@ -476,6 +482,9 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
         return [];
       }
 
+      const requestGen = realtimeMutationGenRef.current;
+      const requestStartedAt = Date.now();
+
       const promise = (async (): Promise<Channel[]> => {
         try {
           const res = await getChannelsApi();
@@ -530,9 +539,23 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
             }
             return withUpdates;
           });
+
+          const reconciled = reconcileFetchedChannelsWithStaleGuard({
+            fetchedChannels: mergedList,
+            currentChannels: channelsRef.current,
+            requestGeneration: requestGen,
+            currentMutationGeneration: realtimeMutationGenRef.current,
+            requestStartedAt,
+            lastRealtimeMutationAt: lastRealtimeMutationAtRef.current,
+          });
+
           setPreviousSeenAtByHubId({ ...previousSeenAtByHubIdRef.current });
-          setChannels(mergedList);
-          channelsRef.current = mergedList;
+          setChannels(reconciled.channels);
+          channelsRef.current = reconciled.channels;
+
+          if (reconciled.isStale) {
+            scheduleDebouncedRefreshFnRef.current?.();
+          }
 
           // Keep non-admin roster snapshots in sync with latest membership status
           setRosterChannelById((prev) => {
@@ -588,6 +611,10 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
       void refreshChannels();
     }, 1500 + jitterMs);
   }, [refreshChannels]);
+
+  useEffect(() => {
+    scheduleDebouncedRefreshFnRef.current = scheduleDebouncedChannelRefresh;
+  }, [scheduleDebouncedChannelRefresh]);
 
   const refreshAdminHubRosters = useCallback(() => {
     if (typeof document !== 'undefined' && document.hidden) {
@@ -768,12 +795,11 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
     }
   }, [isAuthReady, isAuthenticated, pathname, router]);
 
-  // Compute administered Course Hub IDs so Course Admins subscribe to all hubs they administer
-  const adminCourseHubIdsKey = getTopLevelCourseHubs(channels)
-    .filter((hub) => isUserCourseAdmin(hub, user))
-    .map((hub) => Number(hub.id))
-    .sort((a, b) => a - b)
-    .join(',');
+  // Compute all approved Course Hub IDs the user belongs to (student, faculty, or dept_head)
+  const subscribableHubIdsKey = getSubscribableCourseHubIds(
+    channels,
+    user
+  ).join(',');
 
   // Real-time synchronization via Laravel Reverb WebSockets + SSE + BroadcastChannel
   useEffect(() => {
@@ -1129,53 +1155,51 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
         event.type === 'thread.faq_pinned' ||
         event.type === 'thread.deleted'
       ) {
-        if (
-          event.type === 'thread.created' ||
-          event.type === 'thread.replied'
-        ) {
-          const thChannelId = Number(
-            event.channel_id || event.thread?.channel_id || 0
-          );
-          const actorId = Number(
-            event.actor_id || event.thread?.author?.id || 0
-          );
-          const isVisibleThread = event.thread
-            ? isThreadVisibleToUser(event.thread, activeUser)
-            : true;
-          if (
-            thChannelId > 0 &&
-            isVisibleThread &&
-            (actorId === 0 || actorId !== Number(activeUser.id))
-          ) {
-            const targetHubId = resolveParentHubForChannel(thChannelId);
-            if (targetHubId !== currentlyViewedHubId) {
-              const nextCount =
-                (localActivityCountByHubRef.current.get(targetHubId) ?? 0) + 1;
-              localActivityCountByHubRef.current.set(targetHubId, nextCount);
-              setChannels((prev) => {
-                const next = prev.map((ch) => {
-                  if (Number(ch.id) !== targetHubId) return ch;
-                  const prevBreakdown = ch.new_activity_breakdown ?? {
-                    chat: 0,
-                    announcements: 0,
-                    qa: 0,
-                  };
-                  return {
-                    ...ch,
-                    has_updates: true,
-                    new_activity_count: (ch.new_activity_count ?? 0) + 1,
-                    new_activity_breakdown: {
-                      ...prevBreakdown,
-                      qa: (prevBreakdown.qa ?? 0) + 1,
-                    },
-                  };
-                });
-                channelsRef.current = next;
-                return next;
-              });
-            }
+        const thChannelId = Number(
+          event.channel_id || event.thread?.channel_id || 0
+        );
+        const targetHubId =
+          thChannelId > 0 ? resolveParentHubForChannel(thChannelId) : 0;
+        const threadKeyId = Number(
+          event.thread?.id || event.message_id || 0
+        );
+        const dedupeKey = `${event.type}:${targetHubId}:${threadKeyId}:${
+          event.thread?.is_resolved ? '1' : '0'
+        }:${event.thread?.was_unresolved === false ? '0' : '1'}`;
+        const nowMs = Date.now();
+        const lastPatchedAt =
+          recentThreadPatchKeysRef.current.get(dedupeKey) || 0;
+
+        if (targetHubId > 0 && (threadKeyId === 0 || nowMs - lastPatchedAt > 2500)) {
+          if (threadKeyId > 0) {
+            recentThreadPatchKeysRef.current.set(dedupeKey, nowMs);
           }
+          realtimeMutationGenRef.current += 1;
+          lastRealtimeMutationAtRef.current = nowMs;
+
+          setChannels((prev) => {
+            const patched = patchChannelsOnThreadEvent(
+              prev,
+              event,
+              activeUser,
+              currentlyViewedHubId
+            );
+            if (!patched.mutated) {
+              return prev;
+            }
+            const next = patched.channels;
+            const updatedHub = next.find((c) => Number(c.id) === targetHubId);
+            if (updatedHub && typeof updatedHub.new_activity_count === 'number') {
+              localActivityCountByHubRef.current.set(
+                targetHubId,
+                updatedHub.new_activity_count
+              );
+            }
+            channelsRef.current = next;
+            return next;
+          });
         }
+
         scheduleDebouncedChannelRefresh();
         return;
       }
@@ -1213,21 +1237,25 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
       handleRealtimeReconnect
     );
 
-    // 1b. Subscribe to private `clarify.channel.{id}` for EVERY Course Hub the current user administers
-    const adminHubIds = adminCourseHubIdsKey
-      ? adminCourseHubIdsKey
+    // 1b. Subscribe to private `clarify.channel.{id}` for EVERY approved Course Hub the user belongs to
+    const subscribableHubIds = subscribableHubIdsKey
+      ? subscribableHubIdsKey
           .split(',')
           .map((s) => Number(s))
           .filter((n) => n > 0)
       : [];
 
-    const adminHubUnsubscribes = adminHubIds.map((hubId) => {
+    const hubUnsubscribes = subscribableHubIds.map((hubId) => {
       // Ensure initial roster & pending_requests snapshot is loaded for each administered hub
-      if (!rosterChannelByIdRef.current[hubId]) {
+      const hubObj = channelsRef.current.find((c) => Number(c.id) === hubId);
+      if (
+        hubObj &&
+        isUserCourseAdmin(hubObj, user) &&
+        !rosterChannelByIdRef.current[hubId]
+      ) {
         void refreshChannelRoster(hubId);
       }
       return subscribeChannelReverb(hubId, (payload: ReverbBroadcastPayload) => {
-        // Ignore chat.message here if MessengerChatBox handles active chat, except for updating preview or membership/channel updates
         const normalizedEvent: RealtimeEvent = {
           revision: Date.now(),
           type: payload.type || 'channel.updated',
@@ -1250,6 +1278,7 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
       msgData: {
         method?: string;
         endpoint?: string;
+        actorId?: number;
         data?: Record<string, unknown>;
         requestBody?: Record<string, unknown>;
       },
@@ -1265,6 +1294,9 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
       let messageId: number | undefined;
       let targetUserId: number | undefined;
       let membershipAction: RealtimeEvent['action'] | undefined;
+      const actorId = Number(
+        msgData?.actorId || getStoredUser().id || 0
+      );
 
       const channelMatch = endpoint.match(/\/channels\/(\d+)/);
       if (channelMatch) {
@@ -1274,6 +1306,7 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
       const unsendMatch = endpoint.match(
         /\/channels\/(\d+)\/(?:messages|chat)\/(\d+)/
       );
+      const threadIdMatch = endpoint.match(/\/threads\/(\d+)/);
 
       if (
         endpoint.includes('/announcements') &&
@@ -1294,8 +1327,21 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
         evType = 'chat.message';
         message = msgData?.data as unknown as RealtimeEvent['message'];
       } else if (endpoint.includes('/threads')) {
-        evType = 'thread.updated';
         thread = msgData?.data as unknown as RealtimeEvent['thread'];
+        if (threadIdMatch) {
+          messageId = Number(threadIdMatch[1]);
+        }
+        if (method === 'DELETE') {
+          evType = 'thread.deleted';
+        } else if (endpoint.endsWith('/replies')) {
+          evType = 'thread.replied';
+        } else if (endpoint.endsWith('/convert-faq')) {
+          evType = 'thread.faq_pinned';
+        } else if (method === 'POST' && !endpoint.endsWith('/resolve')) {
+          evType = 'thread.created';
+        } else {
+          evType = 'thread.updated';
+        }
       } else if (
         channelMatch &&
         (endpoint.endsWith('/members') || endpoint.endsWith('/join'))
@@ -1340,9 +1386,13 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
           announcement?.channel_id ||
           message?.channel_id ||
           thread?.channel_id,
-        message_id: messageId || (message?.id ? Number(message.id) : undefined),
+        message_id:
+          messageId ||
+          (message?.id ? Number(message.id) : undefined) ||
+          (thread?.id ? Number(thread.id) : undefined),
         target_user_id: targetUserId,
         action: membershipAction,
+        actor_id: actorId > 0 ? actorId : undefined,
         announcement,
         message,
         thread,
@@ -1447,7 +1497,7 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
 
     return () => {
       unsubscribeReverb();
-      adminHubUnsubscribes.forEach((unsub) => unsub());
+      hubUnsubscribes.forEach((unsub) => unsub());
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       if (debouncedRefreshTimerRef.current) {
         clearTimeout(debouncedRefreshTimerRef.current);
@@ -1472,8 +1522,8 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
     };
   }, [
     isAuthenticated,
-    user.id,
-    adminCourseHubIdsKey,
+    user,
+    subscribableHubIdsKey,
     refreshChannels,
     refreshChannelRoster,
     refreshAdminHubRosters,

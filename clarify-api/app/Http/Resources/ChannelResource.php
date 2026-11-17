@@ -115,7 +115,17 @@ class ChannelResource extends JsonResource
             $latestAnnouncement = $this->precomputed_latest_announcement ?? null;
             $latestMessage = $this->precomputed_latest_message ?? null;
         } else {
-            $openThreadsCount = $this->threads()->where('is_resolved', false)->count();
+            $reqUser = $request->user();
+            $openThreadsQuery = $this->threads()
+                ->where('is_resolved', false)
+                ->whereNull('deleted_at');
+            if ($reqUser && $reqUser->role === 'student') {
+                $openThreadsQuery->where(function ($q) use ($reqUser) {
+                    $q->where('is_private', false)
+                        ->orWhere('sender_id', $reqUser->id);
+                });
+            }
+            $openThreadsCount = $openThreadsQuery->count();
 
             $hubChannelIds = [$this->id];
             if ($parentHubId === null) {

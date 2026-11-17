@@ -13,9 +13,11 @@ import {
   formatEnrolledRosterSummary,
   formatHubActivityBreakdownChips,
   formatSubjectHashtag,
+  formatUnreadBadgeCount,
   getChannelFacultyLabel,
   getFieldValidationError,
   getQaThreadFilterCounts,
+  getSubscribableCourseHubIds,
   getThreadStatusLabel,
   getUnsentMessagePlaceholder,
   isThreadResolved,
@@ -25,6 +27,8 @@ import {
   isValidUstpEmail,
   normalizePhilippineMobileNumber,
   normalizeUstpEmail,
+  patchChannelsOnThreadEvent,
+  reconcileFetchedChannelsWithStaleGuard,
   resolveHubUpdateDestination,
   USTP_EMAIL_ERROR_MESSAGE,
   validateChatAttachmentFile,
@@ -735,6 +739,285 @@ test('Q&A resolved/unresolved/unread markers and filter helpers enforce resoluti
     [1, 3]
   );
 });
+
+test('Isolated Q&A unread_count badge formatting, all-hub subscription list, thread.* local patch, and stale-refetch guard', () => {
+  const studentA: User = {
+    id: 21,
+    institutional_id: '2020202020',
+    name: 'Kobeni Higashiyama',
+    email: 'kobeni@ustp.edu.ph',
+    contact_number: null,
+    role: 'student',
+    verification_status: 'approved',
+    academic_profile: {
+      campus: 'CDO Campus',
+      college: 'CITC',
+      department: 'IT',
+      program: 'BSIT',
+      year_level: 3,
+      section: 'IT3R1',
+      semester_code: '2026-1ST-SEM',
+    },
+  };
+  const studentB: User = {
+    ...studentA,
+    id: 22,
+    institutional_id: '2020303030',
+    name: 'Denji Hayakawa',
+  };
+  const faculty: User = {
+    ...studentA,
+    id: 99,
+    institutional_id: '10492',
+    name: 'Aki Hayakawa',
+    role: 'faculty',
+  };
+
+  // 1. formatUnreadBadgeCount caps above 99
+  assert.equal(formatUnreadBadgeCount(0), '0');
+  assert.equal(formatUnreadBadgeCount(undefined), '0');
+  assert.equal(formatUnreadBadgeCount(3), '3');
+  assert.equal(formatUnreadBadgeCount(99), '99');
+  assert.equal(formatUnreadBadgeCount(100), '99+');
+  assert.equal(formatUnreadBadgeCount(250), '99+');
+
+  // 2. getSubscribableCourseHubIds includes all approved Course Hubs for students and faculty
+  const hub10: Channel = {
+    id: 10,
+    name: 'IT314 Software Engineering',
+    course_code: 'IT314',
+    description: null,
+    channel_type: 'course_hub',
+    scope_college: 'CITC',
+    scope_department: 'IT',
+    scope_section: 'IT3R1',
+    unread_count: 1,
+    roster: [
+      {
+        id: 21,
+        institutional_id: '2020202020',
+        name: 'Kobeni Higashiyama',
+        role: 'student',
+        section: 'IT3R1',
+        department: 'IT',
+      },
+      {
+        id: 99,
+        institutional_id: '10492',
+        name: 'Aki Hayakawa',
+        role: 'faculty',
+        section: null,
+        department: 'IT',
+      },
+    ],
+  };
+  const hub20Pending: Channel = {
+    id: 20,
+    name: 'IT315 IoT',
+    course_code: 'IT315',
+    description: null,
+    channel_type: 'course_hub',
+    scope_college: 'CITC',
+    scope_department: 'IT',
+    scope_section: 'IT3R2',
+    unread_count: 0,
+    roster: [],
+    pending_requests: [
+      {
+        id: 21,
+        institutional_id: '2020202020',
+        name: 'Kobeni Higashiyama',
+        role: 'student',
+        section: 'IT3R1',
+        department: 'IT',
+      },
+    ],
+  };
+  const subChannel11: Channel = {
+    id: 11,
+    name: 'general',
+    course_code: 'IT314',
+    description: '[HUB:10] General discussion',
+    channel_type: 'course_hub',
+    scope_college: 'CITC',
+    scope_department: 'IT',
+    scope_section: 'IT3R1',
+    parent_hub_id: 10,
+    unread_count: 0,
+  };
+
+  assert.deepEqual(
+    getSubscribableCourseHubIds([hub10, hub20Pending, subChannel11], studentA),
+    [10]
+  );
+  assert.deepEqual(
+    getSubscribableCourseHubIds([hub10, hub20Pending, subChannel11], faculty),
+    [10]
+  );
+
+  // 3. patchChannelsOnThreadEvent:
+  // (a) Student A posts a PRIVATE thread in hub 10 -> faculty sees +1, student B sees +0, student A (actor) sees +0
+  const privateNewThread: QaThread = {
+    id: 501,
+    channel_id: 10,
+    announcement_id: null,
+    subject_hashtag: '#GradeAppeal',
+    content: 'Private inquiry about quiz score',
+    is_private: true,
+    is_resolved: false,
+    is_pinned_faq: false,
+    created_at: '2026-11-16T12:00:00.000Z',
+    updated_at: '2026-11-16T12:00:00.000Z',
+    author: { id: 21, name: 'Kobeni Higashiyama', role: 'student', avatar_url: null },
+    replies: [],
+  };
+
+  const facultyAfterCreate = patchChannelsOnThreadEvent(
+    [hub10],
+    {
+      revision: 1,
+      type: 'thread.created',
+      channel_id: 10,
+      actor_id: 21,
+      thread: privateNewThread,
+      timestamp: '2026-11-16T12:00:00.000Z',
+    },
+    faculty,
+    0
+  );
+  assert.equal(facultyAfterCreate.mutated, true);
+  assert.equal(facultyAfterCreate.channels[0].unread_count, 2);
+  assert.equal(facultyAfterCreate.channels[0].new_activity_count, 1);
+  assert.equal(facultyAfterCreate.channels[0].new_activity_breakdown?.qa, 1);
+
+  const studentBAfterPrivateCreate = patchChannelsOnThreadEvent(
+    [hub10],
+    {
+      revision: 1,
+      type: 'thread.created',
+      channel_id: 10,
+      actor_id: 21,
+      thread: privateNewThread,
+      timestamp: '2026-11-16T12:00:00.000Z',
+    },
+    studentB,
+    0
+  );
+  assert.equal(studentBAfterPrivateCreate.mutated, false);
+  assert.equal(studentBAfterPrivateCreate.channels[0].unread_count, 1); // unchanged!
+
+  const studentAAfterSelfCreate = patchChannelsOnThreadEvent(
+    [hub10],
+    {
+      revision: 1,
+      type: 'thread.created',
+      channel_id: 10,
+      actor_id: 21,
+      thread: privateNewThread,
+      timestamp: '2026-11-16T12:00:00.000Z',
+    },
+    studentA,
+    10
+  );
+  assert.equal(studentAAfterSelfCreate.channels[0].unread_count, 1); // actor is current user -> no +1 self-increment
+
+  // (b) Resolving the thread decrements unread_count by 1, and clamping keeps it >= 0
+  const resolvedPrivateThread: QaThread = {
+    ...privateNewThread,
+    is_resolved: true,
+    was_unresolved: true,
+  };
+  const facultyAfterResolve = patchChannelsOnThreadEvent(
+    facultyAfterCreate.channels,
+    {
+      revision: 2,
+      type: 'thread.updated',
+      channel_id: 10,
+      actor_id: 99,
+      thread: resolvedPrivateThread,
+      timestamp: '2026-11-16T12:02:00.000Z',
+    },
+    faculty,
+    10
+  );
+  assert.equal(facultyAfterResolve.channels[0].unread_count, 1);
+
+  // Editing an already-resolved thread (was_unresolved: false) does NOT decrement again
+  const editedAlreadyResolved = patchChannelsOnThreadEvent(
+    facultyAfterResolve.channels,
+    {
+      revision: 3,
+      type: 'thread.updated',
+      channel_id: 10,
+      actor_id: 99,
+      thread: { ...resolvedPrivateThread, was_unresolved: false },
+      timestamp: '2026-11-16T12:03:00.000Z',
+    },
+    faculty,
+    10
+  );
+  assert.equal(editedAlreadyResolved.channels[0].unread_count, 1);
+
+  // Deleting an unresolved thread decrements and clamps at 0
+  const afterDelete1 = patchChannelsOnThreadEvent(
+    facultyAfterResolve.channels,
+    {
+      revision: 4,
+      type: 'thread.deleted',
+      channel_id: 10,
+      actor_id: 99,
+      thread: { ...privateNewThread, is_private: false, was_unresolved: true },
+      timestamp: '2026-11-16T12:04:00.000Z',
+    },
+    faculty,
+    10
+  );
+  assert.equal(afterDelete1.channels[0].unread_count, 0);
+
+  const afterDeleteClampZero = patchChannelsOnThreadEvent(
+    afterDelete1.channels,
+    {
+      revision: 5,
+      type: 'thread.deleted',
+      channel_id: 10,
+      actor_id: 99,
+      thread: { ...privateNewThread, is_private: false, was_unresolved: true },
+      timestamp: '2026-11-16T12:05:00.000Z',
+    },
+    faculty,
+    10
+  );
+  assert.equal(afterDeleteClampZero.channels[0].unread_count, 0);
+
+  // 4. Stale-refetch guard: in-flight request started before a realtime event must NOT overwrite local patch
+  const staleServerList: Channel[] = [{ ...hub10, unread_count: 1 }];
+  const locallyPatchedList: Channel[] = [{ ...hub10, unread_count: 2 }];
+
+  const guardedStale = reconcileFetchedChannelsWithStaleGuard({
+    fetchedChannels: staleServerList,
+    currentChannels: locallyPatchedList,
+    requestGeneration: 3,
+    currentMutationGeneration: 4, // incremented when realtime event arrived while request was in flight
+    requestStartedAt: 1000,
+    lastRealtimeMutationAt: 1200,
+  });
+  assert.equal(guardedStale.isStale, true);
+  assert.equal(guardedStale.channels[0].unread_count, 2);
+
+  // Fresh refetch started AFTER the realtime event updates normally
+  const freshServerList: Channel[] = [{ ...hub10, unread_count: 2 }];
+  const guardedFresh = reconcileFetchedChannelsWithStaleGuard({
+    fetchedChannels: freshServerList,
+    currentChannels: locallyPatchedList,
+    requestGeneration: 4,
+    currentMutationGeneration: 4,
+    requestStartedAt: 1500,
+    lastRealtimeMutationAt: 1200,
+  });
+  assert.equal(guardedFresh.isStale, false);
+  assert.equal(guardedFresh.channels[0].unread_count, 2);
+});
+
 
 
 

@@ -245,6 +245,7 @@ async function requestLaravel<T>(
       type: 'mutation',
       method,
       endpoint,
+      actorId: getStoredSessionUser()?.id,
       data: json?.data,
       requestBody: parsedBody,
       timestamp: Date.now(),

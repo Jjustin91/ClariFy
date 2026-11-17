@@ -4,6 +4,7 @@ import type {
   NewActivityBreakdown,
   QaThread,
   ReadReach,
+  RealtimeEvent,
   User,
   UserRole,
 } from '../types/api';
@@ -1186,5 +1187,215 @@ export function filterQaThreads(
     return true;
   });
 }
+
+/**
+ * Formats an unread/open Q&A badge count using tabular-friendly text (`99+` when > 99).
+ */
+export function formatUnreadBadgeCount(count: number | undefined): string {
+  if (typeof count !== 'number' || Number.isNaN(count) || count <= 0) {
+    return '0';
+  }
+  if (count > 99) {
+    return '99+';
+  }
+  return String(Math.floor(count));
+}
+
+/**
+ * Returns sorted unique IDs of all top-level Course Hubs that the user is approved in or administers,
+ * used to subscribe to `clarify.channel.{id}` for every approved hub the user belongs to.
+ */
+export function getSubscribableCourseHubIds(
+  channels: Channel[],
+  user: User | undefined
+): number[] {
+  if (!user || !user.id || user.role === 'it_admin') {
+    return [];
+  }
+  const topHubs = getTopLevelCourseHubs(channels);
+  const ids = new Set<number>();
+  for (const hub of topHubs) {
+    const hid = Number(hub.id);
+    if (
+      hid > 0 &&
+      (isUserEnrolledInCourseHub(hub, user) ||
+        (hub.created_by && Number(hub.created_by) === Number(user.id)))
+    ) {
+      ids.add(hid);
+    }
+  }
+  return Array.from(ids).sort((a, b) => a - b);
+}
+
+/**
+ * Pure helper that patches `channels` locally on `thread.*` realtime events:
+ * - `+1` on `thread.created` if `isThreadVisibleToUser` and actor is not the current user
+ * - `-1` on resolve (`thread.replied`/`thread.updated` with `is_resolved: true`, or `thread.faq_pinned`)
+ *   and on `thread.deleted` (when the thread was unresolved and visible to the user), clamped `>= 0`
+ * - Also increments `has_updates`, `new_activity_count`, and `new_activity_breakdown.qa` when the hub
+ *   is not currently viewed and the actor is not the current user.
+ */
+export function patchChannelsOnThreadEvent(
+  channels: Channel[],
+  event: RealtimeEvent,
+  currentUser: User,
+  currentlyViewedHubId = 0
+): { channels: Channel[]; mutated: boolean } {
+  const rawChannelId = Number(
+    event.channel_id || event.thread?.channel_id || 0
+  );
+  if (rawChannelId <= 0) {
+    return { channels, mutated: false };
+  }
+
+  const matchedChannel = channels.find((c) => Number(c.id) === rawChannelId);
+  const targetHubId =
+    matchedChannel?.parent_hub_id && Number(matchedChannel.parent_hub_id) > 0
+      ? Number(matchedChannel.parent_hub_id)
+      : rawChannelId;
+
+  const thread = event.thread;
+  const isVisible = thread ? isThreadVisibleToUser(thread, currentUser) : true;
+  if (!isVisible) {
+    return { channels, mutated: false };
+  }
+
+  const actorId = Number(event.actor_id || thread?.author?.id || 0);
+  const isOtherActor = actorId === 0 || actorId !== Number(currentUser.id);
+
+  let unreadDelta = 0;
+  if (event.type === 'thread.created') {
+    if (isOtherActor) {
+      unreadDelta = 1;
+    }
+  } else if (
+    event.type === 'thread.faq_pinned' ||
+    ((event.type === 'thread.replied' || event.type === 'thread.updated') &&
+      Boolean(thread?.is_resolved || thread?.is_pinned_faq))
+  ) {
+    if (thread?.was_unresolved !== false) {
+      unreadDelta = -1;
+    }
+  } else if (event.type === 'thread.deleted') {
+    const wasAlreadyResolved =
+      thread?.was_unresolved === false ||
+      (thread?.was_unresolved === undefined && Boolean(thread?.is_resolved));
+    if (!wasAlreadyResolved) {
+      unreadDelta = -1;
+    }
+  }
+
+  const shouldBumpUnseenActivity =
+    (event.type === 'thread.created' || event.type === 'thread.replied') &&
+    isOtherActor &&
+    targetHubId !== Number(currentlyViewedHubId);
+
+  if (unreadDelta === 0 && !shouldBumpUnseenActivity && !thread?.content) {
+    return { channels, mutated: false };
+  }
+
+  let mutated = false;
+  const nextChannels = channels.map((ch) => {
+    if (Number(ch.id) !== targetHubId) return ch;
+    mutated = true;
+
+    const currentUnread = Math.max(0, Number(ch.unread_count ?? 0));
+    const nextUnread = Math.max(0, currentUnread + unreadDelta);
+
+    const prevBreakdown = ch.new_activity_breakdown ?? {
+      chat: 0,
+      announcements: 0,
+      qa: 0,
+    };
+
+    const nextActivityCount = shouldBumpUnseenActivity
+      ? (ch.new_activity_count ?? 0) + 1
+      : ch.new_activity_count ?? 0;
+
+    const nextBreakdown = shouldBumpUnseenActivity
+      ? {
+          ...prevBreakdown,
+          qa: (prevBreakdown.qa ?? 0) + 1,
+        }
+      : prevBreakdown;
+
+    return {
+      ...ch,
+      unread_count: nextUnread,
+      has_updates: shouldBumpUnseenActivity ? true : ch.has_updates,
+      new_activity_count: nextActivityCount,
+      new_activity_breakdown: nextBreakdown,
+    };
+  });
+
+  return { channels: mutated ? nextChannels : channels, mutated };
+}
+
+/**
+ * Guards against an in-flight channel list refetch (started before a realtime event)
+ * overwriting a newer local realtime patch on `unread_count` or unseen activity counters.
+ */
+export function reconcileFetchedChannelsWithStaleGuard(params: {
+  fetchedChannels: Channel[];
+  currentChannels: Channel[];
+  requestGeneration: number;
+  currentMutationGeneration: number;
+  requestStartedAt?: number;
+  lastRealtimeMutationAt?: number;
+}): { channels: Channel[]; isStale: boolean } {
+  const {
+    fetchedChannels,
+    currentChannels,
+    requestGeneration,
+    currentMutationGeneration,
+    requestStartedAt,
+    lastRealtimeMutationAt,
+  } = params;
+
+  const isStaleByGen = requestGeneration < currentMutationGeneration;
+  const isStaleByTime =
+    typeof requestStartedAt === 'number' &&
+    typeof lastRealtimeMutationAt === 'number' &&
+    requestStartedAt < lastRealtimeMutationAt;
+  const isStale = isStaleByGen || isStaleByTime;
+
+  if (!isStale || currentChannels.length === 0) {
+    return { channels: fetchedChannels, isStale };
+  }
+
+  const currentById = new Map<number, Channel>();
+  for (const ch of currentChannels) {
+    currentById.set(Number(ch.id), ch);
+  }
+
+  const merged = fetchedChannels.map((fetched) => {
+    const local = currentById.get(Number(fetched.id));
+    if (!local) return fetched;
+    return {
+      ...fetched,
+      unread_count:
+        typeof local.unread_count === 'number'
+          ? local.unread_count
+          : fetched.unread_count,
+      has_updates:
+        typeof local.has_updates === 'boolean'
+          ? local.has_updates
+          : fetched.has_updates,
+      new_activity_count:
+        typeof local.new_activity_count === 'number'
+          ? local.new_activity_count
+          : fetched.new_activity_count,
+      new_activity_breakdown:
+        local.new_activity_breakdown ?? fetched.new_activity_breakdown,
+      new_activity_sub_channel_id:
+        local.new_activity_sub_channel_id !== undefined
+          ? local.new_activity_sub_channel_id
+          : fetched.new_activity_sub_channel_id,
+    };
+  });
+
+  return { channels: merged, isStale: true };
+}
+
 
 

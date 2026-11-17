@@ -89,6 +89,7 @@ Route::prefix('v1')->group(function () {
         Route::patch('/threads/{threadId}', [ThreadController::class, 'update']);
         Route::delete('/threads/{threadId}', [ThreadController::class, 'destroy']);
         Route::post('/threads/{threadId}/replies', [ThreadController::class, 'reply']);
+        Route::match(['post', 'patch'], '/threads/{threadId}/resolve', [ThreadController::class, 'resolve']);
         Route::post('/threads/{threadId}/convert-faq', [ThreadController::class, 'convertToFaq']);
         Route::get('/instructors', [InstructorController::class, 'index']);
 

@@ -26,6 +26,11 @@ export interface ReverbBroadcastPayload {
   timestamp?: string;
 }
 
+const channelListenersByHubId = new Map<
+  number,
+  Set<(payload: ReverbBroadcastPayload) => void>
+>();
+
 /**
  * Initializes or retrieves the singleton Laravel Echo client configured for Laravel Reverb
  * using Sanctum bearer authentication against /api/v1/broadcasting/auth for private channels.
@@ -68,6 +73,7 @@ export function getReverbEcho(): Echo<'reverb'> | null {
         // Ignore disconnect errors
       }
     }
+    channelListenersByHubId.clear();
 
     window.Pusher = Pusher;
     Pusher.logToConsole = false;
@@ -187,26 +193,53 @@ export function subscribeGlobalReverb(
 /**
  * Subscribes to a private Course Hub Reverb channel (`clarify.channel.{channelId}`)
  * authorized via ChannelPolicy for low-latency Live Channel Chat & Isolated Q&A Thread updates.
+ * Multiplexes listeners per `channelId` so multiple consumers (`ClarifyContext`, `CourseHubPage`,
+ * `MessengerChatBox`) can subscribe/unsubscribe independently without detaching active listeners.
  */
 export function subscribeChannelReverb(
   channelId: number,
   onEvent: (payload: ReverbBroadcastPayload) => void
 ): () => void {
+  const numericId = Number(channelId);
   const echo = getReverbEcho();
-  if (!echo || !channelId) {
+  if (!echo || !numericId || numericId <= 0) {
     return () => {};
   }
 
   try {
-    const channelName = `clarify.channel.${channelId}`;
-    const channel = echo.private(channelName);
-    channel.listen('.realtime.updated', (data: ReverbBroadcastPayload) => {
-      onEvent(data);
-    });
+    const channelName = `clarify.channel.${numericId}`;
+    let listeners = channelListenersByHubId.get(numericId);
+    if (!listeners) {
+      listeners = new Set();
+      channelListenersByHubId.set(numericId, listeners);
+      const channel = echo.private(channelName);
+      channel.listen('.realtime.updated', (data: ReverbBroadcastPayload) => {
+        const activeSet = channelListenersByHubId.get(numericId);
+        if (!activeSet) return;
+        activeSet.forEach((cb) => {
+          try {
+            cb(data);
+          } catch {
+            // Ignore subscriber callback error
+          }
+        });
+      });
+    }
+
+    listeners.add(onEvent);
 
     return () => {
       try {
-        channel.stopListening('.realtime.updated');
+        const activeSet = channelListenersByHubId.get(numericId);
+        if (!activeSet) return;
+        activeSet.delete(onEvent);
+        if (activeSet.size === 0) {
+          channelListenersByHubId.delete(numericId);
+          const currentEcho = window.__clarifyEchoInstance;
+          if (currentEcho) {
+            currentEcho.private(channelName).stopListening('.realtime.updated');
+          }
+        }
       } catch {
         // Ignore cleanup errors
       }

@@ -7,6 +7,7 @@ use App\Http\Resources\ThreadResource;
 use App\Models\Channel;
 use App\Models\Message;
 use App\Policies\ChannelPolicy;
+use App\Support\ApiCache;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -30,6 +31,7 @@ class ThreadController
         $query = Message::with(['sender:id,name,role,avatar_url', 'replies.sender:id,name,role,avatar_url'])
             ->rootThreads()
             ->where('channel_id', $channel->id)
+            ->whereNull('deleted_at')
             ->latest('created_at');
 
         if ($status = $request->query('status')) {
@@ -96,6 +98,8 @@ class ThreadController
             'is_pinned_faq' => false,
         ]);
 
+        ApiCache::forgetChannels((int) $channel->id);
+
         $threadPayload = (new ThreadResource($thread->load(['sender', 'replies.sender'])))->resolve($request);
 
         RealtimeStateUpdated::safeDispatch(
@@ -154,6 +158,8 @@ class ThreadController
         $thread->content = trim($validated['content']);
         $thread->save();
 
+        ApiCache::forgetChannels((int) $thread->channel_id);
+
         $threadPayload = (new ThreadResource($thread->load(['sender', 'replies.sender'])))->resolve($request);
 
         RealtimeStateUpdated::safeDispatch(
@@ -195,16 +201,38 @@ class ThreadController
         }
 
         $channelId = (int) $thread->channel_id;
+        $wasUnresolved = ! (bool) $thread->is_resolved;
+        $deletedThreadPayload = [
+            'id' => (int) $thread->id,
+            'channel_id' => $channelId,
+            'is_private' => (bool) $thread->is_private,
+            'is_resolved' => (bool) $thread->is_resolved,
+            'is_pinned_faq' => (bool) $thread->is_pinned_faq,
+            'was_unresolved' => $wasUnresolved,
+            'author' => [
+                'id' => $thread->is_pinned_faq ? null : (int) $thread->sender_id,
+                'name' => $thread->is_pinned_faq ? 'Anonymous Student' : ($thread->sender?->name ?? 'Student'),
+                'role' => $thread->sender?->role ?? 'student',
+                'avatar_url' => null,
+            ],
+        ];
+
         $thread->delete();
+
+        ApiCache::forgetChannels($channelId);
 
         RealtimeStateUpdated::safeDispatch(
             'thread.deleted',
             $channelId,
-            (int) $user->id
+            (int) $user->id,
+            null,
+            null,
+            $deletedThreadPayload
         );
 
         return response()->json([
             'message' => 'Inquiry ticket deleted.',
+            'data' => $deletedThreadPayload,
         ]);
     }
 
@@ -248,6 +276,7 @@ class ThreadController
             'content' => trim($validated['content']),
         ]);
 
+        $wasUnresolved = ! (bool) $thread->is_resolved;
         $pinToFaq = (bool) ($validated['pin_to_faq'] ?? false);
         $markResolved = (bool) ($validated['mark_resolved'] ?? true) || $pinToFaq;
 
@@ -259,7 +288,10 @@ class ThreadController
         $thread->updated_at = now();
         $thread->save();
 
+        ApiCache::forgetChannels((int) $thread->channel_id);
+
         $threadPayload = (new ThreadResource($thread->fresh(['sender', 'replies.sender'])))->resolve($request);
+        $threadPayload['was_unresolved'] = $wasUnresolved;
 
         RealtimeStateUpdated::safeDispatch(
             $pinToFaq ? 'thread.faq_pinned' : 'thread.replied',
@@ -274,6 +306,54 @@ class ThreadController
             'message' => $pinToFaq
                 ? 'Reply posted, ticket resolved, and converted to anonymized Class FAQ.'
                 : 'Faculty reply posted.',
+            'data' => $threadPayload,
+        ]);
+    }
+
+    /**
+     * POST|PATCH /api/v1/threads/{id}/resolve (Mark Q&A inquiry resolved — TC-FR03)
+     */
+    public function resolve(Request $request, int $threadId): JsonResponse
+    {
+        $user = $request->user();
+        if (! $user || ! $user->canPublishOrManage()) {
+            return response()->json([
+                'status' => 403,
+                'message' => 'HTTP 403 Forbidden: Only instructors can resolve tickets.',
+            ], 403);
+        }
+
+        $thread = Message::rootThreads()->findOrFail($threadId);
+        $channel = Channel::findOrFail($thread->channel_id);
+
+        if (! ChannelPolicy::hasApprovedChannelAccess($user, $channel)) {
+            return response()->json([
+                'status' => 403,
+                'message' => "Access Denied: You are not an approved member or instructor of {$channel->name}.",
+            ], 403);
+        }
+
+        $wasUnresolved = ! (bool) $thread->is_resolved;
+        $thread->is_resolved = true;
+        $thread->updated_at = now();
+        $thread->save();
+
+        ApiCache::forgetChannels((int) $thread->channel_id);
+
+        $threadPayload = (new ThreadResource($thread->fresh(['sender', 'replies.sender'])))->resolve($request);
+        $threadPayload['was_unresolved'] = $wasUnresolved;
+
+        RealtimeStateUpdated::safeDispatch(
+            'thread.updated',
+            (int) $thread->channel_id,
+            (int) $user->id,
+            null,
+            null,
+            $threadPayload
+        );
+
+        return response()->json([
+            'message' => 'Ticket resolved.',
             'data' => $threadPayload,
         ]);
     }
@@ -301,12 +381,16 @@ class ThreadController
             ], 403);
         }
 
+        $wasUnresolved = ! (bool) $thread->is_resolved;
         $thread->is_resolved = true;
         $thread->is_pinned_faq = true;
         $thread->is_private = false;
         $thread->save();
 
+        ApiCache::forgetChannels((int) $thread->channel_id);
+
         $threadPayload = (new ThreadResource($thread->fresh(['sender', 'replies.sender'])))->resolve($request);
+        $threadPayload['was_unresolved'] = $wasUnresolved;
 
         RealtimeStateUpdated::safeDispatch(
             'thread.faq_pinned',

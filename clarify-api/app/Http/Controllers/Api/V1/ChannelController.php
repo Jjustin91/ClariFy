@@ -92,25 +92,15 @@ class ChannelController
             }
             $allRelevantChannelIds = array_values(array_unique($allRelevantChannelIds));
 
-            // 1. Grouped open Q&A threads count per channel
-            $openThreadCounts = Message::query()
-                ->selectRaw('channel_id, COUNT(*) as aggregate_count')
-                ->whereIn('channel_id', $channelIds)
-                ->whereNull('parent_id')
-                ->where('is_resolved', false)
-                ->where(function ($q) {
-                    $q->whereNull('subject_hashtag')
-                        ->orWhere('subject_hashtag', '!=', '__CHAT__');
-                })
-                ->groupBy('channel_id')
-                ->pluck('aggregate_count', 'channel_id');
-
-            // 2. Grouped chat messages count per channel (including sub-channels)
+            // 1. Grouped chat messages count per channel (including sub-channels)
+            // Note: unread_count (open Q&A threads) is per-user (due to private student inquiries)
+            // and is computed in a single batched query AFTER the shared cache read.
             $chatCountsByChannel = Message::query()
                 ->selectRaw('channel_id, COUNT(*) as aggregate_count')
                 ->whereIn('channel_id', $allRelevantChannelIds)
                 ->whereNull('parent_id')
                 ->where('subject_hashtag', '__CHAT__')
+                ->whereNull('deleted_at')
                 ->groupBy('channel_id')
                 ->pluck('aggregate_count', 'channel_id');
 
@@ -236,7 +226,7 @@ class ChannelController
                 }
 
                 $ch->precomputed_include_roster = $withFullRoster;
-                $ch->precomputed_open_threads_count = (int) ($openThreadCounts[$cid] ?? 0);
+                $ch->precomputed_open_threads_count = 0;
                 $ch->precomputed_chat_messages_count = $totalChatCount;
                 if (! $withFullRoster) {
                     $ch->precomputed_members_count = (int) ($memberCountsByChannel[$cid] ?? 0);
@@ -322,6 +312,7 @@ class ChannelController
                 }
             }
 
+            $userHubIds = [];
             $seenHubCutoffByHubId = [];
             $minLastSeenAt = null;
             foreach ($sharedData as $item) {
@@ -335,6 +326,11 @@ class ChannelController
 
                 $isApproved = ($pivots[$cid] ?? null) === 'approved'
                     || ((int) ($item['created_by'] ?? 0) === (int) $user->id);
+                $canViewHubThreads = $isApproved || in_array($user->role, ['faculty', 'dept_head'], true);
+                if ($canViewHubThreads) {
+                    $userHubIds[] = $cid;
+                }
+
                 $seenAt = $lastSeenByChannel[$cid] ?? null;
 
                 if ($isApproved && $seenAt !== null) {
@@ -343,6 +339,34 @@ class ChannelController
                         $minLastSeenAt = $seenAt;
                     }
                 }
+            }
+
+            // Fresh per-user open Q&A thread count (unread_count) in ONE batched grouped query (zero N+1).
+            // Students only count public threads or their own private threads; faculty/dept_head count all unresolved root threads.
+            $openThreadCountsByHub = [];
+            if (! empty($userHubIds)) {
+                $openThreadsQuery = Message::query()
+                    ->selectRaw('channel_id, COUNT(*) as aggregate_count')
+                    ->whereIn('channel_id', array_values(array_unique($userHubIds)))
+                    ->whereNull('parent_id')
+                    ->where('is_resolved', false)
+                    ->whereNull('deleted_at')
+                    ->where(function ($q) {
+                        $q->whereNull('subject_hashtag')
+                            ->orWhere('subject_hashtag', '!=', '__CHAT__');
+                    });
+
+                if ($user->role === 'student') {
+                    $openThreadsQuery->where(function ($q) use ($user) {
+                        $q->where('is_private', false)
+                            ->orWhere('sender_id', $user->id);
+                    });
+                }
+
+                $openThreadCountsByHub = $openThreadsQuery
+                    ->groupBy('channel_id')
+                    ->pluck('aggregate_count', 'channel_id')
+                    ->all();
             }
 
             $newActivityByHub = [];
@@ -460,6 +484,7 @@ class ChannelController
                 $cid = (int) ($channelItem['id'] ?? 0);
                 $count = (int) ($newActivityByHub[$cid] ?? 0);
                 $breakdown = $breakdownByHub[$cid] ?? [];
+                $channelItem['unread_count'] = (int) ($openThreadCountsByHub[$cid] ?? 0);
                 $channelItem['new_activity_count'] = $count;
                 $channelItem['has_updates'] = $count > 0;
                 $channelItem['new_activity_breakdown'] = [

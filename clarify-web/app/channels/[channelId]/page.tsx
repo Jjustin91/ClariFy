@@ -58,6 +58,7 @@ import {
   formatCourseHubName,
   formatEnrolledRosterSummary,
   formatSubChannelDisplayName,
+  formatUnreadBadgeCount,
   getChannelFacultyLabel,
   getFieldValidationError,
   getQaThreadFilterCounts,
@@ -722,7 +723,7 @@ export default function CourseHubPage() {
                                 title={`${hub.unread_count} open Q&A inquiries`}
                                 className="px-1.5 py-0.5 mr-0.5 text-[10px] font-mono font-extrabold bg-ustp-orange text-ustp-navy rounded-full tabular-nums"
                               >
-                                {hub.unread_count}
+                                {formatUnreadBadgeCount(hub.unread_count)}
                               </span>
                             )}
                           {isHubCourseAdmin && (
@@ -810,6 +811,7 @@ export default function CourseHubPage() {
                               {hub.unread_count !== undefined &&
                                 hub.unread_count > 0 && (
                                   <span
+                                    title={`${hub.unread_count} open Q&A inquiries`}
                                     className={`px-1.5 py-0.2 rounded-full text-[10px] font-mono font-extrabold tabular-nums ${
                                       isCurrentHub &&
                                       (activeTab === 'threads' ||
@@ -818,7 +820,7 @@ export default function CourseHubPage() {
                                         : 'bg-white/15 text-ustp-gold'
                                     }`}
                                   >
-                                    {hub.unread_count}
+                                    {formatUnreadBadgeCount(hub.unread_count)}
                                   </span>
                                 )}
                             </button>

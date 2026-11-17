@@ -131,6 +131,7 @@ export interface QaThread {
   is_private: boolean;
   is_resolved: boolean;
   is_pinned_faq: boolean;
+  was_unresolved?: boolean;
   created_at: string;
   updated_at: string;
   author: {
