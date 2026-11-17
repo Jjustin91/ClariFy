@@ -1,18 +1,294 @@
-// Single source of truth for API TypeScript interfaces (snake_case matching Laravel 13 Resources)
+// Single source of truth for API TypeScript interfaces (snake_case matching Laravel 12 Resources)
 
-export interface ApiResponse<T> {
-  message?: string;
-  data: T;
+export type UserRole = 'student' | 'faculty' | 'dept_head' | 'it_admin';
+export type VerificationStatus = 'pending' | 'approved' | 'rejected';
+
+export interface AcademicProfile {
+  campus: string;
+  college: string;
+  department: string;
+  program: string | null;
+  year_level: number | null;
+  section: string | null;
+  semester_code: string;
+}
+
+export interface User {
+  id: number;
+  institutional_id: string;
+  name: string;
+  email: string;
+  contact_number?: string | null;
+  avatar_url?: string | null;
+  role: UserRole;
+  verification_status: VerificationStatus;
+  academic_profile?: AcademicProfile;
+}
+
+export interface ChannelMember {
+  id: number;
+  institutional_id: string;
+  name: string;
+  role: UserRole;
+  section: string | null;
+  department: string;
+}
+
+export interface ChannelFacultyMember {
+  id: number;
+  name: string;
+  role: UserRole;
+}
+
+export interface NewActivityBreakdown {
+  chat: number;
+  announcements: number;
+  qa: number;
+}
+
+export interface Channel {
+  id: number;
+  parent_hub_id?: number | null;
+  created_by?: number | null;
+  course_code: string | null;
+  name: string;
+  description: string | null;
+  channel_type: 'university' | 'college' | 'department' | 'course_hub';
+  scope_college: string | null;
+  scope_department: string | null;
+  scope_section: string | null;
+  unread_count?: number;
+  chat_messages_count?: number;
+  has_updates?: boolean;
+  new_activity_count?: number;
+  new_activity_breakdown?: NewActivityBreakdown;
+  new_activity_sub_channel_id?: number | null;
+  last_seen_at?: string | null;
+  members_count?: number;
+  students_count?: number;
+  faculty?: ChannelFacultyMember[];
+  latest_activity_preview?: string;
+  latest_activity_at?: string;
+  instructor_name?: string;
+  roster?: ChannelMember[];
+  pending_requests?: ChannelMember[];
+}
+
+export interface ReadReach {
+  acknowledged_count: number;
+  enrolled_total: number;
+  percentage: number;
+  has_current_user_acknowledged: boolean;
+}
+
+export interface Announcement {
+  id: number;
+  channel_id: number;
+  channel_type?: Channel['channel_type'];
+  course_code?: string | null;
+  channel_name?: string | null;
+  title: string;
+  content: string;
+  subtitle?: string;
+  attachment_url: string | null;
+  attachment_name?: string | null;
+  attachment_type?: 'image' | 'pdf' | 'document' | null;
+  tags: string[];
+  is_urgent: boolean;
+  is_pinned: boolean;
+  trigger_sms_fallback?: boolean;
+  status: 'draft' | 'published' | 'archived';
+  is_edited: boolean;
+  published_at: string;
+  updated_at: string;
+  read_reach: ReadReach;
+  publisher: {
+    id: number;
+    name: string;
+    role: UserRole;
+    department: string;
+    avatar_url?: string | null;
+  };
+}
+
+export interface ThreadReply {
+  id: number;
+  thread_id: number;
+  content: string;
+  created_at: string;
+  author: {
+    id: number;
+    name: string;
+    role: UserRole;
+    avatar_url?: string | null;
+  };
+}
+
+export interface QaThread {
+  id: number;
+  channel_id: number;
+  announcement_id: number | null;
+  subject_hashtag: string;
+  content: string;
+  is_private: boolean;
+  is_resolved: boolean;
+  is_pinned_faq: boolean;
+  was_unresolved?: boolean;
+  created_at: string;
+  updated_at: string;
+  author: {
+    id: number | null;
+    name: string; // Strictly "Anonymous Student" when is_pinned_faq === true
+    role: UserRole;
+    avatar_url: string | null;
+  };
+  replies: ThreadReply[];
+}
+
+export interface Instructor {
+  id: number;
+  institutional_id: string;
+  name: string;
+  email: string;
+  campus: string;
+  college: string;
+  department: 'CITC' | 'CEA' | 'COT' | 'CSM';
+  specialization: string;
+  office_location: string;
+  consultation_hours: string;
+  courses_handled: string[];
+  avatar_url: string | null;
+}
+
+export interface AnnouncementAudit {
+  id: number;
+  announcement_id: number;
+  previous_title: string;
+  new_title: string;
+  previous_content: string;
+  new_content: string;
+  editor_id: number;
+  editor_name: string;
+  editor_role: UserRole;
+  edited_at: string;
+}
+
+export interface PrismsSyncLog {
+  id: number;
+  semester_code: string;
+  triggered_by: string;
+  sync_type: 'scheduled_midnight' | 'manual_admin';
+  total_updated: number;
+  channels_provisioned: number;
+  status: 'completed' | 'partial_warning' | 'failed';
+  duration_ms: number;
+  executed_at: string;
+}
+
+export interface AdminMetricsResponse {
+  active_users_count: number;
+  verified_accounts_count: number;
+  pending_verifications_count: number;
+  push_queue_latency_seconds: number;
+  sms_fallback_dispatched_count: number;
+  overall_read_reach_percentage: number;
+  sync_logs: PrismsSyncLog[];
+  announcement_audits: AnnouncementAudit[];
+}
+
+export interface PaginatedMeta {
+  current_page: number;
+  last_page: number;
+  per_page: number;
+  total: number;
 }
 
 export interface PaginatedResponse<T> {
   data: T[];
-  meta: {
-    current_page: number;
-    last_page: number;
-    per_page: number;
-    total: number;
+  meta: PaginatedMeta;
+}
+
+export interface SingleResourceResponse<T> {
+  message?: string;
+  data: T;
+}
+
+export type ApiResponse<T> = SingleResourceResponse<T>;
+
+export interface ChatAttachment {
+  url: string;
+  name: string;
+  type: 'image' | 'document' | 'voice';
+  mime: string | null;
+  size: number | null;
+  duration_sec?: number;
+}
+
+export interface ChatMessage {
+  id: number | string;
+  temp_id?: string | null;
+  channel_id: number;
+  sender_id?: number;
+  is_unsent?: boolean;
+  content: string;
+  attachment?: ChatAttachment | null;
+  created_at: string;
+  status?: 'sending' | 'sent' | 'failed';
+  author: {
+    id: number;
+    name: string;
+    role: UserRole;
+    avatar_url?: string | null;
   };
 }
 
-// TODO: Add User, Channel, Announcement, Thread, and Admin interfaces per Section 6
+export interface RealtimeEvent {
+  revision: number;
+  type:
+    | 'connected'
+    | 'announcement.urgent'
+    | 'announcement.created'
+    | 'announcement.updated'
+    | 'announcement.deleted'
+    | 'announcement.acknowledged'
+    | 'chat.message'
+    | 'chat.message_unsent'
+    | 'thread.created'
+    | 'thread.updated'
+    | 'thread.deleted'
+    | 'thread.replied'
+    | 'thread.faq_pinned'
+    | 'channel.created'
+    | 'channel.updated'
+    | 'membership.changed'
+    | 'admin.updated'
+    | 'db.changed';
+  channel_id?: number;
+  message_id?: number;
+  target_user_id?: number;
+  action?: 'requested' | 'approved' | 'rejected' | 'removed' | 'added';
+  actor_id?: number;
+  announcement?: Announcement;
+  message?: ChatMessage;
+  thread?: QaThread;
+  timestamp: string;
+}
+
+export interface PersistenceStatus {
+  driver: 'postgresql-direct' | 'laravel-postgresql' | 'memory-fallback';
+  database?: string;
+  host?: string;
+  connected: boolean;
+  revision: number;
+}
+
+export interface ApiError {
+  status: number;
+  message: string;
+  errors?: Record<string, string[]>;
+  retryAfter?: number | null;
+  verification_status?: VerificationStatus;
+  data?: unknown;
+}
+
+export type LaravelValidationError = ApiError;
