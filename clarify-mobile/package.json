@@ -5,6 +5,7 @@
   "dependencies": {
     "@expo/ui": "~58.0.29",
     "@expo/vector-icons": "^15.0.2",
+    "@react-native-community/netinfo": "^12.0.1",
     "expo": "^58.0.0",
     "expo-constants": "~58.0.16",
     "expo-device": "~58.0.5",
@@ -42,8 +43,8 @@
   "scripts": {
     "start": "expo start",
     "reset-project": "node ./scripts/reset-project.js",
-    "android": "expo start --android",
-    "ios": "expo start --ios",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
     "web": "expo start --web",
     "lint": "expo lint",
     "test": "node --experimental-strip-types --test src/lib/api-client.test.ts src/lib/feed-reducer.test.ts src/lib/realtime-reducer.test.ts"
