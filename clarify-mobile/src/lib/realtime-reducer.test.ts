@@ -1,0 +1,501 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+
+import {
+  registerExpoPushTokenApi,
+} from './api-client.ts';
+import {
+  announcementFeedReducer,
+  createInitialAnnouncementFeedState,
+} from './feed-reducer.ts';
+import {
+  ALL_REALTIME_EVENT_TYPES,
+  computeDebouncedRefreshDelayMs,
+  normalizeReverbPayloadToEvent,
+  patchAnnouncementFeedOnRealtimeEvent,
+  planRealtimeEventEffects,
+  reduceChannelsOnRealtimeEvent,
+  resolvePushNotificationRoute,
+} from './realtime-reducer.ts';
+import {
+  computeReconnectBackoffMs,
+  getReverbEcho,
+  resolveReverbConfig,
+} from './reverb-client.ts';
+import {
+  clearSecureToken,
+  setSecureToken,
+  setSecureTokenStorageAdapterForTests,
+} from './secure-token.ts';
+import type { Announcement, Channel, RealtimeEvent, User } from '../types/api.ts';
+
+const studentUser: User = {
+  id: 10,
+  institutional_id: '2023300010',
+  name: 'Juan Dela Cruz',
+  email: 'juan.delacruz@ustp.edu.ph',
+  role: 'student',
+  verification_status: 'approved',
+};
+
+const facultyUser: User = {
+  id: 2,
+  institutional_id: 'FAC-002',
+  name: 'Prof. Aki Hayakawa',
+  email: 'aki.hayakawa@ustp.edu.ph',
+  role: 'faculty',
+  verification_status: 'approved',
+};
+
+const itAdminUser: User = {
+  id: 1,
+  institutional_id: 'ADM-001',
+  name: 'IT Admin',
+  email: 'admin@ustp.edu.ph',
+  role: 'it_admin',
+  verification_status: 'approved',
+};
+
+function makeChannel(id: number, overrides: Partial<Channel> = {}): Channel {
+  return {
+    id,
+    parent_hub_id: null,
+    course_code: 'IT314',
+    name: '#IT314 Software Engineering',
+    description: 'Scoped Course Hub',
+    channel_type: 'course_hub',
+    scope_college: 'CITC',
+    scope_department: 'CITC',
+    scope_section: 'IT3R2',
+    unread_count: 1,
+    chat_messages_count: 5,
+    has_updates: false,
+    new_activity_count: 0,
+    new_activity_breakdown: { chat: 0, announcements: 0, qa: 0 },
+    members_count: 42,
+    students_count: 40,
+    roster: [],
+    ...overrides,
+  };
+}
+
+function makeAnnouncement(
+  id: number,
+  overrides: Partial<Announcement> = {}
+): Announcement {
+  return {
+    id,
+    channel_id: 100,
+    channel_type: 'course_hub',
+    course_code: 'IT314',
+    channel_name: 'IT314 Software Engineering',
+    title: `Notice #${id}`,
+    content: `Announcement content #${id}`,
+    attachment_url: null,
+    tags: ['CITC'],
+    is_urgent: false,
+    is_pinned: false,
+    status: 'published',
+    is_edited: false,
+    published_at: '2026-11-20T08:00:00Z',
+    updated_at: '2026-11-20T08:00:00Z',
+    read_reach: {
+      acknowledged_count: 10,
+      enrolled_total: 40,
+      percentage: 25,
+      has_current_user_acknowledged: false,
+    },
+    publisher: {
+      id: 2,
+      name: 'Prof. Aki Hayakawa',
+      role: 'faculty',
+      department: 'CITC',
+    },
+    ...overrides,
+  };
+}
+
+test('resolveReverbConfig enforces WSS on 443 for production host and refuses unconfigured production', () => {
+  const missingKey = resolveReverbConfig(
+    {},
+    'https://api.ustpclarify.tech/api/v1'
+  );
+  assert.equal(missingKey, null);
+
+  const prod = resolveReverbConfig(
+    {
+      EXPO_PUBLIC_REVERB_APP_KEY: 'prod-reverb-key',
+      EXPO_PUBLIC_REVERB_SCHEME: 'http', // Must be ignored on non-local host
+    },
+    'https://api.ustpclarify.tech/api/v1'
+  );
+  assert.ok(prod);
+  assert.equal(prod.wsHost, 'api.ustpclarify.tech');
+  assert.equal(prod.wsPort, 443);
+  assert.equal(prod.wssPort, 443);
+  assert.equal(prod.forceTLS, true);
+  assert.deepEqual(prod.enabledTransports, ['wss']);
+  assert.equal(
+    prod.authEndpoint,
+    'https://api.ustpclarify.tech/api/v1/broadcasting/auth'
+  );
+
+  const local = resolveReverbConfig(
+    { EXPO_PUBLIC_REVERB_HOST: '127.0.0.1' },
+    'http://127.0.0.1:8000/api/v1'
+  );
+  assert.ok(local);
+  assert.equal(local.isLocalHost, true);
+  assert.equal(local.forceTLS, false);
+  assert.equal(local.wsPort, 8080);
+  assert.deepEqual(local.enabledTransports, ['ws', 'wss']);
+});
+
+test('getReverbEcho never connects anonymously without a SecureStore bearer token', async () => {
+  setSecureTokenStorageAdapterForTests({
+    getItemAsync: async () => null,
+    setItemAsync: async () => {},
+    deleteItemAsync: async () => {},
+  });
+  await clearSecureToken();
+  assert.equal(getReverbEcho(), null);
+});
+
+test('debounce jitter and exponential reconnect backoff stay within safe bounds', () => {
+  assert.equal(computeDebouncedRefreshDelayMs(0), 1500);
+  assert.equal(computeDebouncedRefreshDelayMs(0.5), 1700);
+  assert.ok(computeDebouncedRefreshDelayMs(1) < 1900);
+
+  assert.equal(computeReconnectBackoffMs(0, 0), 1000);
+  assert.equal(computeReconnectBackoffMs(1, 0), 2000);
+  assert.equal(computeReconnectBackoffMs(2, 0), 4000);
+  assert.equal(computeReconnectBackoffMs(10, 0), 30000);
+  assert.ok(computeReconnectBackoffMs(10, 0.99) < 30500);
+});
+
+test('reduceChannelsOnRealtimeEvent patches chat, sub-channel activity, unsent, announcement, and thread events accurately', () => {
+  const hub = makeChannel(100);
+  const subChannel = makeChannel(101, {
+    parent_hub_id: 100,
+    name: '# general',
+  });
+  const baseChannels = [hub, subChannel];
+
+  // Sub-channel chat from another user increments parent hub chat count + breakdown + sub_channel_id
+  const chatEvent = normalizeReverbPayloadToEvent({
+    type: 'chat.message',
+    channel_id: 101,
+    actor_id: 2,
+    message: {
+      id: 500,
+      channel_id: 101,
+      content: 'Lab exercise 4 is uploaded.',
+      created_at: '2026-11-20T09:00:00Z',
+      author: { id: 2, name: 'Prof. Aki Hayakawa', role: 'faculty' },
+    },
+  });
+
+  const afterChat = reduceChannelsOnRealtimeEvent(
+    baseChannels,
+    chatEvent,
+    studentUser,
+    0
+  );
+  assert.equal(afterChat.mutated, true);
+  assert.equal(afterChat.channels[0].chat_messages_count, 6);
+  assert.equal(afterChat.channels[0].has_updates, true);
+  assert.equal(afterChat.channels[0].new_activity_count, 1);
+  assert.equal(afterChat.channels[0].new_activity_breakdown?.chat, 1);
+  assert.equal(afterChat.channels[0].new_activity_sub_channel_id, 101);
+  assert.equal(
+    afterChat.channels[0].latest_activity_preview,
+    'Prof. Aki Hayakawa: Lab exercise 4 is uploaded.'
+  );
+
+  // When currently viewing hub 100, unseen activity is NOT bumped
+  const whileViewing = reduceChannelsOnRealtimeEvent(
+    baseChannels,
+    chatEvent,
+    studentUser,
+    100
+  );
+  assert.equal(whileViewing.channels[0].has_updates, false);
+  assert.equal(whileViewing.channels[0].new_activity_count, 0);
+
+  // chat.message_unsent decrements count safely
+  const afterUnsent = reduceChannelsOnRealtimeEvent(
+    afterChat.channels,
+    normalizeReverbPayloadToEvent({
+      type: 'chat.message_unsent',
+      channel_id: 101,
+      message_id: 500,
+    }),
+    studentUser,
+    0
+  );
+  assert.equal(afterUnsent.channels[0].chat_messages_count, 5);
+
+  // thread.created from another user increments unread_count and qa breakdown
+  const afterThread = reduceChannelsOnRealtimeEvent(
+    baseChannels,
+    normalizeReverbPayloadToEvent({
+      type: 'thread.created',
+      channel_id: 100,
+      actor_id: 22,
+      thread: {
+        id: 77,
+        channel_id: 100,
+        announcement_id: null,
+        subject_hashtag: '#Midterm',
+        content: 'What chapters are covered?',
+        is_private: false,
+        is_resolved: false,
+        is_pinned_faq: false,
+        created_at: '2026-11-20T09:10:00Z',
+        updated_at: '2026-11-20T09:10:00Z',
+        author: { id: 22, name: 'Maria', role: 'student', avatar_url: null },
+        replies: [],
+      },
+    }),
+    studentUser,
+    0
+  );
+  assert.equal(afterThread.mutated, true);
+  assert.equal(afterThread.channels[0].unread_count, 2);
+  assert.equal(afterThread.channels[0].new_activity_breakdown?.qa, 1);
+});
+
+test('planRealtimeEventEffects exhaustively handles all 18 RealtimeEvent types', () => {
+  const hub = makeChannel(100);
+  const urgentAnn = makeAnnouncement(99, { is_urgent: true, is_pinned: true });
+
+  for (const evType of ALL_REALTIME_EVENT_TYPES) {
+    const ev: RealtimeEvent = {
+      revision: 1,
+      type: evType,
+      channel_id: 100,
+      actor_id: 2,
+      target_user_id: studentUser.id,
+      action: 'approved',
+      announcement: evType.startsWith('announcement.') ? urgentAnn : undefined,
+      timestamp: '2026-11-20T09:00:00Z',
+    };
+
+    const plan = planRealtimeEventEffects(ev, studentUser, {
+      channels: [hub],
+      cachedRosterChannelIds: new Set([100]),
+    });
+
+    assert.equal(typeof plan.shouldScheduleChannelRefresh, 'boolean');
+    assert.equal(typeof plan.shouldImmediateChannelRefresh, 'boolean');
+  }
+
+  // connected is explicitly ignored with reason
+  const connectedPlan = planRealtimeEventEffects(
+    normalizeReverbPayloadToEvent({ type: 'connected' }),
+    studentUser
+  );
+  assert.equal(connectedPlan.shouldScheduleChannelRefresh, false);
+  assert.ok(connectedPlan.ignoredReason);
+
+  // announcement.urgent with minimal global payload triggers urgent check
+  const minimalUrgentPlan = planRealtimeEventEffects(
+    normalizeReverbPayloadToEvent({
+      type: 'announcement.urgent',
+      channel_id: 100,
+      actor_id: 2,
+    }),
+    studentUser
+  );
+  assert.equal(minimalUrgentPlan.shouldCheckUrgentAnnouncement, true);
+  assert.equal(minimalUrgentPlan.urgentPopupCandidate, null);
+
+  // announcement.urgent with full payload surfaces urgentPopupCandidate unless dismissed
+  const fullUrgentPlan = planRealtimeEventEffects(
+    normalizeReverbPayloadToEvent({
+      type: 'announcement.urgent',
+      channel_id: 100,
+      actor_id: 2,
+      announcement: urgentAnn,
+    }),
+    studentUser
+  );
+  assert.equal(fullUrgentPlan.urgentPopupCandidate?.id, 99);
+
+  const dismissedPlan = planRealtimeEventEffects(
+    normalizeReverbPayloadToEvent({
+      type: 'announcement.urgent',
+      channel_id: 100,
+      actor_id: 2,
+      announcement: urgentAnn,
+    }),
+    studentUser,
+    { dismissedUrgentIds: new Set([99]) }
+  );
+  assert.equal(dismissedPlan.urgentPopupCandidate, null);
+
+  // membership.changed targeting student triggers immediate refresh + approval toast
+  const memberApprovedPlan = planRealtimeEventEffects(
+    normalizeReverbPayloadToEvent({
+      type: 'membership.changed',
+      channel_id: 100,
+      target_user_id: studentUser.id,
+      action: 'approved',
+      actor_id: 2,
+    }),
+    studentUser,
+    { channels: [hub] }
+  );
+  assert.equal(memberApprovedPlan.shouldImmediateChannelRefresh, true);
+  assert.equal(memberApprovedPlan.toast?.variant, 'success');
+
+  // membership.changed for course admin refreshes ONLY affected channel roster
+  const adminRosterPlan = planRealtimeEventEffects(
+    normalizeReverbPayloadToEvent({
+      type: 'membership.changed',
+      channel_id: 100,
+      target_user_id: studentUser.id,
+      action: 'requested',
+      actor_id: studentUser.id,
+    }),
+    facultyUser,
+    { channels: [hub] }
+  );
+  assert.equal(adminRosterPlan.rosterChannelIdToRefresh, 100);
+  assert.equal(adminRosterPlan.toast, null);
+
+  // admin.updated bumps adminVersion for IT Admin
+  const itAdminPlan = planRealtimeEventEffects(
+    normalizeReverbPayloadToEvent({ type: 'admin.updated' }),
+    itAdminUser
+  );
+  assert.equal(itAdminPlan.shouldBumpAdminVersion, true);
+  assert.equal(itAdminPlan.shouldScheduleChannelRefresh, false);
+});
+
+test('patchAnnouncementFeedOnRealtimeEvent preserves local ack flag on other users acks and removes deleted cards', () => {
+  const initial = announcementFeedReducer(
+    createInitialAnnouncementFeedState(10),
+    {
+      type: 'LOAD_SUCCESS',
+      items: [makeAnnouncement(10), makeAnnouncement(11)],
+      meta: { current_page: 1, last_page: 1, per_page: 10, total: 2 },
+      append: false,
+    }
+  );
+
+  // Another student (id 77) acknowledges announcement 10: broadcast says has_current_user_acknowledged=true
+  // Local viewer (id 10) has NOT acknowledged yet, so local flag MUST stay false!
+  const otherAckEvent = normalizeReverbPayloadToEvent({
+    type: 'announcement.acknowledged',
+    channel_id: 100,
+    actor_id: 77,
+    announcement: makeAnnouncement(10, {
+      read_reach: {
+        acknowledged_count: 11,
+        enrolled_total: 40,
+        percentage: 27.5,
+        has_current_user_acknowledged: true,
+      },
+    }),
+  });
+
+  const afterOtherAck = patchAnnouncementFeedOnRealtimeEvent(
+    initial,
+    otherAckEvent,
+    studentUser.id
+  );
+  assert.equal(afterOtherAck.shouldRefetch, false);
+  assert.equal(afterOtherAck.state.items[0].read_reach.acknowledged_count, 11);
+  assert.equal(afterOtherAck.state.items[0].read_reach.percentage, 27.5);
+  assert.equal(
+    afterOtherAck.state.items[0].read_reach.has_current_user_acknowledged,
+    false
+  );
+
+  // announcement.deleted removes the matching card and decrements total
+  const deleteEvent = normalizeReverbPayloadToEvent({
+    type: 'announcement.deleted',
+    channel_id: 100,
+    message_id: 11,
+  });
+  const afterDelete = patchAnnouncementFeedOnRealtimeEvent(
+    afterOtherAck.state,
+    deleteEvent,
+    studentUser.id
+  );
+  assert.equal(afterDelete.shouldRefetch, false);
+  assert.deepEqual(
+    afterDelete.state.items.map((a) => a.id),
+    [10]
+  );
+  assert.equal(afterDelete.state.meta.total, 1);
+});
+
+test('resolvePushNotificationRoute maps course hub and campus-wide push payloads accurately', () => {
+  const knownCourseHubs = new Set<number>([100, 101]);
+
+  assert.equal(
+    resolvePushNotificationRoute(
+      { type: 'announcement.urgent', channel_id: 100, announcement_id: 55 },
+      knownCourseHubs
+    ),
+    '/(drawer)/channels/100?announcementId=55'
+  );
+
+  // Campus-wide university channel (id 1 not in course hubs) routes to announcements feed
+  assert.equal(
+    resolvePushNotificationRoute(
+      { type: 'announcement.urgent', channel_id: 1, announcement_id: 55 },
+      knownCourseHubs
+    ),
+    '/(drawer)/announcements?announcementId=55'
+  );
+
+  assert.equal(resolvePushNotificationRoute(null, knownCourseHubs), null);
+  assert.equal(resolvePushNotificationRoute({}, knownCourseHubs), null);
+});
+
+test('registerExpoPushTokenApi posts to canonical POST /devices/token with Bearer auth', async () => {
+  const originalFetch = globalThis.fetch;
+  const captured: { url: string; method?: string; body?: string; auth?: string }[] = [];
+
+  try {
+    setSecureTokenStorageAdapterForTests({
+      getItemAsync: async () => 'token-push-123',
+      setItemAsync: async () => {},
+      deleteItemAsync: async () => {},
+    });
+    await setSecureToken('token-push-123');
+
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const headers = (init?.headers || {}) as Record<string, string>;
+      captured.push({
+        url: String(input),
+        method: init?.method,
+        body: typeof init?.body === 'string' ? init.body : undefined,
+        auth: headers.Authorization,
+      });
+      return {
+        ok: true,
+        status: 201,
+        headers: { get: () => null } as unknown as Headers,
+        json: async () => ({ message: 'Registered' }),
+      } as Response;
+    }) as typeof fetch;
+
+    await registerExpoPushTokenApi('ExponentPushToken[abc123]', 'android');
+
+    assert.equal(captured.length, 1);
+    assert.ok(captured[0].url.endsWith('/devices/token'));
+    assert.equal(captured[0].method, 'POST');
+    assert.equal(captured[0].auth, 'Bearer token-push-123');
+    assert.deepEqual(JSON.parse(captured[0].body || '{}'), {
+      expo_push_token: 'ExponentPushToken[abc123]',
+      platform: 'android',
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+    await clearSecureToken();
+  }
+});

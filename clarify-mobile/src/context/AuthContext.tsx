@@ -12,8 +12,8 @@ import {
   loginApi,
   logoutApi,
   onSessionExpired,
-  registerDeviceForPushNotificationsAsync,
 } from '../lib/api-client';
+import { disconnectReverb } from '../lib/reverb-client';
 import {
   clearSecureToken,
   getSecureToken,
@@ -71,6 +71,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const clearSession = useCallback(async (expiredMessage?: string | null) => {
+    disconnectReverb();
     await clearSecureToken();
     setUserState(null);
     if (expiredMessage) {
@@ -81,6 +82,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // Listen for 401 Unauthorized responses across any authenticated API call
   useEffect(() => {
     const unsubscribe = onSessionExpired((message) => {
+      disconnectReverb();
       setUserState(null);
       setSessionExpiredMessage(
         message || 'Your session has expired. Please sign in again.'
@@ -107,7 +109,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         const meRes = await getMeApi();
         if (isMounted && meRes?.data) {
           setUserState(meRes.data);
-          void registerDeviceForPushNotificationsAsync();
         }
       } catch (err) {
         const apiErr = err as ApiError;
@@ -155,13 +156,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         `Signed in to ${domainLabel} as ${authenticatedUser.name}.`,
         'success'
       );
-      void registerDeviceForPushNotificationsAsync();
       return authenticatedUser;
     },
     [showToast]
   );
 
   const logout = useCallback(async () => {
+    disconnectReverb();
     await logoutApi();
     setUserState(null);
     setSessionExpiredMessage(null);

@@ -61,6 +61,7 @@ export type AnnouncementFeedAction =
   | { type: 'ACK_SUCCESS'; announcement: Announcement }
   | { type: 'ACK_FINISH'; announcementId: number }
   | { type: 'PATCH_ANNOUNCEMENT'; announcement: Announcement }
+  | { type: 'REMOVE_ANNOUNCEMENT'; announcementId: number }
   | { type: 'RESET'; perPage?: number };
 
 /**
@@ -179,6 +180,26 @@ export function announcementFeedReducer(
           item.id === action.announcement.id ? action.announcement : item
         ),
       };
+
+    case 'REMOVE_ANNOUNCEMENT': {
+      const nextItems = state.items.filter(
+        (item) => item.id !== action.announcementId
+      );
+      if (nextItems.length === state.items.length) {
+        return state;
+      }
+      return {
+        ...state,
+        items: nextItems,
+        meta: {
+          ...state.meta,
+          total: Math.max(0, state.meta.total - 1),
+        },
+        ackLoadingIds: state.ackLoadingIds.filter(
+          (id) => id !== action.announcementId
+        ),
+      };
+    }
 
     case 'RESET':
       return createInitialAnnouncementFeedState(

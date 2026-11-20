@@ -1,5 +1,5 @@
 import { Feather } from '@expo/vector-icons';
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import {
   ActivityIndicator,
   Image,
@@ -50,13 +50,15 @@ export function ProfileSettingsModal({
   const [generalError, setGeneralError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
 
-  useEffect(() => {
-    if (visible && user) {
-      setContactNumber(user.contact_number || '');
-      setFieldErrors({});
-      setGeneralError(null);
-    }
-  }, [visible, user]);
+  const [prevVisible, setPrevVisible] = useState(visible);
+  if (visible && !prevVisible) {
+    setPrevVisible(true);
+    setContactNumber(user?.contact_number || '');
+    setFieldErrors({});
+    setGeneralError(null);
+  } else if (!visible && prevVisible) {
+    setPrevVisible(false);
+  }
 
   if (!user) {
     return null;

@@ -123,7 +123,15 @@ export default function MobileInstructorsScreen() {
   );
 
   useEffect(() => {
-    void fetchInstructors(1, 'initial');
+    let cancelled = false;
+    void Promise.resolve().then(() => {
+      if (!cancelled) {
+        void fetchInstructors(1, 'initial');
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [fetchInstructors]);
 
   const hasMore = meta.current_page < meta.last_page;

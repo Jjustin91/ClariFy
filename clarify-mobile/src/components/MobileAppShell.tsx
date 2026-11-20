@@ -1,6 +1,6 @@
 import { Feather } from '@expo/vector-icons';
 import { usePathname, useRouter } from 'expo-router';
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   AccessibilityInfo,
   ActivityIndicator,
@@ -66,8 +66,12 @@ export function MobileAppShell({
   const [drawerMounted, setDrawerMounted] = useState(false);
   const [reduceMotion, setReduceMotion] = useState(false);
 
-  const slideAnim = useRef(new Animated.Value(DRAWER_WIDTH)).current;
-  const backdropOpacity = useRef(new Animated.Value(0)).current;
+  const [slideAnim] = useState(() => new Animated.Value(DRAWER_WIDTH));
+  const [backdropOpacity] = useState(() => new Animated.Value(0));
+
+  if (isSidebarOpen && !drawerMounted) {
+    setDrawerMounted(true);
+  }
 
   useEffect(() => {
     let mounted = true;
@@ -93,7 +97,6 @@ export function MobileAppShell({
   useEffect(() => {
     const duration = reduceMotion ? 0 : 200;
     if (isSidebarOpen) {
-      setDrawerMounted(true);
       Animated.parallel([
         Animated.timing(slideAnim, {
           toValue: 0,
@@ -571,7 +574,11 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
   },
   drawerBackdrop: {
-    ...StyleSheet.absoluteFillObject,
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
     backgroundColor: colors.overlayBackdrop,
   },
   drawerPanel: {

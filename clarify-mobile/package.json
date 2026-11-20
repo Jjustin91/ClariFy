@@ -20,6 +20,8 @@
     "expo-symbols": "~58.0.5",
     "expo-system-ui": "~58.0.7",
     "expo-web-browser": "~58.1.0",
+    "laravel-echo": "^2.6.3",
+    "pusher-js": "^8.6.0",
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "react-native": "0.88.1",
@@ -33,6 +35,8 @@
   "devDependencies": {
     "@types/node": "^26.6.6",
     "@types/react": "~19.3.0",
+    "eslint": "^9.0.0",
+    "eslint-config-expo": "~58.0.4",
     "typescript": "~6.0.3"
   },
   "scripts": {
@@ -42,7 +46,7 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "lint": "expo lint",
-    "test": "node --experimental-strip-types --test src/lib/api-client.test.ts src/lib/feed-reducer.test.ts"
+    "test": "node --experimental-strip-types --test src/lib/api-client.test.ts src/lib/feed-reducer.test.ts src/lib/realtime-reducer.test.ts"
   },
   "private": true
 }

@@ -277,11 +277,11 @@ test('apiClient handles request timeout and network failure with status 0 ApiErr
 
     // 2. Multipart FormData _method=PATCH spoofing without forcing Content-Type: application/json
     let capturedHeaders: Record<string, string> = {};
-    let capturedFormData: FormData | null = null;
+    const capturedBody: { formData: FormData | null } = { formData: null };
 
     globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
       capturedHeaders = (init?.headers || {}) as Record<string, string>;
-      capturedFormData = init?.body as FormData;
+      capturedBody.formData = init?.body as FormData;
       return createMockFetchResponse({
         status: 200,
         body: {
@@ -303,7 +303,7 @@ test('apiClient handles request timeout and network failure with status 0 ApiErr
 
     assert.equal(capturedHeaders.Accept, 'application/json');
     assert.equal(capturedHeaders['Content-Type'], undefined);
-    assert.equal(capturedFormData?.get('_method'), 'PATCH');
+    assert.equal(capturedBody.formData?.get('_method'), 'PATCH');
   } finally {
     globalThis.fetch = originalFetch;
   }

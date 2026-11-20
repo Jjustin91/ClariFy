@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useReducer, useRef } from 'react';
+import { AppState } from 'react-native';
 
 import { useAuth } from '../context/AuthContext';
+import { useOptionalRealtime } from '../context/RealtimeContext';
 import {
   acknowledgeAnnouncementApi,
   getAnnouncementsApi,
@@ -11,6 +13,10 @@ import {
   hasMoreAnnouncementPages,
   shouldRefetchAnnouncementOnAckError,
 } from '../lib/feed-reducer';
+import {
+  computeDebouncedRefreshDelayMs,
+  patchAnnouncementFeedOnRealtimeEvent,
+} from '../lib/realtime-reducer';
 import type { Announcement, ApiError } from '../types/api';
 
 export interface UseAnnouncementsFeedParams {
@@ -24,7 +30,8 @@ export interface UseAnnouncementsFeedParams {
 
 /**
  * Reusable server-paginated announcements feed hook with pull-to-refresh,
- * server-authoritative Read Reach acknowledge, and targeted 409/422 reconciliation.
+ * server-authoritative Read Reach acknowledge, targeted 409/422 reconciliation,
+ * and realtime in-place patching + debounced refresh.
  */
 export function useAnnouncementsFeed({
   channelId = null,
@@ -34,28 +41,44 @@ export function useAnnouncementsFeed({
   perPage = 10,
   enabled = true,
 }: UseAnnouncementsFeedParams) {
-  const { showToast } = useAuth();
+  const { user, showToast } = useAuth();
+  const realtime = useOptionalRealtime();
   const [state, dispatch] = useReducer(
     announcementFeedReducer,
     perPage,
     createInitialAnnouncementFeedState
   );
 
+  const stateRef = useRef(state);
+  useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
+
   const requestSeqRef = useRef(0);
   const inFlightMoreRef = useRef(false);
   const mountedRef = useRef(true);
+  const debouncedRealtimeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  );
+  const lastAnnouncementVersionRef = useRef<number>(
+    realtime?.announcementVersion ?? 0
+  );
 
   useEffect(() => {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
+      if (debouncedRealtimeTimerRef.current) {
+        clearTimeout(debouncedRealtimeTimerRef.current);
+        debouncedRealtimeTimerRef.current = null;
+      }
     };
   }, []);
 
   const fetchPage = useCallback(
     async (
       targetPage: number,
-      mode: 'initial' | 'refresh' | 'more'
+      mode: 'initial' | 'refresh' | 'silent' | 'more'
     ): Promise<void> => {
       if (!enabled) {
         return;
@@ -67,7 +90,7 @@ export function useAnnouncementsFeed({
         dispatch({ type: 'LOAD_MORE_START' });
       } else if (mode === 'refresh') {
         dispatch({ type: 'REFRESH_START' });
-      } else {
+      } else if (mode === 'initial') {
         dispatch({ type: 'LOAD_START' });
       }
 
@@ -105,10 +128,12 @@ export function useAnnouncementsFeed({
         if (!mountedRef.current || seq !== requestSeqRef.current) {
           return;
         }
-        dispatch({
-          type: 'LOAD_ERROR',
-          error: err as ApiError,
-        });
+        if (mode !== 'silent') {
+          dispatch({
+            type: 'LOAD_ERROR',
+            error: err as ApiError,
+          });
+        }
       } finally {
         if (mode === 'more') {
           inFlightMoreRef.current = false;
@@ -118,12 +143,79 @@ export function useAnnouncementsFeed({
     [enabled, channelId, search, tag, sort, perPage]
   );
 
+  const scheduleDebouncedSilentRefresh = useCallback(() => {
+    if (!enabled || AppState.currentState !== 'active') {
+      return;
+    }
+    if (debouncedRealtimeTimerRef.current) {
+      return;
+    }
+    const delayMs = computeDebouncedRefreshDelayMs();
+    debouncedRealtimeTimerRef.current = setTimeout(() => {
+      debouncedRealtimeTimerRef.current = null;
+      if (!mountedRef.current || AppState.currentState !== 'active') {
+        return;
+      }
+      void fetchPage(1, 'silent');
+    }, delayMs);
+  }, [enabled, fetchPage]);
+
   useEffect(() => {
     if (!enabled) {
       return;
     }
     void fetchPage(1, 'initial');
   }, [enabled, fetchPage]);
+
+  // Subscribe to realtime announcement events: patch in-place when possible, else debounced refresh
+  useEffect(() => {
+    if (!enabled || !realtime || !user?.id) {
+      return;
+    }
+
+    return realtime.subscribeRealtimeEvents((event) => {
+      const { state: nextState, shouldRefetch } =
+        patchAnnouncementFeedOnRealtimeEvent(
+          stateRef.current,
+          event,
+          user.id,
+          channelId
+        );
+
+      if (nextState !== stateRef.current) {
+        if (event.type === 'announcement.deleted') {
+          const targetId = event.announcement?.id ?? event.message_id;
+          if (targetId && targetId > 0) {
+            dispatch({ type: 'REMOVE_ANNOUNCEMENT', announcementId: targetId });
+          }
+        } else {
+          const updatedItem = nextState.items.find((item) => {
+            const prev = stateRef.current.items.find((p) => p.id === item.id);
+            return prev !== item;
+          });
+          if (updatedItem) {
+            dispatch({ type: 'PATCH_ANNOUNCEMENT', announcement: updatedItem });
+          }
+        }
+      }
+
+      if (shouldRefetch) {
+        scheduleDebouncedSilentRefresh();
+      }
+    });
+  }, [enabled, realtime, user?.id, channelId, scheduleDebouncedSilentRefresh]);
+
+  // React to foreground catch-up or manual announcementVersion bumps
+  useEffect(() => {
+    if (!enabled || !realtime) {
+      return;
+    }
+    if (realtime.announcementVersion === lastAnnouncementVersionRef.current) {
+      return;
+    }
+    lastAnnouncementVersionRef.current = realtime.announcementVersion;
+    scheduleDebouncedSilentRefresh();
+  }, [enabled, realtime, realtime?.announcementVersion, scheduleDebouncedSilentRefresh]);
 
   const refresh = useCallback(async () => {
     await fetchPage(1, 'refresh');
@@ -148,7 +240,6 @@ export function useAnnouncementsFeed({
 
   /**
    * Fallback targeted refresh for a single announcement ID when acknowledge returns 409 or 422.
-   * Uses existing GET /announcements until backend adds GET /announcements/{id} (see API REQUEST).
    */
   const refetchSingleAnnouncementFallback = useCallback(
     async (target: Announcement) => {

@@ -819,7 +819,7 @@ export async function registerExpoPushTokenApi(
     }
   }
 
-  await apiClient('/devices/tokens', {
+  await apiClient('/devices/token', {
     method: 'POST',
     body: JSON.stringify({
       expo_push_token: trimmed,

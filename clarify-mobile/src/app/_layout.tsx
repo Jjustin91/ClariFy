@@ -108,7 +108,7 @@ function RootNavigationGate() {
 
   return (
     <View style={styles.rootFlex}>
-      <StatusBar style="light" backgroundColor={colors.ustpNavy} />
+      <StatusBar style="light" />
       <Stack screenOptions={{ headerShown: false }}>
         <Stack.Screen name="index" />
         <Stack.Screen name="(auth)" />
