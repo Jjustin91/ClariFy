@@ -41,7 +41,7 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "lint": "expo lint",
-    "test": "node --experimental-strip-types --test src/lib/api-client.test.ts"
+    "test": "node --experimental-strip-types --test src/lib/api-client.test.ts src/lib/feed-reducer.test.ts"
   },
   "private": true
 }
