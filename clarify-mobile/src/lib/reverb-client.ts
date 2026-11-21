@@ -290,17 +290,6 @@ export function getReverbEcho(): Echo<'reverb'> | null {
 
     echoInstance = echo;
     echoToken = currentToken;
-        if (__DEV__) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const rawPusher = (echo.connector as any)?.pusher;
-      rawPusher?.bind_global(
-        (eventName: string, data: { type?: string; channel_id?: number }) => {
-          if (!String(eventName).startsWith('pusher')) {
-            console.log('[reverb] RAW event', eventName, data?.type, data?.channel_id);
-          }
-        }
-      );
-    }
     return echo;
   } catch {
     disconnectReverb();
