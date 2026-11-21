@@ -1,9 +1,13 @@
 import Echo from 'laravel-echo';
-import Pusher from 'pusher-js';
+import PusherImport from 'pusher-js';
 
 import type { RealtimeEvent } from '../types/api.ts';
 import { API_BASE_URL } from './api-client.ts';
 import { getCachedBearerToken } from './secure-token.ts';
+
+const Pusher: typeof PusherImport =
+  (PusherImport as unknown as { Pusher?: typeof PusherImport }).Pusher ??
+  PusherImport;
 
 export interface ReverbBroadcastPayload {
   type: RealtimeEvent['type'];
@@ -106,7 +110,7 @@ export function resolveReverbConfig(
     wsPort: resolvedPort,
     wssPort: resolvedPort,
     forceTLS,
-    enabledTransports: forceTLS ? ['wss'] : ['ws', 'wss'],
+    enabledTransports: ['ws', 'wss'],
     authEndpoint: `${normalizedApiBase}/broadcasting/auth`,
     isLocalHost,
   };
@@ -286,6 +290,17 @@ export function getReverbEcho(): Echo<'reverb'> | null {
 
     echoInstance = echo;
     echoToken = currentToken;
+        if (__DEV__) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const rawPusher = (echo.connector as any)?.pusher;
+      rawPusher?.bind_global(
+        (eventName: string, data: { type?: string; channel_id?: number }) => {
+          if (!String(eventName).startsWith('pusher')) {
+            console.log('[reverb] RAW event', eventName, data?.type, data?.channel_id);
+          }
+        }
+      );
+    }
     return echo;
   } catch {
     disconnectReverb();
@@ -400,6 +415,9 @@ export function subscribeChannelReverb(
 ): () => void {
   const numericId = Number(channelId);
   const echo = getReverbEcho();
+    if (__DEV__) {
+    console.log('[reverb] subscribeChannel called', numericId, 'echo:', Boolean(echo));   // <-- NEW 1
+  }
   if (!echo || !numericId || numericId <= 0) {
     return () => {};
   }
@@ -411,7 +429,17 @@ export function subscribeChannelReverb(
       listeners = new Set();
       channelListenersByHubId.set(numericId, listeners);
       const channel = echo.private(channelName);
+      if (__DEV__) {                                                                       // <-- NEW 2
+        channel
+          .subscribed(() => console.log('[reverb] subscribed', channelName))
+          .error((e: unknown) =>
+            console.log('[reverb] channel subscription_error', channelName, JSON.stringify(e))
+          );
+      }
       channel.listen('.realtime.updated', (data: ReverbBroadcastPayload) => {
+        if (__DEV__) {                                                                     // <-- NEW 3
+          console.log('[reverb] event on', channelName, data?.type, 'listeners:', channelListenersByHubId.get(numericId)?.size);
+        }
         const activeSet = channelListenersByHubId.get(numericId);
         if (!activeSet) return;
         activeSet.forEach((cb) => {

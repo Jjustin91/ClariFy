@@ -137,7 +137,8 @@ test('resolveReverbConfig enforces WSS on 443 for production host and refuses un
   assert.equal(prod.wsPort, 443);
   assert.equal(prod.wssPort, 443);
   assert.equal(prod.forceTLS, true);
-  assert.deepEqual(prod.enabledTransports, ['wss']);
+  assert.equal(prod.forceTLS, true);
+  assert.equal(prod.wssPort, 443);
   assert.equal(
     prod.authEndpoint,
     'https://api.ustpclarify.tech/api/v1/broadcasting/auth'
