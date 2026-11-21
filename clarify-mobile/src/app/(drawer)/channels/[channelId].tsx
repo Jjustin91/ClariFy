@@ -1,8 +1,17 @@
 import { Feather } from '@expo/vector-icons';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useCallback, useMemo, useRef, useState } from 'react';
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useReducer,
+  useRef,
+  useState,
+} from 'react';
 import {
   ActivityIndicator,
+  AppState,
+  type AppStateStatus,
   FlatList,
   Pressable,
   RefreshControl,
@@ -12,8 +21,14 @@ import {
 } from 'react-native';
 
 import { AnnouncementCard } from '@/components/AnnouncementCard';
+import { ClassFaqsDrawer } from '@/components/ClassFaqsDrawer';
 import { CourseHubChatView } from '@/components/CourseHubChatView';
+import {
+  CourseHubManagerModal,
+  type CourseHubModalTab,
+} from '@/components/CourseHubManagerModal';
 import { CourseHubQaView } from '@/components/CourseHubQaView';
+import { CourseHubSettingsModal } from '@/components/CourseHubSettingsModal';
 import { MobileAppShell } from '@/components/MobileAppShell';
 import { ScopedChannelsDrawer } from '@/components/ScopedChannelsDrawer';
 import {
@@ -25,30 +40,44 @@ import { useAuth } from '@/context/AuthContext';
 import { useChannels } from '@/context/ChannelsContext';
 import { useOptionalRealtime } from '@/context/RealtimeContext';
 import { useAnnouncementsFeed } from '@/hooks/useAnnouncementsFeed';
-import { markChannelSeenApi } from '@/lib/api-client';
+import { getChannelThreadsApi, markChannelSeenApi } from '@/lib/api-client';
 import {
   formatCourseHubName,
   formatEnrolledRosterSummary,
   formatSubChannelDisplayName,
-  formatUnreadBadgeCount,
   getChannelFacultyLabel,
   getChannelParentHubId,
   getSubChannelsForHub,
+  isUserCourseAdmin,
   resolveCourseHubSelection,
 } from '@/lib/domain-logic';
 import { getChannelMembersCount } from '@/lib/feed-reducer';
-import { resolveHubChatChannels } from '@/lib/qa-reducer';
+import {
+  courseQaReducer,
+  createInitialCourseQaState,
+  extractPublishedFaqs,
+  resolveHubChatChannels,
+  sanitizeThreadForPrivacy,
+} from '@/lib/qa-reducer';
+import { computeDebouncedRefreshDelayMs } from '@/lib/realtime-reducer';
+import {
+  subscribeChannelReverb,
+  type ReverbBroadcastPayload,
+} from '@/lib/reverb-client';
 import { colors, radii, spacing, touchTarget, typography } from '@/theme';
-import type { Announcement, ApiError, Channel } from '@/types/api';
+import type { Announcement, ApiError, Channel, QaThread } from '@/types/api';
 
-type HubTabKey = 'noticeboard' | 'qa' | 'chat';
+type HubSpaceKey = 'noticeboard' | 'qa' | 'chat';
 
 /**
  * ClariFy Mobile Course Hub screen ported from clarify-web/app/channels/[channelId]/page.tsx.
- * - Strict invalid channel ID guard (never silently opens another hub when an unknown ID is requested)
- * - Noticeboard tab (read-only announcements feed + Read Reach + acknowledge)
- * - Chat tab (cursor-paginated inverted FlatList, optimistic send/retry, unsend, focused Reverb subscription)
- * - Calls markChannelSeenApi on focus and clears unseen hub badges locally
+ * - Left Course Hubs drawer switches between Noticeboard Feed, Isolated Q&A Threads,
+ *   and custom `#channels` (matching clarify-web; no 3-button segmented tab bar).
+ * - Top bar includes the Course Hub switcher pill and right-hand Class FAQs (N) slide-over drawer.
+ * - Course Hub Header Bar displays hub title, active space, Course Admin Edit shortcut,
+ *   and Settings & Roster gear button with live pending-requests badge.
+ * - Unified CourseHubManagerModal handles Browse Course Hubs, Add Course Hub,
+ *   Edit/Delete Course Hub, and Add Channel.
  */
 export default function MobileChannelHubScreen() {
   const router = useRouter();
@@ -67,16 +96,33 @@ export default function MobileChannelHubScreen() {
   const { user } = useAuth();
   const {
     channels,
+    joinedCourseHubs,
     isLoadingChannels,
     isRefreshingChannels,
     channelsError,
     refreshChannels,
     applyChannelsPatch,
+    rosterByChannelId,
+    refreshChannelRoster,
   } = useChannels();
   const realtime = useOptionalRealtime();
 
+  // Overlays & navigation state
   const [isChannelsDrawerOpen, setIsChannelsDrawerOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState<HubTabKey>(() => {
+  const [isFaqsDrawerOpen, setIsFaqsDrawerOpen] = useState(false);
+  const [highlightedFaqId, setHighlightedFaqId] = useState<number | null>(null);
+  const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
+  const [managerModalState, setManagerModalState] = useState<{
+    visible: boolean;
+    initialTab: CourseHubModalTab;
+    targetHubId: number | null;
+  }>({
+    visible: false,
+    initialTab: 'browse',
+    targetHubId: null,
+  });
+
+  const [activeSpace, setActiveSpace] = useState<HubSpaceKey>(() => {
     if (params?.tab === 'chat') return 'chat';
     if (params?.tab === 'qa') return 'qa';
     return 'noticeboard';
@@ -91,6 +137,18 @@ export default function MobileChannelHubScreen() {
   const [lastHandledRouteKey, setLastHandledRouteKey] = useState<string>(
     `${rawChannelParam ?? ''}:${params?.tab ?? ''}`
   );
+
+  // Class FAQs thread state (shared across Noticeboard, Q&A, and Chat spaces)
+  const [faqState, dispatchFaq] = useReducer(
+    courseQaReducer,
+    0,
+    createInitialCourseQaState
+  );
+  const [appActiveEpoch, setAppActiveEpoch] = useState(0);
+  const isAppActiveRef = useRef<boolean>(AppState.currentState === 'active');
+  const faqFetchInFlightRef = useRef<Promise<void> | null>(null);
+  const faqSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const effectiveHubIdRef = useRef<number>(0);
 
   // Resolve active hub strictly: if an explicit non-zero channelId was requested and is missing
   // once channels finish loading, report a 404 error and NEVER fall back to another Course Hub.
@@ -157,18 +215,22 @@ export default function MobileChannelHubScreen() {
   const activeChannel = resolution.activeHub;
   const effectiveHubId = activeChannel?.id ?? 0;
 
-  // Sync tab & sub-channel selection when navigating to a new route or deep-linking directly to a sub-channel
+  useEffect(() => {
+    effectiveHubIdRef.current = effectiveHubId;
+  }, [effectiveHubId]);
+
+  // Sync space & sub-channel selection when navigating to a new route or deep-linking directly to a sub-channel
   const routeSyncKey = `${rawChannelParam ?? ''}:${params?.tab ?? ''}:${resolution.requestedSubChannel?.id ?? ''}`;
   if (routeSyncKey !== lastHandledRouteKey) {
     setLastHandledRouteKey(routeSyncKey);
     if (params?.tab === 'qa') {
-      setActiveTab('qa');
+      setActiveSpace('qa');
       setSelectedSubChannelId(null);
     } else if (params?.tab === 'chat' || resolution.requestedSubChannel) {
-      setActiveTab('chat');
+      setActiveSpace('chat');
       setSelectedSubChannelId(resolution.requestedSubChannel?.id ?? null);
-    } else if (params?.tab === 'noticeboard') {
-      setActiveTab('noticeboard');
+    } else if (params?.tab === 'noticeboard' || params?.tab === 'feed') {
+      setActiveSpace('noticeboard');
       setSelectedSubChannelId(null);
     }
   }
@@ -181,13 +243,12 @@ export default function MobileChannelHubScreen() {
     [channels, effectiveHubId]
   );
 
-  // Deduplicated chat channels: prevents duplicate "# general" pills when sub-channels already include #general
+  // Deduplicated chat channels: prevents duplicate "# general" alongside real #general sub-channel
   const { chatChannels, defaultChatChannel } = useMemo(
     () => resolveHubChatChannels(activeChannel, subChannels),
     [activeChannel, subChannels]
   );
 
-  // Derive active chat target (explicitly selected sub-channel, requested sub-channel, or deduplicated default)
   const effectiveChatChannel = useMemo<Channel | undefined>(() => {
     if (!activeChannel) return undefined;
     if (selectedSubChannelId) {
@@ -208,6 +269,206 @@ export default function MobileChannelHubScreen() {
 
   const effectiveChatChannelId = effectiveChatChannel?.id ?? 0;
 
+  // Class FAQs thread fetcher (de-duplicated, AppState-aware)
+  const clearFaqSyncTimer = useCallback(() => {
+    if (faqSyncTimerRef.current) {
+      clearTimeout(faqSyncTimerRef.current);
+      faqSyncTimerRef.current = null;
+    }
+  }, []);
+
+  const fetchHubThreadsForFaqs = useCallback(
+    async (mode: 'initial' | 'refresh' | 'silent') => {
+      if (effectiveHubId <= 0 || resolution.isInvalidChannel) return;
+      if (mode === 'silent' && !isAppActiveRef.current) return;
+      if (faqFetchInFlightRef.current) {
+        return faqFetchInFlightRef.current;
+      }
+
+      if (mode === 'initial') {
+        dispatchFaq({ type: 'LOAD_START' });
+      } else if (mode === 'refresh') {
+        dispatchFaq({ type: 'REFRESH_START' });
+      }
+
+      const targetHubId = effectiveHubId;
+      const req = (async () => {
+        try {
+          const res = await getChannelThreadsApi(targetHubId);
+          if (effectiveHubIdRef.current !== targetHubId) return;
+          dispatchFaq({
+            type: 'LOAD_SUCCESS',
+            channelId: targetHubId,
+            threads: Array.isArray(res.data) ? res.data : [],
+          });
+        } catch (err) {
+          if (effectiveHubIdRef.current !== targetHubId) return;
+          const apiErr = err as ApiError;
+          dispatchFaq({
+            type: 'LOAD_ERROR',
+            error: apiErr?.message
+              ? apiErr
+              : {
+                  status: apiErr?.status ?? 500,
+                  message: 'Could not load Class FAQs for this Course Hub.',
+                },
+          });
+        } finally {
+          faqFetchInFlightRef.current = null;
+        }
+      })();
+
+      faqFetchInFlightRef.current = req;
+      return req;
+    },
+    [effectiveHubId, resolution.isInvalidChannel]
+  );
+
+  const scheduleFaqDebouncedSync = useCallback(() => {
+    if (
+      !isAppActiveRef.current ||
+      !isScreenFocused ||
+      effectiveHubId <= 0 ||
+      resolution.isInvalidChannel
+    ) {
+      return;
+    }
+    if (faqSyncTimerRef.current) return;
+    const delayMs = computeDebouncedRefreshDelayMs();
+    faqSyncTimerRef.current = setTimeout(() => {
+      faqSyncTimerRef.current = null;
+      if (!isAppActiveRef.current || !isScreenFocused) return;
+      void fetchHubThreadsForFaqs('silent');
+    }, delayMs);
+  }, [
+    effectiveHubId,
+    isScreenFocused,
+    resolution.isInvalidChannel,
+    fetchHubThreadsForFaqs,
+  ]);
+
+  // Reset & fetch Class FAQs whenever the active Course Hub changes
+  useEffect(() => {
+    clearFaqSyncTimer();
+    dispatchFaq({ type: 'RESET_FOR_CHANNEL', channelId: effectiveHubId });
+
+    if (
+      effectiveHubId > 0 &&
+      !resolution.isInvalidChannel &&
+      user &&
+      user.role !== 'it_admin'
+    ) {
+      void fetchHubThreadsForFaqs('initial');
+    }
+
+    return () => {
+      clearFaqSyncTimer();
+    };
+  }, [
+    effectiveHubId,
+    resolution.isInvalidChannel,
+    user,
+    fetchHubThreadsForFaqs,
+    clearFaqSyncTimer,
+  ]);
+
+  // AppState pause / resume single refresh for Class FAQs when not on Q&A tab
+  useEffect(() => {
+    const handleAppStateChange = (nextState: AppStateStatus) => {
+      const wasActive = isAppActiveRef.current;
+      const isNowActive = nextState === 'active';
+      isAppActiveRef.current = isNowActive;
+      if (!isNowActive) {
+        clearFaqSyncTimer();
+      } else if (
+        !wasActive &&
+        isScreenFocused &&
+        effectiveHubId > 0 &&
+        !resolution.isInvalidChannel
+      ) {
+        setAppActiveEpoch((prev) => prev + 1);
+        if (activeSpace !== 'qa') {
+          void fetchHubThreadsForFaqs('silent');
+        }
+      }
+    };
+
+    const sub = AppState.addEventListener('change', handleAppStateChange);
+    return () => {
+      sub.remove();
+    };
+  }, [
+    isScreenFocused,
+    effectiveHubId,
+    resolution.isInvalidChannel,
+    activeSpace,
+    fetchHubThreadsForFaqs,
+    clearFaqSyncTimer,
+  ]);
+
+  // Keep Class FAQs count & drawer synced over private Reverb when viewing Noticeboard or Chat
+  useEffect(() => {
+    if (
+      !isScreenFocused ||
+      activeSpace === 'qa' ||
+      effectiveHubId <= 0 ||
+      resolution.isInvalidChannel ||
+      !isAppActiveRef.current
+    ) {
+      return;
+    }
+
+    const unsubscribe = subscribeChannelReverb(
+      effectiveHubId,
+      (payload: ReverbBroadcastPayload) => {
+        if (!isAppActiveRef.current) return;
+        if (
+          payload.channel_id &&
+          Number(payload.channel_id) !== effectiveHubId
+        ) {
+          return;
+        }
+        if (
+          payload.type === 'thread.created' ||
+          payload.type === 'thread.updated' ||
+          payload.type === 'thread.replied' ||
+          payload.type === 'thread.faq_pinned'
+        ) {
+          if (payload.thread && typeof payload.thread.id === 'number') {
+            dispatchFaq({
+              type: 'UPSERT_THREAD',
+              thread: sanitizeThreadForPrivacy(payload.thread),
+            });
+          } else {
+            scheduleFaqDebouncedSync();
+          }
+        } else if (payload.type === 'thread.deleted') {
+          const deletedId = Number(
+            payload.thread?.id ?? payload.message_id ?? 0
+          );
+          if (deletedId > 0) {
+            dispatchFaq({ type: 'REMOVE_THREAD', threadId: deletedId });
+          } else {
+            scheduleFaqDebouncedSync();
+          }
+        }
+      }
+    );
+
+    return () => {
+      unsubscribe();
+      clearFaqSyncTimer();
+    };
+  }, [
+    isScreenFocused,
+    activeSpace,
+    effectiveHubId,
+    resolution.isInvalidChannel,
+    appActiveEpoch,
+    scheduleFaqDebouncedSync,
+    clearFaqSyncTimer,
+  ]);
+
   const seenKeyRef = useRef<string>('');
   const setActiveChannelId = realtime?.setActiveChannelId;
 
@@ -223,6 +484,8 @@ export default function MobileChannelHubScreen() {
         user.role !== 'it_admin'
       ) {
         setActiveChannelId?.(effectiveHubId);
+        // On-demand roster fetch so Course Admins see live pending-request badge counts
+        void refreshChannelRoster(effectiveHubId);
 
         const focusSeenKey = `${user.id}:${effectiveChatChannelId}`;
         if (seenKeyRef.current !== focusSeenKey) {
@@ -284,6 +547,7 @@ export default function MobileChannelHubScreen() {
       user,
       setActiveChannelId,
       applyChannelsPatch,
+      refreshChannelRoster,
     ])
   );
 
@@ -302,12 +566,45 @@ export default function MobileChannelHubScreen() {
     ),
   });
 
+  // Modal launchers
+  const openManagerModal = useCallback(
+    (initialTab: CourseHubModalTab, targetHubId?: number | null) => {
+      setManagerModalState({
+        visible: true,
+        initialTab,
+        targetHubId: targetHubId ?? (effectiveHubId > 0 ? effectiveHubId : null),
+      });
+    },
+    [effectiveHubId]
+  );
+
+  const closeManagerModal = useCallback(() => {
+    setManagerModalState((prev) => ({ ...prev, visible: false }));
+  }, []);
+
+  const handleOpenClassFaqs = useCallback((highlightFaqId?: number) => {
+    setHighlightedFaqId(highlightFaqId ?? null);
+    setIsFaqsDrawerOpen(true);
+  }, []);
+
+  const handleQaThreadsSynced = useCallback(
+    (syncedThreads: QaThread[]) => {
+      if (effectiveHubId <= 0) return;
+      dispatchFaq({
+        type: 'LOAD_SUCCESS',
+        channelId: effectiveHubId,
+        threads: syncedThreads,
+      });
+    },
+    [effectiveHubId]
+  );
+
   const handleSelectHub = useCallback(
-    (hubId: number) => {
+    (hubId: number, tab: HubSpaceKey = 'noticeboard') => {
       setSelectedSubChannelId(null);
-      setActiveTab('noticeboard');
+      setActiveSpace(tab);
       if (hubId !== effectiveHubId) {
-        router.replace(`/channels/${hubId}?tab=noticeboard` as never);
+        router.replace(`/channels/${hubId}?tab=${tab}` as never);
       }
     },
     [effectiveHubId, router]
@@ -316,7 +613,7 @@ export default function MobileChannelHubScreen() {
   const handleSelectQa = useCallback(
     (hubId: number) => {
       setSelectedSubChannelId(null);
-      setActiveTab('qa');
+      setActiveSpace('qa');
       if (hubId !== effectiveHubId) {
         router.replace(`/channels/${hubId}?tab=qa` as never);
       }
@@ -327,12 +624,42 @@ export default function MobileChannelHubScreen() {
   const handleSelectSubChannel = useCallback(
     (hubId: number, subChannelId: number) => {
       setSelectedSubChannelId(subChannelId);
-      setActiveTab('chat');
+      setActiveSpace('chat');
       if (hubId !== effectiveHubId) {
         router.replace(`/channels/${subChannelId}?tab=chat` as never);
       }
     },
     [effectiveHubId, router]
+  );
+
+  const handleHubRemovedOrLeft = useCallback(
+    (removedHubId: number) => {
+      const remaining = joinedCourseHubs.filter((h) => h.id !== removedHubId);
+      if (remaining.length > 0) {
+        setSelectedSubChannelId(null);
+        setActiveSpace('noticeboard');
+        router.replace(`/channels/${remaining[0].id}?tab=noticeboard` as never);
+      } else {
+        setSelectedSubChannelId(null);
+        setActiveSpace('noticeboard');
+        router.replace('/channels/0' as never);
+      }
+    },
+    [joinedCourseHubs, router]
+  );
+
+  const handleSubChannelDeleted = useCallback(
+    (hubId: number, deletedSubId: number) => {
+      if (
+        hubId === effectiveHubId &&
+        activeSpace === 'chat' &&
+        effectiveChatChannelId === deletedSubId
+      ) {
+        setSelectedSubChannelId(null);
+        setActiveSpace('noticeboard');
+      }
+    },
+    [effectiveHubId, activeSpace, effectiveChatChannelId]
   );
 
   const handleRefreshAll = useCallback(() => {
@@ -341,8 +668,21 @@ export default function MobileChannelHubScreen() {
       !resolution.isInvalidChannel && effectiveHubId > 0
         ? feed.refresh()
         : Promise.resolve(),
+      !resolution.isInvalidChannel && effectiveHubId > 0
+        ? fetchHubThreadsForFaqs('refresh')
+        : Promise.resolve(),
+      !resolution.isInvalidChannel && effectiveHubId > 0
+        ? refreshChannelRoster(effectiveHubId)
+        : Promise.resolve(),
     ]);
-  }, [refreshChannels, resolution.isInvalidChannel, effectiveHubId, feed]);
+  }, [
+    refreshChannels,
+    resolution.isInvalidChannel,
+    effectiveHubId,
+    feed,
+    fetchHubThreadsForFaqs,
+    refreshChannelRoster,
+  ]);
 
   const renderItem = useCallback(
     ({ item }: { item: Announcement }) => (
@@ -358,18 +698,44 @@ export default function MobileChannelHubScreen() {
 
   const keyExtractor = useCallback((item: Announcement) => String(item.id), []);
 
-  const membersCount = getChannelMembersCount(activeChannel);
-  const chatCount = Math.max(0, Number(activeChannel?.chat_messages_count ?? 0));
-  const qaUnreadCount = Math.max(
-    0,
-    Number(
-      activeChannel?.new_activity_breakdown?.qa ??
-        activeChannel?.unread_count ??
-        0
-    )
+  const detailedActiveHub =
+    effectiveHubId > 0
+      ? (rosterByChannelId[effectiveHubId] ?? activeChannel)
+      : activeChannel;
+  const isCourseAdmin = isUserCourseAdmin(detailedActiveHub, user);
+  const pendingRequestsCount = isCourseAdmin
+    ? (detailedActiveHub?.pending_requests?.length ?? 0)
+    : 0;
+  const membersCount = getChannelMembersCount(detailedActiveHub);
+  const publishedFaqsCount = useMemo(
+    () => extractPublishedFaqs(faqState.threads).length,
+    [faqState.threads]
   );
+
   const previousSeenAtForHub =
     effectiveHubId > 0 ? (seenBaselineByHub[effectiveHubId] ?? null) : null;
+
+  const activeSpaceDisplayLabel = useMemo(() => {
+    if (activeSpace === 'qa') return 'Isolated Q&A Threads';
+    if (activeSpace === 'chat') {
+      if (effectiveChatChannel && effectiveChatChannel.id !== effectiveHubId) {
+        return formatSubChannelDisplayName(effectiveChatChannel);
+      }
+      return '# general';
+    }
+    return 'Noticeboard Feed';
+  }, [activeSpace, effectiveChatChannel, effectiveHubId]);
+
+  const activeSpaceShortLabel = useMemo(() => {
+    if (activeSpace === 'qa') return 'Q&A';
+    if (activeSpace === 'chat') {
+      if (effectiveChatChannel && effectiveChatChannel.id !== effectiveHubId) {
+        return formatSubChannelDisplayName(effectiveChatChannel);
+      }
+      return '# general';
+    }
+    return 'Noticeboard';
+  }, [activeSpace, effectiveChatChannel, effectiveHubId]);
 
   const shellTitle = resolution.isInvalidChannel
     ? 'Course Hub Not Found'
@@ -384,6 +750,12 @@ export default function MobileChannelHubScreen() {
     }),
     [rawChannelParam, requestedChannelId]
   );
+
+  const showZeroJoinedOnboarding =
+    !isLoadingChannels &&
+    !channelsError &&
+    !resolution.isInvalidChannel &&
+    !activeChannel;
 
   const renderHubHeader = () => (
     <View style={styles.hubInfoWrap}>
@@ -405,13 +777,7 @@ export default function MobileChannelHubScreen() {
               </Text>
             </View>
             <View style={styles.noticeboardBadge}>
-              <Text style={styles.noticeboardBadgeText}>
-                {activeTab === 'chat'
-                  ? 'Course Chat'
-                  : activeTab === 'qa'
-                    ? 'Q&A Threads'
-                    : 'Noticeboard'}
-              </Text>
+              <Text style={styles.noticeboardBadgeText}>Noticeboard</Text>
             </View>
           </View>
 
@@ -421,48 +787,10 @@ export default function MobileChannelHubScreen() {
           <Text style={styles.hubSummaryMembers}>
             {formatEnrolledRosterSummary(activeChannel)}
           </Text>
-
-          {chatChannels.length > 0 && (
-            <View style={styles.subPillsRow}>
-              {chatChannels.map((sub) => {
-                const isSelected =
-                  activeTab === 'chat' && effectiveChatChannelId === sub.id;
-                const displayName =
-                  sub.id === activeChannel.id
-                    ? '# general'
-                    : formatSubChannelDisplayName(sub);
-                return (
-                  <Pressable
-                    key={String(sub.id)}
-                    onPress={() => {
-                      setSelectedSubChannelId(sub.id);
-                      setActiveTab('chat');
-                    }}
-                    accessibilityRole="button"
-                    accessibilityLabel={`Open channel ${displayName}`}
-                    style={({ pressed }) => [
-                      styles.subPill,
-                      isSelected && styles.subPillActive,
-                      pressed && styles.pressed,
-                    ]}
-                  >
-                    <Text
-                      style={[
-                        styles.subPillText,
-                        isSelected && styles.subPillTextActive,
-                      ]}
-                    >
-                      {displayName}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </View>
-          )}
         </View>
       )}
 
-      {feed.error && feed.items.length > 0 && activeTab === 'noticeboard' && (
+      {feed.error && feed.items.length > 0 && activeSpace === 'noticeboard' && (
         <ErrorBanner error={feed.error} onRetry={feed.retry} />
       )}
     </View>
@@ -484,9 +812,9 @@ export default function MobileChannelHubScreen() {
       return (
         <EmptyState
           title="No Course Hub Selected"
-          description="Open Scoped Channels to select a Course Hub and view its noticeboard announcements."
-          actionLabel="Open Scoped Channels"
-          onAction={() => setIsChannelsDrawerOpen(true)}
+          description="Open Course Hubs to browse, join, or create a Course Hub."
+          actionLabel="Browse Course Hubs"
+          onAction={() => openManagerModal('browse', null)}
         />
       );
     }
@@ -541,12 +869,12 @@ export default function MobileChannelHubScreen() {
 
   return (
     <MobileAppShell title={shellTitle}>
-      {/* Compact Scoped Channels Switcher Strip */}
+      {/* Top Navy Course Hubs Switcher + Class FAQs (N) Button */}
       <View style={styles.switcherBar}>
         <Pressable
           onPress={() => setIsChannelsDrawerOpen(true)}
           accessibilityRole="button"
-          accessibilityLabel="Open Scoped Channels list"
+          accessibilityLabel="Open Course Hubs drawer"
           style={({ pressed }) => [
             styles.switcherButton,
             pressed && styles.pressed,
@@ -557,153 +885,85 @@ export default function MobileChannelHubScreen() {
             {resolution.isInvalidChannel
               ? 'Select a valid Course Hub'
               : activeChannel
-                ? `${formatCourseHubName(activeChannel)} • ${
-                    activeTab === 'chat'
-                      ? 'Chat'
-                      : activeTab === 'qa'
-                        ? 'Q&A'
-                        : 'Feed'
-                  }`
-                : 'Select Course Hub'}
+                ? `${formatCourseHubName(activeChannel)} • ${activeSpaceShortLabel}`
+                : 'Course Hubs'}
           </Text>
           <Feather name="chevron-down" size={16} color={colors.ustpGold} />
         </Pressable>
 
         {activeChannel && !resolution.isInvalidChannel && (
-          <View style={styles.membersBadge}>
-            <Feather name="users" size={13} color={colors.ustpGold} />
-            <Text style={styles.membersBadgeText}>{membersCount}</Text>
-          </View>
+          <Pressable
+            onPress={() => handleOpenClassFaqs()}
+            accessibilityRole="button"
+            accessibilityLabel={`Open Class FAQs, ${publishedFaqsCount} published`}
+            style={({ pressed }) => [
+              styles.faqsTopBtn,
+              pressed && styles.pressed,
+            ]}
+          >
+            <Feather name="book-open" size={14} color={colors.ustpGold} />
+            <Text style={styles.faqsTopBtnText}>
+              Class FAQs ({publishedFaqsCount})
+            </Text>
+          </Pressable>
         )}
       </View>
 
-      {/* Feed / Q&A / Chat Segmented Tab Bar (48dp touch targets) */}
+      {/* Compact Course Hub Header Bar: Hub + Space | Course Admin Edit | Settings Gear */}
       {activeChannel && !resolution.isInvalidChannel && (
-        <View style={styles.tabBar} accessibilityRole="tablist">
-          <Pressable
-            onPress={() => setActiveTab('noticeboard')}
-            accessibilityRole="tab"
-            accessibilityState={{ selected: activeTab === 'noticeboard' }}
-            accessibilityLabel="Course Noticeboard Feed tab"
-            style={({ pressed }) => [
-              styles.tabButton,
-              activeTab === 'noticeboard' && styles.tabButtonActive,
-              pressed && styles.pressed,
-            ]}
-          >
-            <Feather
-              name="bell"
-              size={15}
-              color={
-                activeTab === 'noticeboard'
-                  ? colors.ustpGold
-                  : colors.ustpNavy
-              }
-            />
-            <Text
-              numberOfLines={1}
-              style={[
-                styles.tabButtonText,
-                activeTab === 'noticeboard' && styles.tabButtonTextActive,
-              ]}
-            >
-              Feed
+        <View style={styles.hubHeaderBar}>
+          <View style={styles.hubHeaderBarCopy}>
+            <Text numberOfLines={1} style={styles.hubHeaderBarTitle}>
+              {formatCourseHubName(activeChannel)}
             </Text>
-          </Pressable>
+            <Text numberOfLines={1} style={styles.hubHeaderBarSubtitle}>
+              {activeSpaceDisplayLabel} • {membersCount}{' '}
+              {membersCount === 1 ? 'member' : 'members'}
+            </Text>
+          </View>
 
-          <Pressable
-            onPress={() => setActiveTab('qa')}
-            accessibilityRole="tab"
-            accessibilityState={{ selected: activeTab === 'qa' }}
-            accessibilityLabel="Course Q and A Threads tab"
-            style={({ pressed }) => [
-              styles.tabButton,
-              activeTab === 'qa' && styles.tabButtonActive,
-              pressed && styles.pressed,
-            ]}
-          >
-            <Feather
-              name="help-circle"
-              size={15}
-              color={activeTab === 'qa' ? colors.ustpGold : colors.ustpNavy}
-            />
-            <Text
-              numberOfLines={1}
-              style={[
-                styles.tabButtonText,
-                activeTab === 'qa' && styles.tabButtonTextActive,
-              ]}
-            >
-              Q&amp;A
-            </Text>
-            {qaUnreadCount > 0 && (
-              <View
-                style={[
-                  styles.tabCountBadge,
-                  activeTab === 'qa' && styles.tabCountBadgeActive,
+          <View style={styles.hubHeaderBarActions}>
+            {isCourseAdmin && (
+              <Pressable
+                onPress={() => openManagerModal('edit_hub', effectiveHubId)}
+                accessibilityRole="button"
+                accessibilityLabel={`Edit ${formatCourseHubName(activeChannel)}`}
+                style={({ pressed }) => [
+                  styles.headerActionIconBtn,
+                  pressed && styles.pressed,
                 ]}
               >
-                <Text
-                  style={[
-                    styles.tabCountText,
-                    activeTab === 'qa' && styles.tabCountTextActive,
-                  ]}
-                >
-                  {formatUnreadBadgeCount(qaUnreadCount)}
-                </Text>
-              </View>
+                <Feather name="edit-3" size={18} color={colors.ustpNavy} />
+              </Pressable>
             )}
-          </Pressable>
 
-          <Pressable
-            onPress={() => setActiveTab('chat')}
-            accessibilityRole="tab"
-            accessibilityState={{ selected: activeTab === 'chat' }}
-            accessibilityLabel="Course Chat tab"
-            style={({ pressed }) => [
-              styles.tabButton,
-              activeTab === 'chat' && styles.tabButtonActive,
-              pressed && styles.pressed,
-            ]}
-          >
-            <Feather
-              name="message-square"
-              size={15}
-              color={
-                activeTab === 'chat' ? colors.ustpGold : colors.ustpNavy
+            <Pressable
+              onPress={() => setIsSettingsModalOpen(true)}
+              accessibilityRole="button"
+              accessibilityLabel={
+                pendingRequestsCount > 0
+                  ? `Course Hub Settings and Roster, ${pendingRequestsCount} pending join requests`
+                  : 'Course Hub Settings and Roster'
               }
-            />
-            <Text
-              numberOfLines={1}
-              style={[
-                styles.tabButtonText,
-                activeTab === 'chat' && styles.tabButtonTextActive,
+              style={({ pressed }) => [
+                styles.headerActionIconBtn,
+                pressed && styles.pressed,
               ]}
             >
-              Chat
-            </Text>
-            {chatCount > 0 && (
-              <View
-                style={[
-                  styles.tabCountBadge,
-                  activeTab === 'chat' && styles.tabCountBadgeActive,
-                ]}
-              >
-                <Text
-                  style={[
-                    styles.tabCountText,
-                    activeTab === 'chat' && styles.tabCountTextActive,
-                  ]}
-                >
-                  {formatUnreadBadgeCount(chatCount)}
-                </Text>
-              </View>
-            )}
-          </Pressable>
+              <Feather name="settings" size={18} color={colors.ustpNavy} />
+              {pendingRequestsCount > 0 && (
+                <View style={styles.pendingBadge}>
+                  <Text style={styles.pendingBadgeText}>
+                    {pendingRequestsCount > 99 ? '99+' : pendingRequestsCount}
+                  </Text>
+                </View>
+              )}
+            </Pressable>
+          </View>
         </View>
       )}
 
-      {/* Wrong / Unknown Channel ID Guard (never silently falls back to another hub) */}
+      {/* Main Content Area: 404 Guard | Onboarding | Q&A | Chat | Noticeboard Feed */}
       {resolution.isInvalidChannel ? (
         <View style={styles.invalidWrap}>
           <ErrorBanner
@@ -713,59 +973,76 @@ export default function MobileChannelHubScreen() {
           <Pressable
             onPress={() => setIsChannelsDrawerOpen(true)}
             accessibilityRole="button"
-            accessibilityLabel="Open Scoped Channels"
+            accessibilityLabel="Open Course Hubs"
             style={({ pressed }) => [
               styles.openChannelsBtn,
               pressed && styles.pressed,
             ]}
           >
             <Feather name="hash" size={16} color={colors.ustpGold} />
-            <Text style={styles.openChannelsBtnText}>Open Scoped Channels</Text>
+            <Text style={styles.openChannelsBtnText}>Open Course Hubs</Text>
           </Pressable>
         </View>
-      ) : activeTab === 'qa' && activeChannel && effectiveHubId > 0 ? (
+      ) : showZeroJoinedOnboarding ? (
+        <View style={styles.onboardingWrap}>
+          <View style={styles.onboardingCard}>
+            <View style={styles.onboardingIconWrap}>
+              <Feather name="compass" size={26} color={colors.ustpNavy} />
+            </View>
+            <Text style={styles.onboardingTitle}>
+              Join or Create a Course Hub
+            </Text>
+            <Text style={styles.onboardingBody}>
+              You have not joined any Course Hubs yet. Browse existing campus
+              Course Hubs to request membership, or create a new Course Hub for
+              your class section.
+            </Text>
+            <View style={styles.onboardingActions}>
+              <Pressable
+                onPress={() => openManagerModal('browse', null)}
+                accessibilityRole="button"
+                accessibilityLabel="Browse Course Hubs"
+                style={({ pressed }) => [
+                  styles.onboardingPrimaryBtn,
+                  pressed && styles.pressed,
+                ]}
+              >
+                <Feather name="compass" size={16} color={colors.ustpGold} />
+                <Text style={styles.onboardingPrimaryText}>
+                  Browse Course Hubs
+                </Text>
+              </Pressable>
+
+              <Pressable
+                onPress={() => openManagerModal('create_hub', null)}
+                accessibilityRole="button"
+                accessibilityLabel="Add Course Hub"
+                style={({ pressed }) => [
+                  styles.onboardingSecondaryBtn,
+                  pressed && styles.pressed,
+                ]}
+              >
+                <Feather name="folder-plus" size={16} color={colors.ustpNavy} />
+                <Text style={styles.onboardingSecondaryText}>
+                  Add Course Hub
+                </Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      ) : activeSpace === 'qa' && activeChannel && effectiveHubId > 0 ? (
         <CourseHubQaView
           channelId={effectiveHubId}
           channelTitle={formatCourseHubName(activeChannel)}
-          isFocused={isScreenFocused && activeTab === 'qa'}
+          isFocused={isScreenFocused && activeSpace === 'qa'}
           previousSeenAt={previousSeenAtForHub}
+          onThreadsSynced={handleQaThreadsSynced}
+          onOpenClassFaqs={handleOpenClassFaqs}
         />
-      ) : activeTab === 'chat' && effectiveChatChannel && effectiveChatChannelId > 0 ? (
+      ) : activeSpace === 'chat' &&
+        effectiveChatChannel &&
+        effectiveChatChannelId > 0 ? (
         <View style={styles.chatTabContainer}>
-          {chatChannels.length > 0 && (
-            <View style={styles.chatSubStrip}>
-              {chatChannels.map((sub) => {
-                const isSelected = effectiveChatChannelId === sub.id;
-                const displayName =
-                  sub.id === activeChannel?.id
-                    ? '# general'
-                    : formatSubChannelDisplayName(sub);
-                return (
-                  <Pressable
-                    key={String(sub.id)}
-                    onPress={() => setSelectedSubChannelId(sub.id)}
-                    accessibilityRole="button"
-                    accessibilityLabel={`Switch to ${displayName}`}
-                    style={({ pressed }) => [
-                      styles.subPill,
-                      isSelected && styles.subPillActive,
-                      pressed && styles.pressed,
-                    ]}
-                  >
-                    <Text
-                      style={[
-                        styles.subPillText,
-                        isSelected && styles.subPillTextActive,
-                      ]}
-                    >
-                      {displayName}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </View>
-          )}
-
           <CourseHubChatView
             channelId={effectiveChatChannelId}
             channelTitle={
@@ -773,7 +1050,7 @@ export default function MobileChannelHubScreen() {
                 ? formatCourseHubName(activeChannel)
                 : formatSubChannelDisplayName(effectiveChatChannel)
             }
-            isFocused={isScreenFocused && activeTab === 'chat'}
+            isFocused={isScreenFocused && activeSpace === 'chat'}
           />
         </View>
       ) : (
@@ -803,19 +1080,60 @@ export default function MobileChannelHubScreen() {
         />
       )}
 
+      {/* Left Course Hubs Drawer */}
       <ScopedChannelsDrawer
         visible={isChannelsDrawerOpen}
         onClose={() => setIsChannelsDrawerOpen(false)}
         channels={channels}
         activeChannel={activeChannel}
-        activeTab={activeTab}
+        activeTab={activeSpace}
         activeChatChannelId={effectiveChatChannelId}
         isLoading={isLoadingChannels}
         error={channelsError}
         onRetry={() => void refreshChannels()}
-        onSelectHub={handleSelectHub}
+        onSelectHub={(hubId) => handleSelectHub(hubId, 'noticeboard')}
         onSelectQa={handleSelectQa}
         onSelectSubChannel={handleSelectSubChannel}
+        onOpenAddHub={() => openManagerModal('create_hub', null)}
+        onOpenBrowseHubs={() => openManagerModal('browse', null)}
+        onOpenEditHub={(hubId) => openManagerModal('edit_hub', hubId)}
+        onOpenAddChannel={(hubId) => openManagerModal('create_channel', hubId)}
+        onSubChannelDeleted={handleSubChannelDeleted}
+      />
+
+      {/* Right Slide-Over Class FAQs Drawer */}
+      <ClassFaqsDrawer
+        visible={isFaqsDrawerOpen}
+        onClose={() => setIsFaqsDrawerOpen(false)}
+        channelTitle={
+          activeChannel ? formatCourseHubName(activeChannel) : 'Course Hub'
+        }
+        hasActiveChannel={Boolean(activeChannel && !resolution.isInvalidChannel)}
+        threads={faqState.threads}
+        isLoading={faqState.isLoading}
+        error={faqState.error}
+        onRetry={() => void fetchHubThreadsForFaqs('refresh')}
+        highlightedFaqId={highlightedFaqId}
+      />
+
+      {/* Course Hub Settings & Roster Modal */}
+      <CourseHubSettingsModal
+        visible={isSettingsModalOpen}
+        onClose={() => setIsSettingsModalOpen(false)}
+        hub={activeChannel}
+        onOpenEditHub={(hubId) => openManagerModal('edit_hub', hubId)}
+        onLeftHub={handleHubRemovedOrLeft}
+      />
+
+      {/* Unified Course Hub Manager Modal (Browse, Add Hub, Edit/Delete Hub, Add Channel) */}
+      <CourseHubManagerModal
+        visible={managerModalState.visible}
+        initialTab={managerModalState.initialTab}
+        targetHubId={managerModalState.targetHubId}
+        onClose={closeManagerModal}
+        onOpenHub={(hubId, tab) => handleSelectHub(hubId, tab ?? 'noticeboard')}
+        onOpenSubChannel={handleSelectSubChannel}
+        onDeletedHub={handleHubRemovedOrLeft}
       />
     </MobileAppShell>
   );
@@ -851,77 +1169,82 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: colors.ustpGold,
   },
-  membersBadge: {
+  faqsTopBtn: {
     minHeight: touchTarget.minHeight,
     paddingHorizontal: spacing.md,
     borderRadius: radii.md,
     backgroundColor: colors.ustpNavySurface,
     borderWidth: 1,
-    borderColor: colors.ustpNavyBorder,
+    borderColor: colors.ustpGold,
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.xs + 2,
   },
-  membersBadgeText: {
+  faqsTopBtnText: {
     fontSize: typography.sizes.xs,
     fontWeight: '800',
     color: colors.white,
     ...typography.tabularNums,
   },
-  tabBar: {
-    flexDirection: 'row',
+  hubHeaderBar: {
     backgroundColor: colors.white,
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    gap: spacing.sm,
-  },
-  tabButton: {
-    flex: 1,
-    minHeight: touchTarget.minHeight,
-    borderRadius: radii.md,
-    borderWidth: 1,
-    borderColor: colors.borderStrong,
-    backgroundColor: colors.surfaceSubtle,
+    paddingLeft: spacing.lg,
+    paddingRight: spacing.sm,
+    paddingVertical: spacing.xs + 2,
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
+    justifyContent: 'space-between',
     gap: spacing.sm,
-    paddingHorizontal: spacing.md,
   },
-  tabButtonActive: {
-    backgroundColor: colors.ustpNavy,
-    borderColor: colors.ustpNavy,
+  hubHeaderBarCopy: {
+    flex: 1,
+    gap: 1,
   },
-  tabButtonText: {
+  hubHeaderBarTitle: {
     fontSize: typography.sizes.sm,
+    lineHeight: typography.lineHeights.sm,
     fontWeight: '800',
     color: colors.ustpNavy,
   },
-  tabButtonTextActive: {
-    color: colors.ustpGold,
-  },
-  tabCountBadge: {
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 2,
-    borderRadius: radii.pill,
-    backgroundColor: colors.surfaceMuted,
-    borderWidth: 1,
-    borderColor: colors.borderStrong,
-  },
-  tabCountBadgeActive: {
-    backgroundColor: colors.ustpGold,
-    borderColor: colors.ustpGold,
-  },
-  tabCountText: {
+  hubHeaderBarSubtitle: {
     fontSize: typography.sizes.xxs,
-    fontWeight: '800',
-    color: colors.ustpNavy,
+    lineHeight: typography.lineHeights.xxs,
+    fontWeight: '700',
+    color: colors.mutedSlate,
     ...typography.tabularNums,
   },
-  tabCountTextActive: {
-    color: colors.ustpNavy,
+  hubHeaderBarActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xxs,
+  },
+  headerActionIconBtn: {
+    minWidth: touchTarget.minWidth,
+    minHeight: touchTarget.minHeight,
+    borderRadius: radii.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+  },
+  pendingBadge: {
+    position: 'absolute',
+    top: 6,
+    right: 6,
+    minWidth: 18,
+    height: 18,
+    borderRadius: radii.pill,
+    backgroundColor: colors.ustpOrangeDark,
+    paddingHorizontal: 4,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  pendingBadgeText: {
+    fontSize: 10,
+    fontWeight: '900',
+    color: colors.white,
+    ...typography.tabularNums,
   },
   invalidWrap: {
     flex: 1,
@@ -945,18 +1268,80 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: colors.ustpGold,
   },
+  onboardingWrap: {
+    flex: 1,
+    padding: spacing.lg,
+    justifyContent: 'center',
+  },
+  onboardingCard: {
+    backgroundColor: colors.white,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radii.xl,
+    padding: spacing.xl,
+    alignItems: 'center',
+    gap: spacing.md,
+  },
+  onboardingIconWrap: {
+    width: 52,
+    height: 52,
+    borderRadius: radii.pill,
+    backgroundColor: colors.ustpGoldSoft,
+    borderWidth: 1,
+    borderColor: colors.tagMemoBorder,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  onboardingTitle: {
+    fontSize: typography.sizes.titleSm,
+    lineHeight: typography.lineHeights.titleSm,
+    fontWeight: '800',
+    color: colors.ustpNavy,
+    textAlign: 'center',
+  },
+  onboardingBody: {
+    fontSize: typography.sizes.sm,
+    lineHeight: typography.lineHeights.sm,
+    color: colors.mutedSlate,
+    textAlign: 'center',
+  },
+  onboardingActions: {
+    width: '100%',
+    gap: spacing.sm,
+    paddingTop: spacing.xs,
+  },
+  onboardingPrimaryBtn: {
+    minHeight: touchTarget.minHeight,
+    borderRadius: radii.md,
+    backgroundColor: colors.ustpNavy,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.sm,
+    paddingHorizontal: spacing.lg,
+  },
+  onboardingPrimaryText: {
+    fontSize: typography.sizes.sm,
+    fontWeight: '800',
+    color: colors.ustpGold,
+  },
+  onboardingSecondaryBtn: {
+    minHeight: touchTarget.minHeight,
+    borderRadius: radii.md,
+    backgroundColor: colors.ustpGold,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.sm,
+    paddingHorizontal: spacing.lg,
+  },
+  onboardingSecondaryText: {
+    fontSize: typography.sizes.sm,
+    fontWeight: '800',
+    color: colors.ustpNavy,
+  },
   chatTabContainer: {
     flex: 1,
-  },
-  chatSubStrip: {
-    backgroundColor: colors.surfaceSubtle,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: spacing.sm,
   },
   listContent: {
     padding: spacing.lg,
@@ -1017,33 +1402,6 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: colors.mutedSlate,
     ...typography.tabularNums,
-  },
-  subPillsRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: spacing.xs + 2,
-    paddingTop: spacing.xs,
-  },
-  subPill: {
-    minHeight: touchTarget.minHeight,
-    backgroundColor: colors.surfaceMuted,
-    borderWidth: 1,
-    borderColor: colors.borderStrong,
-    borderRadius: radii.md,
-    paddingHorizontal: spacing.md,
-    justifyContent: 'center',
-  },
-  subPillActive: {
-    backgroundColor: colors.ustpNavy,
-    borderColor: colors.ustpNavy,
-  },
-  subPillText: {
-    fontSize: typography.sizes.xs,
-    fontWeight: '700',
-    color: colors.ustpNavy,
-  },
-  subPillTextActive: {
-    color: colors.ustpGold,
   },
   separator: {
     height: spacing.md,

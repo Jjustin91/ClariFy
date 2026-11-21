@@ -86,18 +86,19 @@ export interface CourseHubQaViewProps {
   isFocused: boolean;
   previousSeenAt?: string | null;
   onThreadActivityChanged?: () => void;
+  onThreadsSynced?: (threads: QaThread[]) => void;
+  onOpenClassFaqs?: (highlightFaqId?: number) => void;
 }
 
 /**
- * Course Hub Isolated Q&A Threads & Collapsible Class FAQs View
+ * Course Hub Isolated Q&A Threads View
  * Ported from clarify-web/app/channels/[channelId]/page.tsx.
  *
- * - Collapsible Class FAQs accordion (default collapsed) with strict "Anonymous Student"
- *   masking whenever `is_pinned_faq === true`.
  * - Status & Unread filter bar (All | Unresolved | Resolved + Unread toggle) & legend.
  * - Student: Ask in Q&A Thread modal (public/private), inline Edit & Delete on own unresolved.
  * - Faculty/Dept Head: Answer Ticket modal (reply + Mark Resolved + Pin to FAQ),
  *   1-click Resolve (`PATCH /threads/{id}/resolve`), 1-click Pin to FAQ (`POST /threads/{id}/convert-faq`).
+ * - Syncs thread updates to the top-bar Class FAQs slide-over drawer (`ClassFaqsDrawer`).
  * - Focused private Reverb subscription (`clarify.channel.{channelId}`) with AppState pause
  *   and debounced de-duplicated sync (zero polling).
  */
@@ -107,6 +108,8 @@ export function CourseHubQaView({
   isFocused,
   previousSeenAt = null,
   onThreadActivityChanged,
+  onThreadsSynced,
+  onOpenClassFaqs,
 }: CourseHubQaViewProps) {
   const { user, showToast } = useAuth();
   const [state, dispatch] = useReducer(
@@ -115,11 +118,9 @@ export function CourseHubQaView({
     createInitialCourseQaState
   );
 
-  // Filter & Collapsible Class FAQs state (collapsed by default)
+  // Filter state
   const [statusFilter, setStatusFilter] = useState<QaThreadStatusFilter>('all');
   const [unreadOnly, setUnreadOnly] = useState(false);
-  const [isFaqSectionOpen, setIsFaqSectionOpen] = useState(false);
-  const [openFaqIds, setOpenFaqIds] = useState<number[]>([]);
 
   // Student Ask Inquiry Modal state
   const [isAskModalOpen, setIsAskModalOpen] = useState(false);
@@ -159,10 +160,21 @@ export function CourseHubQaView({
     null
   );
   const activeChannelRef = useRef<number>(channelId);
+  const onThreadsSyncedRef = useRef(onThreadsSynced);
 
   useEffect(() => {
     activeChannelRef.current = channelId;
   }, [channelId]);
+
+  useEffect(() => {
+    onThreadsSyncedRef.current = onThreadsSynced;
+  }, [onThreadsSynced]);
+
+  useEffect(() => {
+    if (state.hasLoadedOnce && state.channelId === channelId) {
+      onThreadsSyncedRef.current?.(state.threads);
+    }
+  }, [state.hasLoadedOnce, state.channelId, state.threads, channelId]);
 
   const clearDebouncedSyncTimer = useCallback(() => {
     if (debouncedSyncTimerRef.current) {
@@ -243,7 +255,6 @@ export function CourseHubQaView({
     setPrevChannelId(channelId);
     setStatusFilter('all');
     setUnreadOnly(false);
-    setOpenFaqIds([]);
     setEditingThreadId(null);
     setAnsweringThread(null);
     setDeleteTarget(null);
@@ -310,15 +321,6 @@ export function CourseHubQaView({
           if (payload.thread && typeof payload.thread.id === 'number') {
             const sanitized = sanitizeThreadForPrivacy(payload.thread);
             dispatch({ type: 'UPSERT_THREAD', thread: sanitized });
-            if (
-              payload.type === 'thread.faq_pinned' &&
-              sanitized.is_pinned_faq
-            ) {
-              setIsFaqSectionOpen(true);
-              setOpenFaqIds((prev) =>
-                prev.includes(sanitized.id) ? prev : [sanitized.id, ...prev]
-              );
-            }
           } else {
             scheduleDebouncedSync();
           }
@@ -370,17 +372,6 @@ export function CourseHubQaView({
       }),
     [state.threads, user, statusFilter, unreadOnly, previousSeenAt]
   );
-
-  const publishedFaqs = useMemo(
-    () => state.threads.filter((t) => t.is_pinned_faq),
-    [state.threads]
-  );
-
-  const toggleFaqItem = (id: number) => {
-    setOpenFaqIds((prev) =>
-      prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
-    );
-  };
 
   // Student: Submit Inquiry
   const handleSubmitInquiry = async () => {
@@ -510,15 +501,12 @@ export function CourseHubQaView({
       if (res.data) {
         dispatch({ type: 'UPSERT_THREAD', thread: res.data });
       }
-      setIsFaqSectionOpen(true);
-      setOpenFaqIds((prev) =>
-        prev.includes(threadId) ? prev : [threadId, ...prev]
-      );
       showToast(
         res.message || 'Pinned to Class FAQs (Student Identity Masked).',
         'success'
       );
       onThreadActivityChanged?.();
+      onOpenClassFaqs?.(threadId);
     } catch (err) {
       const apiErr = err as ApiError;
       showToast(apiErr?.message || 'Could not pin to Class FAQs.', 'error');
@@ -548,18 +536,14 @@ export function CourseHubQaView({
       if (res.data) {
         dispatch({ type: 'UPSERT_THREAD', thread: res.data });
       }
-      if (pinTicketToFaq) {
-        setIsFaqSectionOpen(true);
-        setOpenFaqIds((prev) =>
-          prev.includes(answeringThread.id)
-            ? prev
-            : [answeringThread.id, ...prev]
-        );
-      }
+      const pinnedId = pinTicketToFaq ? answeringThread.id : undefined;
       showToast(res.message || 'Faculty reply submitted.', 'success');
       setAnsweringThread(null);
       setReplyContent('');
       onThreadActivityChanged?.();
+      if (pinnedId) {
+        onOpenClassFaqs?.(pinnedId);
+      }
     } catch (err) {
       const apiErr = err as ApiError;
       if (apiErr?.status === 422 && apiErr.errors) {
@@ -574,105 +558,6 @@ export function CourseHubQaView({
 
   const renderListHeader = () => (
     <View style={styles.headerBlock}>
-      {/* Collapsible Class FAQs Accordion (Default Collapsed) */}
-      <View style={styles.faqCard}>
-        <Pressable
-          onPress={() => setIsFaqSectionOpen((prev) => !prev)}
-          accessibilityRole="button"
-          accessibilityLabel={`Class FAQs, ${publishedFaqs.length} published`}
-          accessibilityState={{ expanded: isFaqSectionOpen }}
-          style={({ pressed }) => [
-            styles.faqHeaderBtn,
-            pressed && styles.pressed,
-          ]}
-        >
-          <View style={styles.faqHeaderLeft}>
-            <Feather name="book-open" size={16} color={colors.ustpOrange} />
-            <Text style={styles.faqHeaderTitle}>Class FAQs</Text>
-            <View style={styles.faqCountPill}>
-              <Text style={styles.faqCountText}>{publishedFaqs.length}</Text>
-            </View>
-          </View>
-          <Feather
-            name={isFaqSectionOpen ? 'chevron-up' : 'chevron-down'}
-            size={18}
-            color={colors.mutedSlate}
-          />
-        </Pressable>
-
-        {isFaqSectionOpen && (
-          <View style={styles.faqBody}>
-            {publishedFaqs.length === 0 ? (
-              <Text style={styles.faqEmptyText}>
-                No Class FAQs published yet. Pinned Q&amp;A answers will appear
-                here with student identity anonymized.
-              </Text>
-            ) : (
-              publishedFaqs.map((faq) => {
-                const isExpanded = openFaqIds.includes(faq.id);
-                const latestReplyObj =
-                  faq.replies.length > 0
-                    ? faq.replies[faq.replies.length - 1]
-                    : undefined;
-                const latestReply =
-                  latestReplyObj?.content || 'Resolved during consultation.';
-                const replyHeading = latestReplyObj?.author?.name
-                  ? `Faculty reply · ${latestReplyObj.author.name}`
-                  : 'Faculty reply';
-
-                return (
-                  <View key={String(faq.id)} style={styles.faqItemCard}>
-                    <Pressable
-                      onPress={() => toggleFaqItem(faq.id)}
-                      accessibilityRole="button"
-                      accessibilityLabel={`FAQ ${faq.subject_hashtag}`}
-                      accessibilityState={{ expanded: isExpanded }}
-                      style={({ pressed }) => [
-                        styles.faqItemHeader,
-                        pressed && styles.pressed,
-                      ]}
-                    >
-                      <Text numberOfLines={1} style={styles.faqItemTitle}>
-                        {faq.subject_hashtag}
-                      </Text>
-                      <Feather
-                        name={isExpanded ? 'chevron-up' : 'chevron-down'}
-                        size={16}
-                        color={colors.mutedSlate}
-                      />
-                    </Pressable>
-
-                    {isExpanded && (
-                      <View style={styles.faqItemBody}>
-                        <View style={styles.anonRow}>
-                          <View style={styles.maskedAvatar}>
-                            <Feather
-                              name="user"
-                              size={12}
-                              color={colors.ustpNavy}
-                            />
-                          </View>
-                          <Text style={styles.anonLabel}>
-                            Asked by: Anonymous Student
-                          </Text>
-                        </View>
-                        <Text style={styles.faqQuestionText}>{faq.content}</Text>
-                        <View style={styles.faqReplyBox}>
-                          <Text style={styles.faqReplyHeading}>
-                            {replyHeading}
-                          </Text>
-                          <Text style={styles.faqReplyText}>{latestReply}</Text>
-                        </View>
-                      </View>
-                    )}
-                  </View>
-                );
-              })
-            )}
-          </View>
-        )}
-      </View>
-
       {/* Section Title + Student Ask CTA */}
       <View style={styles.sectionTitleRow}>
         <View style={styles.sectionTitleCopy}>
@@ -1616,101 +1501,6 @@ const styles = StyleSheet.create({
     gap: spacing.md,
     marginBottom: spacing.md,
   },
-  faqCard: {
-    backgroundColor: colors.white,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radii.lg,
-    overflow: 'hidden',
-  },
-  faqHeaderBtn: {
-    minHeight: touchTarget.minHeight,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: spacing.sm,
-  },
-  faqHeaderLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-  },
-  faqHeaderTitle: {
-    fontSize: typography.sizes.body,
-    lineHeight: typography.lineHeights.body,
-    fontWeight: '800',
-    color: colors.ustpNavy,
-  },
-  faqCountPill: {
-    backgroundColor: colors.surfaceMuted,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radii.sm,
-    paddingHorizontal: spacing.xs + 2,
-    paddingVertical: 2,
-  },
-  faqCountText: {
-    fontSize: typography.sizes.xxs,
-    fontWeight: '800',
-    color: colors.ustpNavy,
-    ...typography.tabularNums,
-  },
-  faqBody: {
-    borderTopWidth: 1,
-    borderTopColor: colors.border,
-    padding: spacing.md,
-    gap: spacing.sm,
-    backgroundColor: colors.ustpCream,
-  },
-  faqEmptyText: {
-    fontSize: typography.sizes.xs,
-    lineHeight: typography.lineHeights.xs,
-    color: colors.mutedSlate,
-  },
-  faqItemCard: {
-    backgroundColor: colors.white,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radii.md,
-    overflow: 'hidden',
-  },
-  faqItemHeader: {
-    minHeight: touchTarget.minHeight,
-    paddingHorizontal: spacing.md,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: spacing.sm,
-  },
-  faqItemTitle: {
-    flex: 1,
-    fontSize: typography.sizes.sm,
-    fontWeight: '800',
-    color: colors.ustpNavy,
-  },
-  faqItemBody: {
-    borderTopWidth: 1,
-    borderTopColor: colors.border,
-    padding: spacing.md,
-    gap: spacing.sm,
-  },
-  anonRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.xs + 2,
-  },
-  maskedAvatar: {
-    width: 22,
-    height: 22,
-    borderRadius: radii.pill,
-    backgroundColor: colors.surfaceMuted,
-    borderWidth: 1,
-    borderColor: colors.borderStrong,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
   maskedAvatarSmall: {
     width: 18,
     height: 18,
@@ -1720,36 +1510,6 @@ const styles = StyleSheet.create({
     borderColor: colors.borderStrong,
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  anonLabel: {
-    fontSize: typography.sizes.xxs,
-    fontWeight: '700',
-    color: colors.mutedSlate,
-  },
-  faqQuestionText: {
-    fontSize: typography.sizes.sm,
-    lineHeight: typography.lineHeights.sm,
-    color: colors.ustpText,
-  },
-  faqReplyBox: {
-    backgroundColor: colors.ustpCream,
-    borderWidth: 1,
-    borderColor: colors.warningBorder,
-    borderLeftWidth: 3,
-    borderLeftColor: colors.ustpNavy,
-    borderRadius: radii.sm,
-    padding: spacing.sm + 2,
-    gap: spacing.xxs,
-  },
-  faqReplyHeading: {
-    fontSize: typography.sizes.xxs,
-    fontWeight: '800',
-    color: colors.ustpNavy,
-  },
-  faqReplyText: {
-    fontSize: typography.sizes.sm,
-    lineHeight: typography.lineHeights.sm,
-    color: colors.ustpText,
   },
   sectionTitleRow: {
     flexDirection: 'row',

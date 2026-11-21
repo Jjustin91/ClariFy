@@ -5,6 +5,10 @@ import type { Channel, QaThread } from '../types/api.ts';
 import {
   courseQaReducer,
   createInitialCourseQaState,
+  extractPublishedFaqs,
+  formatCourseHubSubmitName,
+  normalizeSubChannelSlug,
+  removePendingRequestFromChannel,
   resolveHubChatChannels,
   sanitizeThreadForPrivacy,
 } from './qa-reducer.ts';
@@ -159,3 +163,76 @@ test('resolveHubChatChannels prevents duplicate #general pills when sub-channels
   );
   assert.equal(fallback.defaultChatChannel?.id, 10);
 });
+
+test('extractPublishedFaqs returns only pinned FAQs with strict Anonymous Student masking', () => {
+  const faqs = extractPublishedFaqs([
+    makeThread({ id: 1, is_pinned_faq: false }),
+    makeThread({
+      id: 2,
+      is_pinned_faq: true,
+      is_private: true,
+      author: {
+        id: 88,
+        name: 'Leaked Student',
+        role: 'student',
+        avatar_url: 'https://api.ustpclarify.tech/storage/avatars/88.png',
+      },
+    }),
+  ]);
+
+  assert.equal(faqs.length, 1);
+  assert.equal(faqs[0].id, 2);
+  assert.equal(faqs[0].author.id, null);
+  assert.equal(faqs[0].author.name, 'Anonymous Student');
+  assert.equal(faqs[0].author.avatar_url, null);
+  assert.equal(faqs[0].is_private, false);
+});
+
+test('formatCourseHubSubmitName and normalizeSubChannelSlug match clarify-web conventions', () => {
+  assert.equal(
+    formatCourseHubSubmitName('it315', 'Capstone 1'),
+    'IT315 Capstone 1'
+  );
+  assert.equal(
+    formatCourseHubSubmitName('IT315', 'IT315 Capstone 1'),
+    'IT315 Capstone 1'
+  );
+  assert.equal(
+    formatCourseHubSubmitName('', '# Software Engineering'),
+    'Software Engineering'
+  );
+  assert.equal(normalizeSubChannelSlug('# Project Groups  '), 'project-groups');
+  assert.equal(normalizeSubChannelSlug('  Lab   Help '), 'lab-help');
+  assert.equal(normalizeSubChannelSlug('   '), '');
+});
+
+test('removePendingRequestFromChannel clears stale pending row on 409 recovery', () => {
+  const hub = makeChannel({
+    id: 10,
+    pending_requests: [
+      {
+        id: 50,
+        institutional_id: '2023300050',
+        name: 'Maria Clara',
+        role: 'student',
+        section: 'IT3R2',
+        department: 'CITC',
+      },
+      {
+        id: 51,
+        institutional_id: '2023300051',
+        name: 'Jose Rizal',
+        role: 'student',
+        section: 'IT3R2',
+        department: 'CITC',
+      },
+    ],
+  });
+
+  const updated = removePendingRequestFromChannel(hub, '2023300050');
+  assert.deepEqual(
+    updated.pending_requests?.map((m) => m.institutional_id),
+    ['2023300051']
+  );
+});
+

@@ -12,11 +12,14 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useAuth } from '../context/AuthContext';
+import { useChannels } from '../context/ChannelsContext';
+import { deleteChannelApi } from '../lib/api-client';
 import {
   formatCourseHubName,
   formatEnrolledRosterSummary,
   formatUnreadBadgeCount,
   getChannelFacultyLabel,
+  isUserCourseAdmin,
 } from '../lib/domain-logic';
 import {
   buildScopedChannelHierarchy,
@@ -37,8 +40,9 @@ export type CourseHubDrawerTab = 'noticeboard' | 'qa' | 'chat';
 /**
  * Left-hand Scoped Channels & Course Hubs Drawer ported from
  * clarify-web/app/channels/[channelId]/page.tsx (lines 597-952).
- * - Displays top-level Course Hubs with live links for Noticeboard Feed,
- *   Isolated Q&A Threads (with unread count badge), and active nested #channels.
+ * - Top action buttons: Add Course Hub & Browse Course Hubs.
+ * - Displays joined Course Hubs with Noticeboard Feed, Isolated Q&A Threads,
+ *   and active nested #channels (with Course Admin Edit, + Add Channel, and Delete).
  * - Uses `members_count` / `students_count` strictly; never loads full rosters.
  */
 export function ScopedChannelsDrawer({
@@ -54,6 +58,11 @@ export function ScopedChannelsDrawer({
   onSelectHub,
   onSelectQa,
   onSelectSubChannel,
+  onOpenAddHub,
+  onOpenBrowseHubs,
+  onOpenEditHub,
+  onOpenAddChannel,
+  onSubChannelDeleted,
 }: {
   visible: boolean;
   onClose: () => void;
@@ -67,16 +76,39 @@ export function ScopedChannelsDrawer({
   onSelectHub: (hubId: number) => void;
   onSelectQa?: (hubId: number) => void;
   onSelectSubChannel?: (hubId: number, subChannelId: number) => void;
+  onOpenAddHub?: () => void;
+  onOpenBrowseHubs?: () => void;
+  onOpenEditHub?: (hubId: number) => void;
+  onOpenAddChannel?: (hubId: number) => void;
+  onSubChannelDeleted?: (hubId: number, deletedSubId: number) => void;
 }) {
   const insets = useSafeAreaInsets();
-  const { user } = useAuth();
+  const { user, showToast } = useAuth();
+  const { refreshChannels } = useChannels();
 
   const [searchQuery, setSearchQuery] = useState('');
   const [collapsedHubIds, setCollapsedHubIds] = useState<number[]>([]);
+  const [confirmDeleteSubId, setConfirmDeleteSubId] = useState<number | null>(
+    null
+  );
+  const [deletingSubId, setDeletingSubId] = useState<number | null>(null);
 
   const hierarchy = useMemo(
     () => buildScopedChannelHierarchy(channels, user, searchQuery),
     [channels, user, searchQuery]
+  );
+
+  const joinedHierarchy = useMemo(
+    () => hierarchy.filter((node) => node.isJoined),
+    [hierarchy]
+  );
+
+  const totalJoinedHubsCount = useMemo(
+    () =>
+      buildScopedChannelHierarchy(channels, user, '').filter(
+        (node) => node.isJoined
+      ).length,
+    [channels, user]
   );
 
   const toggleExpanded = (hubId: number) => {
@@ -87,8 +119,26 @@ export function ScopedChannelsDrawer({
     );
   };
 
+  const handleDeleteSubChannel = async (hubId: number, sub: Channel) => {
+    if (deletingSubId !== null) return;
+    const cleanName = sub.name.replace(/^#\s*/, '').trim();
+    setDeletingSubId(sub.id);
+    try {
+      const res = await deleteChannelApi(sub.id);
+      await refreshChannels();
+      setConfirmDeleteSubId(null);
+      showToast(res.message || `Deleted # ${cleanName}.`, 'info');
+      onSubChannelDeleted?.(hubId, sub.id);
+    } catch (err) {
+      const apiErr = err as ApiError;
+      showToast(apiErr?.message || 'Failed to delete channel.', 'error');
+    } finally {
+      setDeletingSubId(null);
+    }
+  };
+
   const renderHubNode = ({ item }: { item: CourseHubHierarchyNode }) => {
-    const { hub, subChannels, membersCount, isJoined } = item;
+    const { hub, subChannels, membersCount } = item;
     const isCurrentHub = activeChannel?.id === hub.id;
     const isExpanded =
       !collapsedHubIds.includes(hub.id) || searchQuery.trim().length > 0;
@@ -96,53 +146,93 @@ export function ScopedChannelsDrawer({
       isCurrentHub && (!activeTab || activeTab === 'noticeboard');
     const isQaActive = isCurrentHub && activeTab === 'qa';
     const unreadQaCount = Math.max(0, Number(hub.unread_count ?? 0));
+    const isHubCourseAdmin = isUserCourseAdmin(hub, user);
 
     return (
       <View style={[styles.hubCard, isCurrentHub && styles.hubCardActive]}>
         {/* Course Hub Header Row */}
-        <Pressable
-          onPress={() => toggleExpanded(hub.id)}
-          accessibilityRole="button"
-          accessibilityLabel={`Toggle ${formatCourseHubName(hub)} spaces and channels`}
-          accessibilityState={{ expanded: isExpanded }}
-          style={({ pressed }) => [
-            styles.hubHeaderBtn,
-            pressed && styles.pressed,
-          ]}
-        >
-          <Feather
-            name={isExpanded ? 'chevron-down' : 'chevron-right'}
-            size={16}
-            color={isCurrentHub ? colors.ustpGold : colors.ustpNavyMutedText}
-          />
-          <View style={styles.hubHeaderTextWrap}>
-            <Text
-              numberOfLines={1}
-              style={[
-                styles.hubNameText,
-                isCurrentHub && styles.hubNameTextActive,
-              ]}
-            >
-              {formatCourseHubName(hub)}
-            </Text>
-            <Text style={styles.hubMetaLine}>
-              {[hub.course_code, hub.scope_section].filter(Boolean).join(' • ')}{' '}
-              • {membersCount} {membersCount === 1 ? 'member' : 'members'}
-            </Text>
-          </View>
-          {unreadQaCount > 0 && (
-            <View style={styles.hubUnreadBadge}>
-              <Text style={styles.hubUnreadBadgeText}>
-                {formatUnreadBadgeCount(unreadQaCount)}
+        <View style={styles.hubHeaderRow}>
+          <Pressable
+            onPress={() => toggleExpanded(hub.id)}
+            accessibilityRole="button"
+            accessibilityLabel={`Toggle ${formatCourseHubName(hub)} spaces and channels`}
+            accessibilityState={{ expanded: isExpanded }}
+            style={({ pressed }) => [
+              styles.hubHeaderBtn,
+              pressed && styles.pressed,
+            ]}
+          >
+            <Feather
+              name={isExpanded ? 'chevron-down' : 'chevron-right'}
+              size={16}
+              color={isCurrentHub ? colors.ustpGold : colors.ustpNavyMutedText}
+            />
+            <View style={styles.hubHeaderTextWrap}>
+              <Text
+                numberOfLines={1}
+                style={[
+                  styles.hubNameText,
+                  isCurrentHub && styles.hubNameTextActive,
+                ]}
+              >
+                {formatCourseHubName(hub)}
+              </Text>
+              <Text style={styles.hubMetaLine}>
+                {[hub.course_code, hub.scope_section]
+                  .filter(Boolean)
+                  .join(' • ')}{' '}
+                • {membersCount} {membersCount === 1 ? 'member' : 'members'}
               </Text>
             </View>
-          )}
-          {!isJoined && (
-            <View style={styles.unjoinedBadge}>
-              <Text style={styles.unjoinedBadgeText}>Scoped</Text>
-            </View>
-          )}
-        </Pressable>
+            {unreadQaCount > 0 && (
+              <View style={styles.hubUnreadBadge}>
+                <Text style={styles.hubUnreadBadgeText}>
+                  {formatUnreadBadgeCount(unreadQaCount)}
+                </Text>
+              </View>
+            )}
+          </Pressable>
+
+          {/* Per-Hub Quick Actions: Edit (Course Admin) & + Add Channel */}
+          <View style={styles.hubQuickActions}>
+            {isHubCourseAdmin && onOpenEditHub && (
+              <Pressable
+                onPress={() => {
+                  onClose();
+                  onOpenEditHub(hub.id);
+                }}
+                accessibilityRole="button"
+                accessibilityLabel={`Edit ${formatCourseHubName(hub)}`}
+                style={({ pressed }) => [
+                  styles.hubIconBtn,
+                  pressed && styles.pressed,
+                ]}
+              >
+                <Feather
+                  name="edit-3"
+                  size={15}
+                  color={colors.ustpNavyMutedText}
+                />
+              </Pressable>
+            )}
+            {onOpenAddChannel && (
+              <Pressable
+                onPress={() => {
+                  onClose();
+                  onOpenAddChannel(hub.id);
+                }}
+                accessibilityRole="button"
+                accessibilityLabel={`Add channel to ${formatCourseHubName(hub)}`}
+                style={({ pressed }) => [
+                  styles.hubIconBtn,
+                  pressed && styles.pressed,
+                ]}
+              >
+                <Feather name="plus" size={16} color={colors.ustpGold} />
+              </Pressable>
+            )}
+          </View>
+        </View>
 
         {/* Expanded Spaces & Active Nested Sub-Channels */}
         {isExpanded && (
@@ -231,7 +321,27 @@ export function ScopedChannelsDrawer({
 
             {/* 2. Active Nested Chat Channels */}
             <View style={styles.subChannelsBlock}>
-              <Text style={styles.subSectionLabel}>CHANNELS</Text>
+              <View style={styles.subSectionHeaderRow}>
+                <Text style={styles.subSectionLabel}>CHANNELS</Text>
+                {onOpenAddChannel && (
+                  <Pressable
+                    onPress={() => {
+                      onClose();
+                      onOpenAddChannel(hub.id);
+                    }}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Add Channel in ${formatCourseHubName(hub)}`}
+                    style={({ pressed }) => [
+                      styles.inlineAddChannelBtn,
+                      pressed && styles.pressed,
+                    ]}
+                  >
+                    <Feather name="plus" size={12} color={colors.ustpGold} />
+                    <Text style={styles.inlineAddChannelText}>Add Channel</Text>
+                  </Pressable>
+                )}
+              </View>
+
               {subChannels.length === 0 ? (
                 <Pressable
                   onPress={() => {
@@ -280,38 +390,108 @@ export function ScopedChannelsDrawer({
                     isCurrentHub &&
                     activeTab === 'chat' &&
                     activeChatChannelId === sub.id;
+                  const isConfirmingDelete = confirmDeleteSubId === sub.id;
+                  const isDeletingThis = deletingSubId === sub.id;
 
                   return (
-                    <Pressable
-                      key={String(sub.id)}
-                      onPress={() => {
-                        if (onSelectSubChannel) {
-                          onSelectSubChannel(hub.id, sub.id);
-                        } else {
-                          onSelectHub(hub.id);
-                        }
-                        onClose();
-                      }}
-                      accessibilityRole="button"
-                      accessibilityLabel={`Open channel ${cleanName}`}
-                      accessibilityState={{ selected: isSubActive }}
-                      style={({ pressed }) => [
-                        styles.subChannelRow,
-                        isSubActive && styles.subChannelRowActive,
-                        pressed && styles.pressed,
-                      ]}
-                    >
-                      <Feather name="hash" size={14} color={colors.ustpGold} />
-                      <Text
-                        numberOfLines={1}
+                    <View key={String(sub.id)} style={styles.subChannelItemWrap}>
+                      <View
                         style={[
-                          styles.subChannelText,
-                          isSubActive && styles.subChannelTextActive,
+                          styles.subChannelRowContainer,
+                          isSubActive && styles.subChannelRowActive,
                         ]}
                       >
-                        {cleanName}
-                      </Text>
-                    </Pressable>
+                        <Pressable
+                          onPress={() => {
+                            if (onSelectSubChannel) {
+                              onSelectSubChannel(hub.id, sub.id);
+                            } else {
+                              onSelectHub(hub.id);
+                            }
+                            onClose();
+                          }}
+                          accessibilityRole="button"
+                          accessibilityLabel={`Open channel ${cleanName}`}
+                          accessibilityState={{ selected: isSubActive }}
+                          style={({ pressed }) => [
+                            styles.subChannelPressArea,
+                            pressed && styles.pressed,
+                          ]}
+                        >
+                          <Feather
+                            name="hash"
+                            size={14}
+                            color={colors.ustpGold}
+                          />
+                          <Text
+                            numberOfLines={1}
+                            style={[
+                              styles.subChannelText,
+                              isSubActive && styles.subChannelTextActive,
+                            ]}
+                          >
+                            {cleanName}
+                          </Text>
+                        </Pressable>
+
+                        {isHubCourseAdmin && (
+                          <Pressable
+                            onPress={() =>
+                              setConfirmDeleteSubId(
+                                isConfirmingDelete ? null : sub.id
+                              )
+                            }
+                            accessibilityRole="button"
+                            accessibilityLabel={`Delete channel ${cleanName}`}
+                            style={({ pressed }) => [
+                              styles.subDeleteIconBtn,
+                              pressed && styles.pressed,
+                            ]}
+                          >
+                            <Feather
+                              name="trash-2"
+                              size={13}
+                              color={colors.ustpNavyMutedText}
+                            />
+                          </Pressable>
+                        )}
+                      </View>
+
+                      {isHubCourseAdmin && isConfirmingDelete && (
+                        <View style={styles.subDeleteConfirmRow}>
+                          <Text style={styles.subDeleteConfirmText}>
+                            Delete #{cleanName}?
+                          </Text>
+                          <Pressable
+                            disabled={isDeletingThis}
+                            onPress={() =>
+                              void handleDeleteSubChannel(hub.id, sub)
+                            }
+                            accessibilityRole="button"
+                            accessibilityLabel={`Confirm delete channel ${cleanName}`}
+                            style={({ pressed }) => [
+                              styles.subDeleteConfirmBtn,
+                              pressed && styles.pressed,
+                            ]}
+                          >
+                            <Text style={styles.subDeleteConfirmBtnText}>
+                              {isDeletingThis ? '...' : 'Delete'}
+                            </Text>
+                          </Pressable>
+                          <Pressable
+                            disabled={isDeletingThis}
+                            onPress={() => setConfirmDeleteSubId(null)}
+                            accessibilityRole="button"
+                            accessibilityLabel="Cancel delete channel"
+                            style={styles.subDeleteCancelBtn}
+                          >
+                            <Text style={styles.subDeleteCancelText}>
+                              Cancel
+                            </Text>
+                          </Pressable>
+                        </View>
+                      )}
+                    </View>
                   );
                 })
               )}
@@ -372,6 +552,53 @@ export function ScopedChannelsDrawer({
             />
           </View>
 
+          {/* Top Action Buttons: Add Course Hub & Browse Course Hubs */}
+          {(onOpenAddHub || onOpenBrowseHubs) && (
+            <View style={styles.topActionsStack}>
+              {onOpenAddHub && (
+                <Pressable
+                  onPress={() => {
+                    onClose();
+                    onOpenAddHub();
+                  }}
+                  accessibilityRole="button"
+                  accessibilityLabel="Add Course Hub"
+                  style={({ pressed }) => [
+                    styles.addHubActionBtn,
+                    pressed && styles.pressed,
+                  ]}
+                >
+                  <Feather
+                    name="folder-plus"
+                    size={15}
+                    color={colors.ustpNavy}
+                  />
+                  <Text style={styles.addHubActionText}>Add Course Hub</Text>
+                </Pressable>
+              )}
+
+              {onOpenBrowseHubs && (
+                <Pressable
+                  onPress={() => {
+                    onClose();
+                    onOpenBrowseHubs();
+                  }}
+                  accessibilityRole="button"
+                  accessibilityLabel="Browse Course Hubs"
+                  style={({ pressed }) => [
+                    styles.browseHubsActionBtn,
+                    pressed && styles.pressed,
+                  ]}
+                >
+                  <Feather name="compass" size={15} color={colors.ustpGold} />
+                  <Text style={styles.browseHubsActionText}>
+                    Browse Course Hubs
+                  </Text>
+                </Pressable>
+              )}
+            </View>
+          )}
+
           {/* Four States for Channel List */}
           {isLoading ? (
             <View style={styles.stateBox}>
@@ -393,17 +620,36 @@ export function ScopedChannelsDrawer({
                 <Text style={styles.retryBtnText}>Retry</Text>
               </Pressable>
             </View>
-          ) : hierarchy.length === 0 ? (
+          ) : joinedHierarchy.length === 0 ? (
             <View style={styles.stateBox}>
               <Text style={styles.stateText}>
-                {channels.length === 0
-                  ? 'No Course Hubs available yet.'
-                  : 'No matching Course Hubs found.'}
+                {totalJoinedHubsCount === 0
+                  ? 'You have not joined any Course Hubs yet.'
+                  : 'No matching joined Course Hubs found.'}
               </Text>
+              {totalJoinedHubsCount === 0 && onOpenBrowseHubs && (
+                <Pressable
+                  onPress={() => {
+                    onClose();
+                    onOpenBrowseHubs();
+                  }}
+                  accessibilityRole="button"
+                  accessibilityLabel="Browse and Join Course Hubs"
+                  style={({ pressed }) => [
+                    styles.emptyBrowseBtn,
+                    pressed && styles.pressed,
+                  ]}
+                >
+                  <Feather name="compass" size={14} color={colors.ustpNavy} />
+                  <Text style={styles.emptyBrowseBtnText}>
+                    Browse &amp; Join Course Hubs
+                  </Text>
+                </Pressable>
+              )}
             </View>
           ) : (
             <FlatList
-              data={hierarchy}
+              data={joinedHierarchy}
               keyExtractor={(node) => String(node.hub.id)}
               renderItem={renderHubNode}
               contentContainerStyle={styles.listContent}
@@ -499,6 +745,42 @@ const styles = StyleSheet.create({
     fontSize: typography.sizes.sm,
     color: colors.white,
   },
+  topActionsStack: {
+    gap: spacing.xs + 2,
+    marginBottom: spacing.md,
+  },
+  addHubActionBtn: {
+    minHeight: 44,
+    borderRadius: radii.md,
+    backgroundColor: colors.ustpGold,
+    paddingHorizontal: spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.xs + 2,
+  },
+  addHubActionText: {
+    fontSize: typography.sizes.xs,
+    fontWeight: '800',
+    color: colors.ustpNavy,
+  },
+  browseHubsActionBtn: {
+    minHeight: 44,
+    borderRadius: radii.md,
+    backgroundColor: colors.ustpNavySurface,
+    borderWidth: 1,
+    borderColor: colors.ustpNavyBorder,
+    paddingHorizontal: spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.xs + 2,
+  },
+  browseHubsActionText: {
+    fontSize: typography.sizes.xs,
+    fontWeight: '800',
+    color: colors.white,
+  },
   listContent: {
     paddingBottom: spacing.lg,
   },
@@ -515,13 +797,31 @@ const styles = StyleSheet.create({
   hubCardActive: {
     borderColor: colors.ustpGold,
   },
+  hubHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
   hubHeaderBtn: {
+    flex: 1,
     minHeight: touchTarget.minHeight,
-    paddingHorizontal: spacing.sm + 2,
+    paddingLeft: spacing.sm + 2,
+    paddingRight: spacing.xs,
     paddingVertical: spacing.sm,
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.sm,
+  },
+  hubQuickActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingRight: spacing.xs,
+  },
+  hubIconBtn: {
+    minWidth: 38,
+    minHeight: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: radii.sm,
   },
   hubHeaderTextWrap: {
     flex: 1,
@@ -552,19 +852,6 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     color: colors.ustpNavy,
     ...typography.tabularNums,
-  },
-  unjoinedBadge: {
-    backgroundColor: colors.ustpNavyDark,
-    borderWidth: 1,
-    borderColor: colors.ustpNavyBorder,
-    borderRadius: radii.sm,
-    paddingHorizontal: spacing.xs + 2,
-    paddingVertical: 2,
-  },
-  unjoinedBadgeText: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: colors.ustpNavyMutedText,
   },
   hubBody: {
     borderTopWidth: 1,
@@ -616,12 +903,95 @@ const styles = StyleSheet.create({
     paddingTop: spacing.sm,
     gap: spacing.xs,
   },
+  subSectionHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: spacing.xs,
+  },
   subSectionLabel: {
     fontSize: 10,
     fontWeight: '800',
     color: colors.ustpNavyMutedText,
     letterSpacing: 0.7,
-    paddingHorizontal: spacing.xs,
+  },
+  inlineAddChannelBtn: {
+    minHeight: 32,
+    paddingHorizontal: spacing.xs + 2,
+    borderRadius: radii.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+  },
+  inlineAddChannelText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: colors.ustpGold,
+  },
+  subChannelItemWrap: {
+    gap: spacing.xs,
+  },
+  subChannelRowContainer: {
+    minHeight: 44,
+    borderRadius: radii.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  subChannelPressArea: {
+    flex: 1,
+    minHeight: 44,
+    paddingHorizontal: spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs + 2,
+  },
+  subDeleteIconBtn: {
+    minWidth: 38,
+    minHeight: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  subDeleteConfirmRow: {
+    backgroundColor: colors.ustpNavyDark,
+    borderWidth: 1,
+    borderColor: colors.dangerBorder,
+    borderRadius: radii.md,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs + 2,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.xs,
+  },
+  subDeleteConfirmText: {
+    flex: 1,
+    fontSize: 11,
+    fontWeight: '700',
+    color: colors.white,
+  },
+  subDeleteConfirmBtn: {
+    minHeight: 34,
+    paddingHorizontal: spacing.sm,
+    borderRadius: radii.sm,
+    backgroundColor: colors.dangerBorder,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  subDeleteConfirmBtnText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: colors.white,
+  },
+  subDeleteCancelBtn: {
+    minHeight: 34,
+    paddingHorizontal: spacing.xs + 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  subDeleteCancelText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: colors.ustpNavyMutedText,
   },
   subChannelRow: {
     minHeight: 44,
@@ -649,11 +1019,27 @@ const styles = StyleSheet.create({
   stateBox: {
     padding: spacing.lg,
     alignItems: 'center',
+    gap: spacing.md,
   },
   stateText: {
     fontSize: typography.sizes.sm,
     color: colors.ustpNavyMutedText,
     textAlign: 'center',
+  },
+  emptyBrowseBtn: {
+    minHeight: 44,
+    paddingHorizontal: spacing.md,
+    borderRadius: radii.md,
+    backgroundColor: colors.ustpGold,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.xs + 2,
+  },
+  emptyBrowseBtnText: {
+    fontSize: typography.sizes.xs,
+    fontWeight: '800',
+    color: colors.ustpNavy,
   },
   errorBox: {
     backgroundColor: colors.dangerBg,

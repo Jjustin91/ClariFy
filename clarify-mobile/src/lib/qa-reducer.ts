@@ -215,3 +215,64 @@ export function resolveHubChatChannels(
     defaultChatChannel: activeHub,
   };
 }
+
+/**
+ * Extracts published Class FAQs from a Course Hub's thread list and enforces
+ * strict "Anonymous Student" masking (never retains sender_id, real name, or avatar).
+ */
+export function extractPublishedFaqs(threads: QaThread[]): QaThread[] {
+  return mergeAndDedupeThreads(threads.filter((t) => Boolean(t.is_pinned_faq)));
+}
+
+/**
+ * Formats a Course Hub display name for POST/PATCH /channels without duplicating
+ * the course_code prefix (matches clarify-web ChannelRosterModal).
+ */
+export function formatCourseHubSubmitName(
+  courseCode: string,
+  hubName: string
+): string {
+  const cleanCode = courseCode.trim().toUpperCase();
+  const cleanTitle = hubName.replace(/^#\s*/, '').trim();
+  if (!cleanTitle) {
+    return cleanCode;
+  }
+  if (
+    cleanCode &&
+    !cleanTitle.toLowerCase().startsWith(cleanCode.toLowerCase())
+  ) {
+    return `${cleanCode} ${cleanTitle}`;
+  }
+  return cleanTitle;
+}
+
+/**
+ * Normalizes a sub-channel name into a lowercase hyphenated slug without a leading '#'.
+ * Matches clarify-web ChannelRosterModal.handleCreateSubChannel.
+ */
+export function normalizeSubChannelSlug(rawName: string): string {
+  return rawName
+    .replace(/^#\s*/, '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '-');
+}
+
+/**
+ * Removes a handled pending join request from a channel roster snapshot
+ * (used on approval, rejection, and HTTP 409 already-handled recovery).
+ */
+export function removePendingRequestFromChannel(
+  channel: Channel,
+  institutionalId: string
+): Channel {
+  const normalizedTarget = institutionalId.trim().toLowerCase();
+  const filteredPending = (channel.pending_requests || []).filter(
+    (req) => req.institutional_id.trim().toLowerCase() !== normalizedTarget
+  );
+  return {
+    ...channel,
+    pending_requests: filteredPending,
+  };
+}
+
