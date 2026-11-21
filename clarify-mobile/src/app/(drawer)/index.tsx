@@ -1,4 +1,3 @@
-import { Feather } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useCallback } from 'react';
 import {
@@ -251,52 +250,6 @@ export default function MobileDashboardScreen() {
                       );
                     })
                   )}
-
-                  {/* Quick-access list of enrolled Course Hubs (ensures <= 2 taps to any scoped feed) */}
-                  <View style={styles.enrolledListCard}>
-                    <Text style={styles.enrolledListHeader}>
-                      YOUR COURSE HUBS ({joinedCourseHubs.length})
-                    </Text>
-                    {joinedCourseHubs.map((hub, idx) => {
-                      const membersCount = getChannelMembersCount(hub);
-                      return (
-                        <Pressable
-                          key={`enrolled-${hub.id}`}
-                          onPress={() =>
-                            router.push(`/channels/${hub.id}` as never)
-                          }
-                          accessibilityRole="button"
-                          accessibilityLabel={`Open Course Hub ${formatCourseHubName(hub)}`}
-                          style={({ pressed }) => [
-                            styles.enrolledRow,
-                            idx > 0 && styles.enrolledRowBorder,
-                            pressed && styles.pressed,
-                          ]}
-                        >
-                          <View style={styles.enrolledRowTextWrap}>
-                            <Text
-                              numberOfLines={1}
-                              style={styles.enrolledRowTitle}
-                            >
-                              {formatCourseHubName(hub)}
-                            </Text>
-                            <Text style={styles.enrolledRowMeta}>
-                              {[hub.course_code, hub.scope_section]
-                                .filter(Boolean)
-                                .join(' • ')}{' '}
-                              • {membersCount}{' '}
-                              {membersCount === 1 ? 'member' : 'members'}
-                            </Text>
-                          </View>
-                          <Feather
-                            name="chevron-right"
-                            size={18}
-                            color={colors.ustpNavy}
-                          />
-                        </Pressable>
-                      );
-                    })}
-                  </View>
                 </View>
               )}
             </View>
@@ -477,54 +430,6 @@ const styles = StyleSheet.create({
   },
   hubTimeText: {
     fontSize: typography.sizes.xxs,
-    color: colors.mutedSlate,
-    ...typography.tabularNums,
-  },
-  enrolledListCard: {
-    backgroundColor: colors.white,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radii.lg,
-    overflow: 'hidden',
-  },
-  enrolledListHeader: {
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.sm + 2,
-    backgroundColor: colors.surfaceSubtle,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
-    fontSize: typography.sizes.xxs,
-    fontWeight: '800',
-    color: colors.mutedSlate,
-    letterSpacing: 0.6,
-    ...typography.tabularNums,
-  },
-  enrolledRow: {
-    minHeight: 56,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.sm + 2,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: spacing.md,
-  },
-  enrolledRowBorder: {
-    borderTopWidth: 1,
-    borderTopColor: colors.border,
-  },
-  enrolledRowTextWrap: {
-    flex: 1,
-    gap: 2,
-  },
-  enrolledRowTitle: {
-    fontSize: typography.sizes.body,
-    lineHeight: typography.lineHeights.body,
-    fontWeight: '800',
-    color: colors.ustpText,
-  },
-  enrolledRowMeta: {
-    fontSize: typography.sizes.xs,
-    lineHeight: typography.lineHeights.xs,
     color: colors.mutedSlate,
     ...typography.tabularNums,
   },

@@ -1,4 +1,5 @@
 import { Feather } from '@expo/vector-icons';
+import * as Clipboard from 'expo-clipboard';
 import React, {
   useCallback,
   useEffect,
@@ -12,6 +13,9 @@ import {
   AppState,
   type AppStateStatus,
   FlatList,
+  Image,
+  Keyboard,
+  type KeyboardEvent,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -21,6 +25,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useAuth } from '../context/AuthContext';
 import {
@@ -29,9 +34,11 @@ import {
   unsendChannelChatMessageApi,
 } from '../lib/api-client';
 import {
-  canUnsendChatMessage,
   courseChatReducer,
   createInitialCourseChatState,
+  getChatMessageActionCapabilities,
+  getChatSenderInitial,
+  isFacultyChatRole,
   toInvertedChatList,
 } from '../lib/chat-reducer';
 import { getUnsentMessagePlaceholder } from '../lib/domain-logic';
@@ -40,8 +47,15 @@ import {
   subscribeChannelReverb,
   type ReverbBroadcastPayload,
 } from '../lib/reverb-client';
-import { colors, elevation, radii, spacing, touchTarget, typography } from '../theme';
-import type { ApiError, ChatMessage } from '../types/api';
+import {
+  colors,
+  elevation,
+  radii,
+  spacing,
+  touchTarget,
+  typography,
+} from '../theme';
+import type { ApiError, ChatMessage, ChatSeenByUser } from '../types/api';
 import { EmptyState, ErrorBanner } from './StateViews';
 
 const CHAT_PAGE_LIMIT = 50;
@@ -55,6 +69,101 @@ function formatChatTime(iso: string): string {
     hour: 'numeric',
     minute: '2-digit',
   });
+}
+
+function ChatSenderAvatar({
+  name,
+  role,
+  avatarUrl,
+  size = 'md',
+  accessibilityLabel,
+}: {
+  name: string;
+  role: string;
+  avatarUrl?: string | null;
+  size?: 'md' | 'xs';
+  accessibilityLabel?: string;
+}) {
+  const [failedUrl, setFailedUrl] = useState<string | null>(null);
+  const isFaculty = isFacultyChatRole(role);
+  const initial = getChatSenderInitial(name, role);
+  const normalizedUrl =
+    typeof avatarUrl === 'string' && avatarUrl.trim().length > 0
+      ? avatarUrl.trim()
+      : null;
+  const showImage = Boolean(normalizedUrl && failedUrl !== normalizedUrl);
+
+  return (
+    <View
+      accessible={Boolean(accessibilityLabel)}
+      accessibilityLabel={accessibilityLabel}
+      style={[
+        size === 'xs' ? styles.avatarXs : styles.avatarMd,
+        isFaculty ? styles.avatarFaculty : styles.avatarStudent,
+      ]}
+    >
+      {showImage && normalizedUrl ? (
+        <Image
+          source={{ uri: normalizedUrl }}
+          onError={() => setFailedUrl(normalizedUrl)}
+          style={styles.avatarImage}
+        />
+      ) : (
+        <Text
+          style={[
+            size === 'xs' ? styles.avatarInitialXs : styles.avatarInitialMd,
+            isFaculty
+              ? styles.avatarInitialFaculty
+              : styles.avatarInitialStudent,
+          ]}
+        >
+          {initial}
+        </Text>
+      )}
+    </View>
+  );
+}
+
+function SeenByAvatarsRow({
+  readers,
+  alignRight,
+}: {
+  readers: ChatSeenByUser[];
+  alignRight: boolean;
+}) {
+  if (readers.length === 0) return null;
+  const visibleReaders = readers.slice(0, 4);
+  const overflowCount = Math.max(0, readers.length - visibleReaders.length);
+  const namesSummary = visibleReaders.map((r) => r.name).join(', ');
+
+  return (
+    <View
+      accessible
+      accessibilityLabel={`Seen by ${namesSummary}${overflowCount > 0 ? ` and ${overflowCount} more` : ''}`}
+      style={[
+        styles.seenByRow,
+        alignRight ? styles.seenByRowRight : styles.seenByRowLeft,
+      ]}
+    >
+      <Text style={styles.seenByText}>Seen</Text>
+      <View style={styles.seenByAvatarsStack}>
+        {visibleReaders.map((reader) => (
+          <ChatSenderAvatar
+            key={`seen-${reader.id}`}
+            name={reader.name}
+            role={reader.role}
+            avatarUrl={reader.avatar_url}
+            size="xs"
+          />
+        ))}
+        {overflowCount > 0 && (
+          <View style={styles.seenOverflowBadge}>
+            <Text style={styles.seenOverflowText}>+{overflowCount}</Text>
+          </View>
+        )}
+      </View>
+    </View>
+  );
 }
 
 function ChatSkeleton() {
@@ -72,6 +181,7 @@ function ChatSkeleton() {
             isOwn ? styles.skeletonRowOwn : styles.skeletonRowOther,
           ]}
         >
+          {!isOwn && <View style={styles.skeletonAvatar} />}
           <View
             style={[
               styles.skeletonBubble,
@@ -94,18 +204,19 @@ export interface CourseHubChatViewProps {
 }
 
 /**
- * Course Hub Messenger Chat tab (`subject_hashtag = '__CHAT__'`).
+ * Course Hub Messenger Chat view (`subject_hashtag = '__CHAT__'`).
  * - Cursor pagination (`before`, `limit=50`, `meta.has_more`, `meta.next_before`) with inverted FlatList
- * - Optimistic send with `temp_id`, sending/sent/failed state, and inline Retry
- * - Unsend restricted to own confirmed messages (ChannelPolicy::unsendMessage)
+ * - Overlap-measured Android keyboard avoidance + iOS KeyboardAvoidingView so composer is never blocked
+ * - Sender circular avatars, Faculty/Student role badges, and web-parity Sent/Seen indicators
+ * - Messenger-style long-press action menu (Copy Message & Unsend Message) + confirmation modal
  * - Private Reverb subscription `clarify.channel.{id}` active only while focused & AppState === 'active'
- * - Debounced (~1.5s + jitter) de-duplicated targeted chat refetch, zero polling
  */
 export function CourseHubChatView({
   channelId,
   channelTitle,
   isFocused,
 }: CourseHubChatViewProps) {
+  const insets = useSafeAreaInsets();
   const { user, showToast } = useAuth();
   const [state, dispatch] = useReducer(
     courseChatReducer,
@@ -114,9 +225,16 @@ export function CourseHubChatView({
   );
 
   const [draft, setDraft] = useState('');
+  const [actionMenuTarget, setActionMenuTarget] = useState<ChatMessage | null>(
+    null
+  );
   const [unsendTarget, setUnsendTarget] = useState<ChatMessage | null>(null);
   const [appActiveEpoch, setAppActiveEpoch] = useState(0);
+  const [androidKeyboardOverlap, setAndroidKeyboardOverlap] = useState(0);
+  const [iosKeyboardOffset, setIosKeyboardOffset] = useState(96);
 
+  const rootRef = useRef<React.ComponentRef<typeof View> | null>(null);
+  const keyboardTopYRef = useRef<number | null>(null);
   const isAppActiveRef = useRef<boolean>(AppState.currentState === 'active');
   const latestFetchInFlightRef = useRef<Promise<void> | null>(null);
   const olderFetchInFlightRef = useRef<Promise<void> | null>(null);
@@ -128,6 +246,52 @@ export function CourseHubChatView({
   useEffect(() => {
     activeChannelRef.current = channelId;
   }, [channelId]);
+
+  const recalculateKeyboardBounds = useCallback(() => {
+    if (!rootRef.current) return;
+    rootRef.current.measureInWindow((_x, y, _width, height) => {
+      if (height <= 0) return;
+      if (Platform.OS === 'ios') {
+        if (y > 0) {
+          setIosKeyboardOffset(Math.round(y));
+        }
+        return;
+      }
+      if (Platform.OS === 'android') {
+        const keyboardTopY = keyboardTopYRef.current;
+        if (keyboardTopY === null) {
+          setAndroidKeyboardOverlap(0);
+          return;
+        }
+        const rootBottomY = y + height;
+        const overlap = Math.max(0, Math.round(rootBottomY - keyboardTopY));
+        setAndroidKeyboardOverlap(overlap);
+      }
+    });
+  }, []);
+
+  useEffect(() => {
+    if (Platform.OS !== 'android') {
+      return;
+    }
+
+    const showSub = Keyboard.addListener(
+      'keyboardDidShow',
+      (event: KeyboardEvent) => {
+        keyboardTopYRef.current = event.endCoordinates.screenY;
+        recalculateKeyboardBounds();
+      }
+    );
+    const hideSub = Keyboard.addListener('keyboardDidHide', () => {
+      keyboardTopYRef.current = null;
+      setAndroidKeyboardOverlap(0);
+    });
+
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, [recalculateKeyboardBounds]);
 
   const clearDebouncedSyncTimer = useCallback(() => {
     if (debouncedSyncTimerRef.current) {
@@ -264,21 +428,24 @@ export function CourseHubChatView({
 
   // Pause background refetches when AppState leaves 'active'; run one catch-up fetch on return while focused
   useEffect(() => {
-    const sub = AppState.addEventListener('change', (nextState: AppStateStatus) => {
-      const nextIsActive = nextState === 'active';
-      const wasActive = isAppActiveRef.current;
-      isAppActiveRef.current = nextIsActive;
+    const sub = AppState.addEventListener(
+      'change',
+      (nextState: AppStateStatus) => {
+        const nextIsActive = nextState === 'active';
+        const wasActive = isAppActiveRef.current;
+        isAppActiveRef.current = nextIsActive;
 
-      if (!nextIsActive) {
-        clearDebouncedSyncTimer();
-        return;
-      }
+        if (!nextIsActive) {
+          clearDebouncedSyncTimer();
+          return;
+        }
 
-      if (!wasActive && nextIsActive && isFocused && channelId > 0) {
-        setAppActiveEpoch((n) => n + 1);
-        void fetchLatestChat('silent');
+        if (!wasActive && nextIsActive && isFocused && channelId > 0) {
+          setAppActiveEpoch((n) => n + 1);
+          void fetchLatestChat('silent');
+        }
       }
-    });
+    );
     return () => {
       sub.remove();
     };
@@ -364,7 +531,8 @@ export function CourseHubChatView({
           type: 'SEND_FAILED',
           tempId,
           errorMessage:
-            apiErr?.message || 'Unable to send message. Tap Retry to try again.',
+            apiErr?.message ||
+            'Unable to send message. Tap Retry to try again.',
         });
       }
     },
@@ -411,6 +579,26 @@ export function CourseHubChatView({
     [dispatchSendRequest]
   );
 
+  const handleCopyActionMessage = useCallback(async () => {
+    if (!actionMenuTarget) return;
+    const textToCopy = actionMenuTarget.content.trim();
+    setActionMenuTarget(null);
+    if (!textToCopy) return;
+    try {
+      await Clipboard.setStringAsync(textToCopy);
+      showToast('Message copied to clipboard.', 'info');
+    } catch {
+      showToast('Unable to copy message.', 'error');
+    }
+  }, [actionMenuTarget, showToast]);
+
+  const handleRequestUnsendFromMenu = useCallback(() => {
+    if (!actionMenuTarget) return;
+    const target = actionMenuTarget;
+    setActionMenuTarget(null);
+    setUnsendTarget(target);
+  }, [actionMenuTarget]);
+
   const handleConfirmUnsend = useCallback(async () => {
     if (!unsendTarget) return;
     const targetId = Number(unsendTarget.id);
@@ -445,12 +633,16 @@ export function CourseHubChatView({
   );
 
   const keyExtractor = useCallback(
-    (item: ChatMessage) => String(item.temp_id && typeof item.id !== 'number' ? item.temp_id : item.id),
+    (item: ChatMessage) =>
+      String(
+        item.temp_id && typeof item.id !== 'number' ? item.temp_id : item.id
+      ),
     []
   );
 
   const renderMessage = useCallback(
-    ({ item }: { item: ChatMessage }) => {
+    ({ item, index }: { item: ChatMessage; index: number }) => {
+      const isLatestMessage = index === 0;
       const isOwn =
         Boolean(user?.id) &&
         Number(item.author?.id ?? item.sender_id ?? 0) === Number(user?.id);
@@ -459,163 +651,303 @@ export function CourseHubChatView({
       const tempKey = item.temp_id || String(item.id);
       const failedReason = state.failedErrorByTempId[tempKey];
       const unsentPlaceholder = getUnsentMessagePlaceholder(item, user?.id);
-      const allowUnsend = canUnsendChatMessage(item, user);
+      const capabilities = getChatMessageActionCapabilities(item, user);
       const isUnsending =
         typeof item.id === 'number' && state.unsendingIds.includes(item.id);
 
-      return (
-        <View
-          style={[
-            styles.messageRow,
-            isOwn ? styles.messageRowOwn : styles.messageRowOther,
-          ]}
-        >
-          <View
-            style={[
-              styles.bubble,
-              isOwn ? styles.bubbleOwn : styles.bubbleOther,
-              item.is_unsent && styles.bubbleUnsent,
-              isFailed && styles.bubbleFailed,
-            ]}
-          >
-            {/* Author + Timestamp Header */}
-            <View style={styles.bubbleMetaRow}>
-              <Text
-                numberOfLines={1}
-                style={[
-                  styles.authorName,
-                  isOwn && !item.is_unsent
-                    ? styles.authorNameOwn
-                    : styles.authorNameOther,
-                ]}
-              >
-                {isOwn ? 'You' : item.author?.name || 'Campus Member'}
-              </Text>
-              <Text
-                style={[
-                  styles.timestampText,
-                  isOwn && !item.is_unsent
-                    ? styles.timestampOwn
-                    : styles.timestampOther,
-                ]}
-              >
-                {formatChatTime(item.created_at)}
-              </Text>
-            </View>
+      const senderName = item.author?.name || 'Campus Member';
+      const senderRole = item.author?.role || 'student';
+      const isFacultySender = isFacultyChatRole(senderRole);
+      const roleLabel = isFacultySender ? 'Faculty' : 'Student';
+      const authorAvatarUrl = isOwn
+        ? user?.avatar_url || item.author?.avatar_url
+        : item.author?.avatar_url;
+      const displayTime = formatChatTime(item.created_at);
+      const explicitSeenBy = Array.isArray(item.seen_by) ? item.seen_by : [];
 
-            {/* Body or Unsent Placeholder */}
-            {unsentPlaceholder ? (
-              <Text style={styles.unsentText}>{unsentPlaceholder}</Text>
-            ) : (
-              <>
-                {item.content.trim().length > 0 && (
-                  <Text
-                    style={[
-                      styles.messageBody,
-                      isOwn ? styles.messageBodyOwn : styles.messageBodyOther,
-                    ]}
-                  >
-                    {item.content}
+      if (isOwn) {
+        return (
+          <View style={styles.ownMessageColumn}>
+            <Pressable
+              onLongPress={
+                capabilities.canOpenMenu && !isUnsending
+                  ? () => {
+                      Keyboard.dismiss();
+                      setActionMenuTarget(item);
+                    }
+                  : undefined
+              }
+              delayLongPress={280}
+              accessibilityRole="button"
+              accessibilityLabel={`Your message at ${displayTime}`}
+              accessibilityHint={
+                capabilities.canOpenMenu
+                  ? 'Press and hold for Copy or Unsend options'
+                  : undefined
+              }
+              style={({ pressed }) => [
+                styles.bubble,
+                styles.bubbleOwn,
+                item.is_unsent && styles.bubbleUnsent,
+                isFailed && styles.bubbleFailed,
+                isSending && styles.bubbleSending,
+                pressed && capabilities.canOpenMenu && styles.bubblePressed,
+              ]}
+            >
+              {/* Own Header: You + Time */}
+              <View style={styles.bubbleMetaRow}>
+                <Text
+                  numberOfLines={1}
+                  style={[
+                    styles.authorName,
+                    !item.is_unsent
+                      ? styles.authorNameOwn
+                      : styles.authorNameOther,
+                  ]}
+                >
+                  You
+                </Text>
+                <Text
+                  style={[
+                    styles.timestampText,
+                    !item.is_unsent
+                      ? styles.timestampOwn
+                      : styles.timestampOther,
+                  ]}
+                >
+                  {displayTime}
+                </Text>
+              </View>
+
+              {/* Body or Unsent Placeholder */}
+              {unsentPlaceholder ? (
+                <Text style={styles.unsentText}>{unsentPlaceholder}</Text>
+              ) : (
+                <>
+                  {item.content.trim().length > 0 && (
+                    <Text style={[styles.messageBody, styles.messageBodyOwn]}>
+                      {item.content}
+                    </Text>
+                  )}
+
+                  {item.attachment && (
+                    <View
+                      style={[styles.attachmentChip, styles.attachmentChipOwn]}
+                    >
+                      <Feather
+                        name={
+                          item.attachment.type === 'image'
+                            ? 'image'
+                            : item.attachment.type === 'voice'
+                              ? 'mic'
+                              : 'paperclip'
+                        }
+                        size={14}
+                        color={colors.ustpGold}
+                      />
+                      <Text
+                        numberOfLines={1}
+                        style={[
+                          styles.attachmentName,
+                          styles.attachmentNameOwn,
+                        ]}
+                      >
+                        {item.attachment.name}
+                      </Text>
+                    </View>
+                  )}
+                </>
+              )}
+
+              {/* Inline Failed Send Controls */}
+              {isFailed && (
+                <View style={styles.failedActionsBox}>
+                  <Text style={styles.failedErrorText}>
+                    {failedReason || 'Failed to send.'}
                   </Text>
-                )}
-
-                {item.attachment && (
-                  <View
-                    style={[
-                      styles.attachmentChip,
-                      isOwn
-                        ? styles.attachmentChipOwn
-                        : styles.attachmentChipOther,
-                    ]}
-                  >
-                    <Feather
-                      name={
-                        item.attachment.type === 'image'
-                          ? 'image'
-                          : item.attachment.type === 'voice'
-                            ? 'mic'
-                            : 'paperclip'
-                      }
-                      size={14}
-                      color={isOwn ? colors.ustpGold : colors.ustpNavy}
-                    />
-                    <Text
-                      numberOfLines={1}
-                      style={[
-                        styles.attachmentName,
-                        isOwn
-                          ? styles.attachmentNameOwn
-                          : styles.attachmentNameOther,
+                  <View style={styles.failedButtonsRow}>
+                    <Pressable
+                      onPress={() => handleRetryFailed(item)}
+                      accessibilityRole="button"
+                      accessibilityLabel="Retry sending message"
+                      style={({ pressed }) => [
+                        styles.failedRetryBtn,
+                        pressed && styles.pressed,
                       ]}
                     >
-                      {item.attachment.name}
-                    </Text>
+                      <Feather
+                        name="refresh-cw"
+                        size={13}
+                        color={colors.ustpGold}
+                      />
+                      <Text style={styles.failedRetryText}>Retry</Text>
+                    </Pressable>
+                    <Pressable
+                      onPress={() =>
+                        dispatch({ type: 'DISMISS_FAILED', tempId: tempKey })
+                      }
+                      accessibilityRole="button"
+                      accessibilityLabel="Dismiss failed message"
+                      style={({ pressed }) => [
+                        styles.failedDismissBtn,
+                        pressed && styles.pressed,
+                      ]}
+                    >
+                      <Text style={styles.failedDismissText}>Dismiss</Text>
+                    </Pressable>
                   </View>
-                )}
-              </>
-            )}
-
-            {/* Status / Unsend / Failed Retry Footer */}
-            {isSending && (
-              <Text style={styles.statusOwnText}>Sending...</Text>
-            )}
-
-            {isFailed && (
-              <View style={styles.failedActionsBox}>
-                <Text style={styles.failedErrorText}>
-                  {failedReason || 'Failed to send.'}
-                </Text>
-                <View style={styles.failedButtonsRow}>
-                  <Pressable
-                    onPress={() => handleRetryFailed(item)}
-                    accessibilityRole="button"
-                    accessibilityLabel="Retry sending message"
-                    style={({ pressed }) => [
-                      styles.failedRetryBtn,
-                      pressed && styles.pressed,
-                    ]}
-                  >
-                    <Feather
-                      name="refresh-cw"
-                      size={13}
-                      color={colors.ustpGold}
-                    />
-                    <Text style={styles.failedRetryText}>Retry</Text>
-                  </Pressable>
-                  <Pressable
-                    onPress={() =>
-                      dispatch({ type: 'DISMISS_FAILED', tempId: tempKey })
-                    }
-                    accessibilityRole="button"
-                    accessibilityLabel="Dismiss failed message"
-                    style={({ pressed }) => [
-                      styles.failedDismissBtn,
-                      pressed && styles.pressed,
-                    ]}
-                  >
-                    <Text style={styles.failedDismissText}>Dismiss</Text>
-                  </Pressable>
                 </View>
-              </View>
-            )}
+              )}
+            </Pressable>
 
-            {allowUnsend && (
-              <Pressable
-                onPress={() => setUnsendTarget(item)}
-                disabled={isUnsending}
-                accessibilityRole="button"
-                accessibilityLabel="Unsend message"
-                style={({ pressed }) => [
-                  styles.unsendBtn,
-                  pressed && styles.pressed,
-                ]}
-              >
-                <Text style={styles.unsendBtnText}>
-                  {isUnsending ? 'Unsending...' : 'Unsend'}
+            {/* Below-Bubble Status / Seen Receipt Footer */}
+            {isSending ? (
+              <Text style={styles.ownFooterStatus}>Sending...</Text>
+            ) : isUnsending ? (
+              <Text style={styles.ownFooterStatus}>Unsending...</Text>
+            ) : explicitSeenBy.length > 0 ? (
+              <SeenByAvatarsRow readers={explicitSeenBy} alignRight />
+            ) : (
+              (!item.status || item.status === 'sent') &&
+              isLatestMessage && (
+                <Text style={styles.ownFooterStatus}>
+                  {item.is_unsent ? 'Unsent' : `Sent ${displayTime}`}
                 </Text>
-              </Pressable>
+              )
             )}
           </View>
+        );
+      }
+
+      /* OTHER SENDER MESSAGE: Left Circular Avatar + Name/Role Header + Crisp Bubble + Latest Read Indicator */
+      return (
+        <View style={styles.otherMessageOuter}>
+          <View style={styles.otherMessageRow}>
+            <View style={styles.otherLeftGroup}>
+              <ChatSenderAvatar
+                name={senderName}
+                role={senderRole}
+                avatarUrl={authorAvatarUrl}
+                size="md"
+                accessibilityLabel={`${senderName}, ${roleLabel}`}
+              />
+
+              <View style={styles.otherBubbleColumn}>
+                {/* Sender Name + Role Pill + Timestamp */}
+                <View style={styles.otherHeaderRow}>
+                  <Text numberOfLines={1} style={styles.otherAuthorName}>
+                    {senderName}
+                  </Text>
+                  <View
+                    style={[
+                      styles.rolePill,
+                      isFacultySender
+                        ? styles.rolePillFaculty
+                        : styles.rolePillStudent,
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.rolePillText,
+                        isFacultySender
+                          ? styles.rolePillTextFaculty
+                          : styles.rolePillTextStudent,
+                      ]}
+                    >
+                      {roleLabel}
+                    </Text>
+                  </View>
+                  <Text style={styles.otherTimestampText}>{displayTime}</Text>
+                </View>
+
+                <Pressable
+                  onLongPress={
+                    capabilities.canOpenMenu
+                      ? () => {
+                          Keyboard.dismiss();
+                          setActionMenuTarget(item);
+                        }
+                      : undefined
+                  }
+                  delayLongPress={280}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Message from ${senderName} at ${displayTime}`}
+                  accessibilityHint={
+                    capabilities.canOpenMenu
+                      ? 'Press and hold to copy message'
+                      : undefined
+                  }
+                  style={({ pressed }) => [
+                    styles.bubble,
+                    styles.bubbleOther,
+                    item.is_unsent && styles.bubbleUnsent,
+                    pressed && capabilities.canOpenMenu && styles.bubblePressed,
+                  ]}
+                >
+                  {unsentPlaceholder ? (
+                    <Text style={styles.unsentText}>{unsentPlaceholder}</Text>
+                  ) : (
+                    <>
+                      {item.content.trim().length > 0 && (
+                        <Text
+                          style={[styles.messageBody, styles.messageBodyOther]}
+                        >
+                          {item.content}
+                        </Text>
+                      )}
+
+                      {item.attachment && (
+                        <View
+                          style={[
+                            styles.attachmentChip,
+                            styles.attachmentChipOther,
+                          ]}
+                        >
+                          <Feather
+                            name={
+                              item.attachment.type === 'image'
+                                ? 'image'
+                                : item.attachment.type === 'voice'
+                                  ? 'mic'
+                                  : 'paperclip'
+                            }
+                            size={14}
+                            color={colors.ustpNavy}
+                          />
+                          <Text
+                            numberOfLines={1}
+                            style={[
+                              styles.attachmentName,
+                              styles.attachmentNameOther,
+                            ]}
+                          >
+                            {item.attachment.name}
+                          </Text>
+                        </View>
+                      )}
+                    </>
+                  )}
+                </Pressable>
+              </View>
+            </View>
+
+            {/* Right-side mini read indicator matching clarify-web on latest respondent message */}
+            {explicitSeenBy.length === 0 && isLatestMessage && (
+              <View style={styles.latestSeenIndicatorWrap}>
+                <ChatSenderAvatar
+                  name={senderName}
+                  role={senderRole}
+                  avatarUrl={authorAvatarUrl}
+                  size="xs"
+                  accessibilityLabel={`Seen at ${displayTime}`}
+                />
+              </View>
+            )}
+          </View>
+
+          {explicitSeenBy.length > 0 && (
+            <SeenByAvatarsRow readers={explicitSeenBy} alignRight={false} />
+          )}
         </View>
       );
     },
@@ -662,13 +994,26 @@ export function CourseHubChatView({
     );
   };
 
-  const canSubmit = draft.trim().length > 0 && !state.isLoading && state.error?.status !== 403;
+  const canSubmit =
+    draft.trim().length > 0 && !state.isLoading && state.error?.status !== 403;
 
-  return (
-    <KeyboardAvoidingView
-      style={styles.root}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      keyboardVerticalOffset={Platform.OS === 'ios' ? 96 : 0}
+  const actionMenuCapabilities = actionMenuTarget
+    ? getChatMessageActionCapabilities(actionMenuTarget, user)
+    : null;
+
+  const composerBottomPadding =
+    Platform.OS === 'android' && androidKeyboardOverlap > 0
+      ? spacing.sm
+      : Math.max(insets.bottom, spacing.sm);
+
+  const chatContent = (
+    <View
+      style={[
+        styles.innerFlex,
+        Platform.OS === 'android' && androidKeyboardOverlap > 0
+          ? { paddingBottom: androidKeyboardOverlap }
+          : null,
+      ]}
     >
       {/* State 1: Loading Skeleton */}
       {state.isLoading ? (
@@ -719,7 +1064,12 @@ export function CourseHubChatView({
 
       {/* Message Composer Bar (hidden only on 403 forbidden channel) */}
       {state.error?.status !== 403 && (
-        <View style={styles.composerBar}>
+        <View
+          style={[
+            styles.composerBar,
+            { paddingBottom: composerBottomPadding },
+          ]}
+        >
           <TextInput
             value={draft}
             onChangeText={setDraft}
@@ -750,6 +1100,128 @@ export function CourseHubChatView({
           </Pressable>
         </View>
       )}
+    </View>
+  );
+
+  return (
+    <View
+      ref={rootRef}
+      style={styles.root}
+      onLayout={recalculateKeyboardBounds}
+    >
+      {Platform.OS === 'ios' ? (
+        <KeyboardAvoidingView
+          style={styles.innerFlex}
+          behavior="padding"
+          keyboardVerticalOffset={iosKeyboardOffset}
+        >
+          {chatContent}
+        </KeyboardAvoidingView>
+      ) : (
+        chatContent
+      )}
+
+      {/* Messenger-Style Long-Press Message Action Popup */}
+      <Modal
+        visible={Boolean(actionMenuTarget)}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setActionMenuTarget(null)}
+      >
+        <View style={styles.actionSheetBackdrop}>
+          <Pressable
+            style={StyleSheet.absoluteFill}
+            onPress={() => setActionMenuTarget(null)}
+            accessibilityRole="button"
+            accessibilityLabel="Close message actions"
+          />
+          {actionMenuTarget && actionMenuCapabilities && (
+            <View
+              accessibilityViewIsModal
+              style={[
+                styles.actionSheetCard,
+                { marginBottom: Math.max(insets.bottom, spacing.md) },
+              ]}
+            >
+              {/* Clipped Message Preview */}
+              <View style={styles.actionSheetPreview}>
+                <View style={styles.actionSheetPreviewMeta}>
+                  <Text numberOfLines={1} style={styles.actionSheetSender}>
+                    {Number(
+                      actionMenuTarget.author?.id ??
+                        actionMenuTarget.sender_id ??
+                        0
+                    ) === Number(user?.id)
+                      ? 'You'
+                      : actionMenuTarget.author?.name || 'Campus Member'}
+                  </Text>
+                  <Text style={styles.actionSheetTime}>
+                    {formatChatTime(actionMenuTarget.created_at)}
+                  </Text>
+                </View>
+                <Text numberOfLines={2} style={styles.actionSheetSnippet}>
+                  {actionMenuTarget.content.trim() ||
+                    actionMenuTarget.attachment?.name ||
+                    'Attachment'}
+                </Text>
+              </View>
+
+              {/* Action Buttons */}
+              <View style={styles.actionSheetButtons}>
+                {actionMenuCapabilities.canCopy && (
+                  <Pressable
+                    onPress={() => void handleCopyActionMessage()}
+                    accessibilityRole="button"
+                    accessibilityLabel="Copy message text"
+                    style={({ pressed }) => [
+                      styles.actionSheetRow,
+                      pressed && styles.actionSheetRowPressed,
+                    ]}
+                  >
+                    <Feather name="copy" size={18} color={colors.ustpNavy} />
+                    <Text style={styles.actionSheetRowText}>Copy Message</Text>
+                  </Pressable>
+                )}
+
+                {actionMenuCapabilities.canUnsend && (
+                  <Pressable
+                    onPress={handleRequestUnsendFromMenu}
+                    accessibilityRole="button"
+                    accessibilityLabel="Unsend message"
+                    style={({ pressed }) => [
+                      styles.actionSheetRow,
+                      actionMenuCapabilities.canCopy &&
+                        styles.actionSheetRowBorder,
+                      pressed && styles.actionSheetRowPressed,
+                    ]}
+                  >
+                    <Feather
+                      name="trash-2"
+                      size={18}
+                      color={colors.dangerBorder}
+                    />
+                    <Text style={styles.actionSheetRowDangerText}>
+                      Unsend Message
+                    </Text>
+                  </Pressable>
+                )}
+              </View>
+
+              <Pressable
+                onPress={() => setActionMenuTarget(null)}
+                accessibilityRole="button"
+                accessibilityLabel="Cancel message actions"
+                style={({ pressed }) => [
+                  styles.actionSheetCancelBtn,
+                  pressed && styles.pressed,
+                ]}
+              >
+                <Text style={styles.actionSheetCancelText}>Cancel</Text>
+              </Pressable>
+            </View>
+          )}
+        </View>
+      </Modal>
 
       {/* Unsend Confirmation Modal */}
       <Modal
@@ -759,7 +1231,13 @@ export function CourseHubChatView({
         onRequestClose={() => setUnsendTarget(null)}
       >
         <View style={styles.modalBackdrop}>
-          <View style={styles.modalCard}>
+          <Pressable
+            style={StyleSheet.absoluteFill}
+            onPress={() => setUnsendTarget(null)}
+            accessibilityRole="button"
+            accessibilityLabel="Cancel unsend backdrop"
+          />
+          <View accessibilityViewIsModal style={styles.modalCard}>
             <Text style={styles.modalTitle}>Unsend Message?</Text>
             <Text style={styles.modalBody}>
               This removes your message text and replaces it with an unsent
@@ -792,7 +1270,7 @@ export function CourseHubChatView({
           </View>
         </View>
       </Modal>
-    </KeyboardAvoidingView>
+    </View>
   );
 }
 
@@ -800,6 +1278,9 @@ const styles = StyleSheet.create({
   root: {
     flex: 1,
     backgroundColor: colors.ustpCream,
+  },
+  innerFlex: {
+    flex: 1,
   },
   listWrap: {
     flex: 1,
@@ -814,47 +1295,222 @@ const styles = StyleSheet.create({
     paddingTop: spacing.md,
   },
   listContent: {
-    padding: spacing.lg,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.md,
     flexGrow: 1,
   },
   separator: {
-    height: spacing.sm + 2,
+    height: spacing.md,
   },
-  messageRow: {
-    flexDirection: 'row',
+
+  /* Own Message Layout */
+  ownMessageColumn: {
     width: '100%',
+    alignItems: 'flex-end',
+    gap: 3,
   },
-  messageRowOwn: {
+  ownFooterStatus: {
+    fontSize: typography.sizes.xxs,
+    color: colors.mutedSlate,
+    fontWeight: '600',
+    paddingRight: spacing.xs,
+    ...typography.tabularNums,
+  },
+
+  /* Other Sender Message Layout */
+  otherMessageOuter: {
+    width: '100%',
+    gap: 3,
+  },
+  otherMessageRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    justifyContent: 'space-between',
+    gap: spacing.xs,
+  },
+  otherLeftGroup: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    gap: spacing.sm,
+    flexShrink: 1,
+    maxWidth: '88%',
+  },
+  otherBubbleColumn: {
+    flexShrink: 1,
+    gap: 4,
+  },
+  otherHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 6,
+    paddingLeft: 2,
+  },
+  otherAuthorName: {
+    fontSize: typography.sizes.xxs,
+    lineHeight: typography.lineHeights.xxs,
+    fontWeight: '800',
+    color: colors.ustpNavy,
+    flexShrink: 1,
+  },
+  rolePill: {
+    borderRadius: radii.sm,
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+  },
+  rolePillFaculty: {
+    backgroundColor: colors.ustpNavy,
+  },
+  rolePillStudent: {
+    backgroundColor: colors.ustpGoldSoft,
+    borderWidth: 1,
+    borderColor: colors.tagMemoBorder,
+  },
+  rolePillText: {
+    fontSize: 10,
+    fontWeight: '800',
+  },
+  rolePillTextFaculty: {
+    color: colors.ustpGold,
+  },
+  rolePillTextStudent: {
+    color: colors.ustpNavy,
+  },
+  otherTimestampText: {
+    fontSize: typography.sizes.xxs,
+    lineHeight: typography.lineHeights.xxs,
+    color: colors.mutedSlate,
+    ...typography.tabularNums,
+  },
+  latestSeenIndicatorWrap: {
+    paddingBottom: 2,
+    flexShrink: 0,
+  },
+
+  /* Sender Avatars */
+  avatarMd: {
+    width: 32,
+    height: 32,
+    borderRadius: radii.pill,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+    flexShrink: 0,
+  },
+  avatarXs: {
+    width: 16,
+    height: 16,
+    borderRadius: radii.pill,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+    flexShrink: 0,
+  },
+  avatarFaculty: {
+    backgroundColor: colors.ustpNavy,
+    borderColor: colors.ustpGold,
+  },
+  avatarStudent: {
+    backgroundColor: colors.ustpGoldSoft,
+    borderColor: colors.ustpOrange,
+  },
+  avatarImage: {
+    width: '100%',
+    height: '100%',
+  },
+  avatarInitialMd: {
+    fontSize: typography.sizes.xs,
+    fontWeight: '900',
+  },
+  avatarInitialXs: {
+    fontSize: 8,
+    fontWeight: '900',
+  },
+  avatarInitialFaculty: {
+    color: colors.ustpGold,
+  },
+  avatarInitialStudent: {
+    color: colors.ustpNavy,
+  },
+
+  /* Seen-By Reader Avatars Row (additive support) */
+  seenByRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: spacing.xs,
+  },
+  seenByRowRight: {
     justifyContent: 'flex-end',
   },
-  messageRowOther: {
+  seenByRowLeft: {
     justifyContent: 'flex-start',
+    paddingLeft: 40,
   },
+  seenByText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: colors.mutedSlate,
+  },
+  seenByAvatarsStack: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+  },
+  seenOverflowBadge: {
+    minWidth: 18,
+    height: 16,
+    borderRadius: radii.pill,
+    backgroundColor: colors.surfaceMuted,
+    borderWidth: 1,
+    borderColor: colors.borderStrong,
+    paddingHorizontal: 3,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  seenOverflowText: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: colors.ustpNavy,
+    ...typography.tabularNums,
+  },
+
+  /* Chat Bubbles */
   bubble: {
-    maxWidth: '84%',
-    borderRadius: radii.lg,
+    borderRadius: radii.xxl,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm + 2,
     gap: spacing.xs,
   },
   bubbleOwn: {
+    maxWidth: '82%',
     backgroundColor: colors.ustpNavy,
     borderWidth: 1,
     borderColor: colors.ustpNavy,
+    borderBottomRightRadius: radii.sm,
   },
   bubbleOther: {
     backgroundColor: colors.white,
     borderWidth: 1,
     borderColor: colors.border,
+    borderBottomLeftRadius: radii.sm,
   },
   bubbleUnsent: {
     backgroundColor: colors.surfaceMuted,
     borderWidth: 1,
     borderColor: colors.borderStrong,
   },
+  bubbleSending: {
+    opacity: 0.82,
+  },
   bubbleFailed: {
     borderColor: colors.dangerBorder,
     borderWidth: 2,
+  },
+  bubblePressed: {
+    opacity: 0.82,
   },
   bubbleMetaRow: {
     flexDirection: 'row',
@@ -929,11 +1585,6 @@ const styles = StyleSheet.create({
   attachmentNameOther: {
     color: colors.ustpNavy,
   },
-  statusOwnText: {
-    fontSize: typography.sizes.xxs,
-    color: colors.ustpNavyMutedText,
-    fontWeight: '600',
-  },
   failedActionsBox: {
     marginTop: spacing.xs,
     paddingTop: spacing.xs,
@@ -981,18 +1632,6 @@ const styles = StyleSheet.create({
     color: colors.white,
     textDecorationLine: 'underline',
   },
-  unsendBtn: {
-    alignSelf: 'flex-end',
-    minHeight: 32,
-    paddingHorizontal: spacing.xs,
-    justifyContent: 'center',
-  },
-  unsendBtnText: {
-    fontSize: typography.sizes.xxs,
-    fontWeight: '700',
-    color: colors.ustpNavyMutedText,
-    textDecorationLine: 'underline',
-  },
   olderLoaderRow: {
     paddingVertical: spacing.md,
     flexDirection: 'row',
@@ -1034,12 +1673,14 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: colors.mutedSlate,
   },
+
+  /* Composer Bar */
   composerBar: {
     backgroundColor: colors.white,
     borderTopWidth: 1,
     borderColor: colors.border,
     paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
+    paddingTop: spacing.sm,
     flexDirection: 'row',
     alignItems: 'flex-end',
     gap: spacing.sm,
@@ -1071,6 +1712,8 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
   },
+
+  /* Skeleton Loading */
   skeletonWrap: {
     flex: 1,
     padding: spacing.lg,
@@ -1079,12 +1722,20 @@ const styles = StyleSheet.create({
   },
   skeletonRow: {
     flexDirection: 'row',
+    alignItems: 'flex-end',
+    gap: spacing.sm,
   },
   skeletonRowOwn: {
     justifyContent: 'flex-end',
   },
   skeletonRowOther: {
     justifyContent: 'flex-start',
+  },
+  skeletonAvatar: {
+    width: 32,
+    height: 32,
+    borderRadius: radii.pill,
+    backgroundColor: colors.skeletonBase,
   },
   skeletonBubble: {
     width: '68%',
@@ -1112,6 +1763,101 @@ const styles = StyleSheet.create({
     borderRadius: radii.sm,
     backgroundColor: colors.skeletonLight,
   },
+
+  /* Messenger-Style Long-Press Action Popup */
+  actionSheetBackdrop: {
+    flex: 1,
+    backgroundColor: colors.overlayBackdrop,
+    justifyContent: 'flex-end',
+    paddingHorizontal: spacing.md,
+  },
+  actionSheetCard: {
+    width: '100%',
+    maxWidth: 420,
+    alignSelf: 'center',
+    gap: spacing.sm,
+  },
+  actionSheetPreview: {
+    backgroundColor: colors.ustpNavy,
+    borderRadius: radii.xl,
+    borderWidth: 1,
+    borderColor: colors.ustpNavyBorder,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm + 2,
+    gap: 4,
+    ...elevation.overlay,
+  },
+  actionSheetPreviewMeta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+  },
+  actionSheetSender: {
+    fontSize: typography.sizes.xs,
+    fontWeight: '800',
+    color: colors.ustpGold,
+    flexShrink: 1,
+  },
+  actionSheetTime: {
+    fontSize: typography.sizes.xxs,
+    color: colors.ustpNavyMutedText,
+    ...typography.tabularNums,
+  },
+  actionSheetSnippet: {
+    fontSize: typography.sizes.sm,
+    lineHeight: typography.lineHeights.sm,
+    color: colors.white,
+  },
+  actionSheetButtons: {
+    backgroundColor: colors.white,
+    borderRadius: radii.xl,
+    borderWidth: 1,
+    borderColor: colors.border,
+    overflow: 'hidden',
+    ...elevation.overlay,
+  },
+  actionSheetRow: {
+    minHeight: 52,
+    paddingHorizontal: spacing.lg,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+  },
+  actionSheetRowBorder: {
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+  },
+  actionSheetRowPressed: {
+    backgroundColor: colors.surfaceSubtle,
+  },
+  actionSheetRowText: {
+    fontSize: typography.sizes.body,
+    fontWeight: '700',
+    color: colors.ustpNavy,
+  },
+  actionSheetRowDangerText: {
+    fontSize: typography.sizes.body,
+    fontWeight: '800',
+    color: colors.dangerBorder,
+  },
+  actionSheetCancelBtn: {
+    minHeight: 48,
+    backgroundColor: colors.white,
+    borderRadius: radii.xl,
+    borderWidth: 1,
+    borderColor: colors.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+    ...elevation.overlay,
+  },
+  actionSheetCancelText: {
+    fontSize: typography.sizes.body,
+    fontWeight: '800',
+    color: colors.mutedSlate,
+  },
+
+  /* Unsend Confirmation Modal */
   modalBackdrop: {
     flex: 1,
     backgroundColor: colors.overlayBackdrop,

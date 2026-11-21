@@ -224,6 +224,14 @@ export interface ChatAttachment {
   duration_sec?: number;
 }
 
+export interface ChatSeenByUser {
+  id: number;
+  name: string;
+  role: UserRole;
+  avatar_url?: string | null;
+  seen_at?: string | null;
+}
+
 export interface ChatMessage {
   id: number | string;
   temp_id?: string | null;
@@ -240,6 +248,7 @@ export interface ChatMessage {
     role: UserRole;
     avatar_url?: string | null;
   };
+  seen_by?: ChatSeenByUser[];
 }
 
 export interface RealtimeEvent {

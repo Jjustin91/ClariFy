@@ -178,6 +178,53 @@ export function canUnsendChatMessage(
 }
 
 /**
+ * Matches clarify-web MessengerChatBox role classification for avatar styling and Faculty/Student badge.
+ */
+export function isFacultyChatRole(role: string | undefined | null): boolean {
+  return role === 'faculty' || role === 'dept_head' || role === 'it_admin';
+}
+
+/**
+ * Extracts a clean 1-character fallback initial for chat avatars, stripping honorific prefixes
+ * (`ENGR.`, `PROF.`, `DR.`) matching clarify-web MessengerChatBox.
+ */
+export function getChatSenderInitial(
+  name: string | undefined | null,
+  role: string | undefined | null
+): string {
+  const cleaned = (name || '')
+    .trim()
+    .replace(/^(ENGR\.|PROF\.|DR\.)\s*/i, '')
+    .trim();
+  if (cleaned.length > 0) {
+    return cleaned.charAt(0).toUpperCase();
+  }
+  return isFacultyChatRole(role) ? 'F' : 'S';
+}
+
+export interface ChatMessageActionCapabilities {
+  canCopy: boolean;
+  canUnsend: boolean;
+  canOpenMenu: boolean;
+}
+
+/**
+ * Determines which Messenger-style long-press actions are available for a given chat bubble.
+ */
+export function getChatMessageActionCapabilities(
+  message: ChatMessage,
+  currentUser: User | null | undefined
+): ChatMessageActionCapabilities {
+  const canCopy = !message.is_unsent && message.content.trim().length > 0;
+  const canUnsend = canUnsendChatMessage(message, currentUser);
+  return {
+    canCopy,
+    canUnsend,
+    canOpenMenu: canCopy || canUnsend,
+  };
+}
+
+/**
  * Pure reducer managing Course Hub cursor-paginated chat, optimistic send/retry,
  * real-time Reverb message reconciliation & deduplication, and unsend state.
  */

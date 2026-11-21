@@ -6,6 +6,9 @@ import {
   canUnsendChatMessage,
   courseChatReducer,
   createInitialCourseChatState,
+  getChatMessageActionCapabilities,
+  getChatSenderInitial,
+  isFacultyChatRole,
   mergeAndDedupeChatMessages,
   toInvertedChatList,
 } from './chat-reducer.ts';
@@ -274,3 +277,69 @@ test('canUnsendChatMessage enforces original-sender and confirmed-message rules'
   assert.equal(canUnsendChatMessage(ownSending, studentUser), false);
   assert.equal(canUnsendChatMessage(ownFailed, studentUser), false);
 });
+
+test('getChatSenderInitial and isFacultyChatRole match clarify-web avatar conventions', () => {
+  assert.equal(isFacultyChatRole('faculty'), true);
+  assert.equal(isFacultyChatRole('dept_head'), true);
+  assert.equal(isFacultyChatRole('it_admin'), true);
+  assert.equal(isFacultyChatRole('student'), false);
+
+  assert.equal(getChatSenderInitial('Prof. Aki Hayakawa', 'faculty'), 'A');
+  assert.equal(getChatSenderInitial('ENGR. Maria Santos', 'faculty'), 'M');
+  assert.equal(getChatSenderInitial('Dr. Jose Rizal', 'dept_head'), 'J');
+  assert.equal(getChatSenderInitial('Rojo, Jay', 'student'), 'R');
+  assert.equal(getChatSenderInitial('', 'faculty'), 'F');
+  assert.equal(getChatSenderInitial('', 'student'), 'S');
+});
+
+test('getChatMessageActionCapabilities controls Copy and Unsend in long-press popup', () => {
+  const ownText = makeMessage(501, {
+    content: 'See you in lab!',
+    author: { id: studentUser.id, name: studentUser.name, role: 'student' },
+  });
+  const otherText = makeMessage(502, {
+    content: 'Bring your laptops.',
+    author: { id: facultyUser.id, name: facultyUser.name, role: 'faculty' },
+  });
+  const unsentMsg = makeMessage(503, {
+    is_unsent: true,
+    content: '',
+    author: { id: studentUser.id, name: studentUser.name, role: 'student' },
+  });
+  const ownAttachmentOnly = makeMessage(504, {
+    content: '',
+    attachment: {
+      url: '/storage/chat/100/lab.pdf',
+      name: 'lab.pdf',
+      type: 'document',
+      mime: 'application/pdf',
+      size: 2048,
+    },
+    author: { id: studentUser.id, name: studentUser.name, role: 'student' },
+  });
+
+  assert.deepEqual(getChatMessageActionCapabilities(ownText, studentUser), {
+    canCopy: true,
+    canUnsend: true,
+    canOpenMenu: true,
+  });
+  assert.deepEqual(getChatMessageActionCapabilities(otherText, studentUser), {
+    canCopy: true,
+    canUnsend: false,
+    canOpenMenu: true,
+  });
+  assert.deepEqual(getChatMessageActionCapabilities(unsentMsg, studentUser), {
+    canCopy: false,
+    canUnsend: false,
+    canOpenMenu: false,
+  });
+  assert.deepEqual(
+    getChatMessageActionCapabilities(ownAttachmentOnly, studentUser),
+    {
+      canCopy: false,
+      canUnsend: true,
+      canOpenMenu: true,
+    }
+  );
+});
+
