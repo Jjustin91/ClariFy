@@ -15,6 +15,7 @@ import { useAuth } from '../context/AuthContext';
 import {
   formatCourseHubName,
   formatEnrolledRosterSummary,
+  formatUnreadBadgeCount,
   getChannelFacultyLabel,
 } from '../lib/domain-logic';
 import {
@@ -31,10 +32,13 @@ import {
 } from '../theme';
 import type { ApiError, Channel } from '../types/api';
 
+export type CourseHubDrawerTab = 'noticeboard' | 'qa' | 'chat';
+
 /**
  * Left-hand Scoped Channels & Course Hubs Drawer ported from
  * clarify-web/app/channels/[channelId]/page.tsx (lines 597-952).
- * - Displays top-level Course Hubs with nested `parent_hub_id` sub-channels.
+ * - Displays top-level Course Hubs with live links for Noticeboard Feed,
+ *   Isolated Q&A Threads (with unread count badge), and active nested #channels.
  * - Uses `members_count` / `students_count` strictly; never loads full rosters.
  */
 export function ScopedChannelsDrawer({
@@ -42,19 +46,27 @@ export function ScopedChannelsDrawer({
   onClose,
   channels,
   activeChannel,
+  activeTab,
+  activeChatChannelId,
   isLoading,
   error,
   onRetry,
   onSelectHub,
+  onSelectQa,
+  onSelectSubChannel,
 }: {
   visible: boolean;
   onClose: () => void;
   channels: Channel[];
   activeChannel?: Channel;
+  activeTab?: CourseHubDrawerTab;
+  activeChatChannelId?: number;
   isLoading: boolean;
   error: ApiError | null;
   onRetry: () => void;
   onSelectHub: (hubId: number) => void;
+  onSelectQa?: (hubId: number) => void;
+  onSelectSubChannel?: (hubId: number, subChannelId: number) => void;
 }) {
   const insets = useSafeAreaInsets();
   const { user } = useAuth();
@@ -80,19 +92,18 @@ export function ScopedChannelsDrawer({
     const isCurrentHub = activeChannel?.id === hub.id;
     const isExpanded =
       !collapsedHubIds.includes(hub.id) || searchQuery.trim().length > 0;
+    const isNoticeboardActive =
+      isCurrentHub && (!activeTab || activeTab === 'noticeboard');
+    const isQaActive = isCurrentHub && activeTab === 'qa';
+    const unreadQaCount = Math.max(0, Number(hub.unread_count ?? 0));
 
     return (
-      <View
-        style={[
-          styles.hubCard,
-          isCurrentHub && styles.hubCardActive,
-        ]}
-      >
+      <View style={[styles.hubCard, isCurrentHub && styles.hubCardActive]}>
         {/* Course Hub Header Row */}
         <Pressable
           onPress={() => toggleExpanded(hub.id)}
           accessibilityRole="button"
-          accessibilityLabel={`Toggle ${formatCourseHubName(hub)} sub-channels`}
+          accessibilityLabel={`Toggle ${formatCourseHubName(hub)} spaces and channels`}
           accessibilityState={{ expanded: isExpanded }}
           style={({ pressed }) => [
             styles.hubHeaderBtn,
@@ -119,6 +130,13 @@ export function ScopedChannelsDrawer({
               • {membersCount} {membersCount === 1 ? 'member' : 'members'}
             </Text>
           </View>
+          {unreadQaCount > 0 && (
+            <View style={styles.hubUnreadBadge}>
+              <Text style={styles.hubUnreadBadgeText}>
+                {formatUnreadBadgeCount(unreadQaCount)}
+              </Text>
+            </View>
+          )}
           {!isJoined && (
             <View style={styles.unjoinedBadge}>
               <Text style={styles.unjoinedBadgeText}>Scoped</Text>
@@ -126,9 +144,10 @@ export function ScopedChannelsDrawer({
           )}
         </Pressable>
 
-        {/* Expanded Spaces & Nested Sub-Channels */}
+        {/* Expanded Spaces & Active Nested Sub-Channels */}
         {isExpanded && (
           <View style={styles.hubBody}>
+            {/* 1. Built-in Course Hub Spaces: Noticeboard Feed & Isolated Q&A Threads */}
             <Pressable
               onPress={() => {
                 onSelectHub(hub.id);
@@ -136,53 +155,163 @@ export function ScopedChannelsDrawer({
               }}
               accessibilityRole="button"
               accessibilityLabel={`Open Noticeboard Feed for ${formatCourseHubName(hub)}`}
-              accessibilityState={{ selected: isCurrentHub }}
+              accessibilityState={{ selected: isNoticeboardActive }}
               style={({ pressed }) => [
                 styles.spaceRow,
-                isCurrentHub && styles.spaceRowActive,
+                isNoticeboardActive && styles.spaceRowActive,
                 pressed && styles.pressed,
               ]}
             >
               <Feather
                 name="volume-2"
                 size={15}
-                color={isCurrentHub ? colors.ustpNavy : colors.ustpGold}
+                color={isNoticeboardActive ? colors.ustpNavy : colors.ustpGold}
               />
               <Text
                 numberOfLines={1}
                 style={[
                   styles.spaceRowText,
-                  isCurrentHub && styles.spaceRowTextActive,
+                  isNoticeboardActive && styles.spaceRowTextActive,
                 ]}
               >
                 Noticeboard Feed
               </Text>
             </Pressable>
 
-            {/* Nested parent_hub_id Sub-Channels */}
+            <Pressable
+              onPress={() => {
+                if (onSelectQa) {
+                  onSelectQa(hub.id);
+                } else {
+                  onSelectHub(hub.id);
+                }
+                onClose();
+              }}
+              accessibilityRole="button"
+              accessibilityLabel={`Open Isolated Q and A Threads for ${formatCourseHubName(hub)}`}
+              accessibilityState={{ selected: isQaActive }}
+              style={({ pressed }) => [
+                styles.spaceRow,
+                isQaActive && styles.spaceRowActive,
+                pressed && styles.pressed,
+              ]}
+            >
+              <Feather
+                name="help-circle"
+                size={15}
+                color={isQaActive ? colors.ustpNavy : colors.ustpGold}
+              />
+              <Text
+                numberOfLines={1}
+                style={[
+                  styles.spaceRowText,
+                  isQaActive && styles.spaceRowTextActive,
+                ]}
+              >
+                Isolated Q&amp;A Threads
+              </Text>
+              {unreadQaCount > 0 && (
+                <View
+                  style={[
+                    styles.spaceCountPill,
+                    isQaActive && styles.spaceCountPillActive,
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.spaceCountText,
+                      isQaActive && styles.spaceCountTextActive,
+                    ]}
+                  >
+                    {formatUnreadBadgeCount(unreadQaCount)}
+                  </Text>
+                </View>
+              )}
+            </Pressable>
+
+            {/* 2. Active Nested Chat Channels */}
             <View style={styles.subChannelsBlock}>
               <Text style={styles.subSectionLabel}>CHANNELS</Text>
               {subChannels.length === 0 ? (
-                <Text style={styles.emptySubText}>No sub-channels yet</Text>
+                <Pressable
+                  onPress={() => {
+                    if (onSelectSubChannel) {
+                      onSelectSubChannel(hub.id, hub.id);
+                    } else {
+                      onSelectHub(hub.id);
+                    }
+                    onClose();
+                  }}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Open general chat for ${formatCourseHubName(hub)}`}
+                  accessibilityState={{
+                    selected:
+                      isCurrentHub &&
+                      activeTab === 'chat' &&
+                      activeChatChannelId === hub.id,
+                  }}
+                  style={({ pressed }) => [
+                    styles.subChannelRow,
+                    isCurrentHub &&
+                      activeTab === 'chat' &&
+                      activeChatChannelId === hub.id &&
+                      styles.subChannelRowActive,
+                    pressed && styles.pressed,
+                  ]}
+                >
+                  <Feather name="hash" size={14} color={colors.ustpGold} />
+                  <Text
+                    numberOfLines={1}
+                    style={[
+                      styles.subChannelText,
+                      isCurrentHub &&
+                        activeTab === 'chat' &&
+                        activeChatChannelId === hub.id &&
+                        styles.subChannelTextActive,
+                    ]}
+                  >
+                    general
+                  </Text>
+                </Pressable>
               ) : (
                 subChannels.map((sub) => {
                   const cleanName = sub.name.replace(/^#\s*/, '').trim();
+                  const isSubActive =
+                    isCurrentHub &&
+                    activeTab === 'chat' &&
+                    activeChatChannelId === sub.id;
+
                   return (
-                    <View
+                    <Pressable
                       key={String(sub.id)}
-                      accessibilityLabel={`Sub-channel ${cleanName}`}
-                      style={styles.subChannelRow}
+                      onPress={() => {
+                        if (onSelectSubChannel) {
+                          onSelectSubChannel(hub.id, sub.id);
+                        } else {
+                          onSelectHub(hub.id);
+                        }
+                        onClose();
+                      }}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Open channel ${cleanName}`}
+                      accessibilityState={{ selected: isSubActive }}
+                      style={({ pressed }) => [
+                        styles.subChannelRow,
+                        isSubActive && styles.subChannelRowActive,
+                        pressed && styles.pressed,
+                      ]}
                     >
-                      <Feather
-                        name="hash"
-                        size={14}
-                        color={colors.ustpGold}
-                      />
-                      <Text numberOfLines={1} style={styles.subChannelText}>
+                      <Feather name="hash" size={14} color={colors.ustpGold} />
+                      <Text
+                        numberOfLines={1}
+                        style={[
+                          styles.subChannelText,
+                          isSubActive && styles.subChannelTextActive,
+                        ]}
+                      >
                         {cleanName}
                       </Text>
-                      <Text style={styles.soonLabel}>Soon</Text>
-                    </View>
+                    </Pressable>
                   );
                 })
               )}
@@ -412,6 +541,18 @@ const styles = StyleSheet.create({
     color: colors.ustpNavyMutedText,
     ...typography.tabularNums,
   },
+  hubUnreadBadge: {
+    backgroundColor: colors.ustpOrange,
+    borderRadius: radii.pill,
+    paddingHorizontal: spacing.xs + 2,
+    paddingVertical: 2,
+  },
+  hubUnreadBadgeText: {
+    fontSize: 10,
+    fontWeight: '900',
+    color: colors.ustpNavy,
+    ...typography.tabularNums,
+  },
   unjoinedBadge: {
     backgroundColor: colors.ustpNavyDark,
     borderWidth: 1,
@@ -429,7 +570,7 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: colors.ustpNavyBorder,
     padding: spacing.sm,
-    gap: spacing.sm,
+    gap: spacing.xs + 2,
   },
   spaceRow: {
     minHeight: touchTarget.minHeight,
@@ -451,6 +592,24 @@ const styles = StyleSheet.create({
   spaceRowTextActive: {
     color: colors.ustpNavy,
   },
+  spaceCountPill: {
+    backgroundColor: colors.ustpNavyDark,
+    borderRadius: radii.pill,
+    paddingHorizontal: spacing.xs + 2,
+    paddingVertical: 2,
+  },
+  spaceCountPillActive: {
+    backgroundColor: colors.ustpNavy,
+  },
+  spaceCountText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: colors.ustpGold,
+    ...typography.tabularNums,
+  },
+  spaceCountTextActive: {
+    color: colors.ustpGold,
+  },
   subChannelsBlock: {
     borderTopWidth: 1,
     borderTopColor: colors.ustpNavyBorder,
@@ -464,18 +623,18 @@ const styles = StyleSheet.create({
     letterSpacing: 0.7,
     paddingHorizontal: spacing.xs,
   },
-  emptySubText: {
-    fontSize: typography.sizes.xxs,
-    color: colors.ustpNavyMutedText,
-    fontStyle: 'italic',
-    paddingHorizontal: spacing.xs,
-  },
   subChannelRow: {
-    minHeight: 34,
+    minHeight: 44,
+    borderRadius: radii.md,
     paddingHorizontal: spacing.sm,
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.xs + 2,
+  },
+  subChannelRowActive: {
+    backgroundColor: colors.ustpNavyDark,
+    borderLeftWidth: 3,
+    borderLeftColor: colors.ustpGold,
   },
   subChannelText: {
     flex: 1,
@@ -483,10 +642,9 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: colors.ustpNavyMutedText,
   },
-  soonLabel: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: colors.ustpGold,
+  subChannelTextActive: {
+    color: colors.white,
+    fontWeight: '800',
   },
   stateBox: {
     padding: spacing.lg,

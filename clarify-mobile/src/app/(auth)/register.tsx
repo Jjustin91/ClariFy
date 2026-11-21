@@ -14,6 +14,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { ClarifyLogoWordmark } from '@/components/ClarifyLogo';
 import { ErrorBanner } from '@/components/StateViews';
 import { useAuth } from '@/context/AuthContext';
 import { registerApi } from '@/lib/api-client';
@@ -292,8 +293,8 @@ export default function MobileRegisterScreen() {
           {/* Institutional Header Card (USTP Navy + Gold Border) */}
           <View style={styles.headerSection}>
             <View style={styles.brandingCard}>
-              <View style={styles.logoBadge}>
-                <Text style={styles.logoBadgeText}>ClariFy</Text>
+              <View style={styles.logoWrap}>
+                <ClarifyLogoWordmark height={44} />
               </View>
               <Text style={styles.pageTitle}>Account Registration</Text>
               <Text style={styles.pageSubtitle}>
@@ -888,19 +889,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: spacing.xs,
   },
-  logoBadge: {
-    backgroundColor: colors.ustpNavy,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.xs,
-    borderRadius: radii.md,
-    borderWidth: 1,
-    borderColor: colors.ustpGold,
-  },
-  logoBadgeText: {
-    fontSize: typography.sizes.titleMd,
-    lineHeight: typography.lineHeights.titleMd,
-    fontWeight: '800',
-    color: colors.ustpGold,
+  logoWrap: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: spacing.xs,
   },
   pageTitle: {
     fontSize: typography.sizes.titleMd,

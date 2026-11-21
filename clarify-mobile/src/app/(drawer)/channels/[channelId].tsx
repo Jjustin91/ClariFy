@@ -13,6 +13,7 @@ import {
 
 import { AnnouncementCard } from '@/components/AnnouncementCard';
 import { CourseHubChatView } from '@/components/CourseHubChatView';
+import { CourseHubQaView } from '@/components/CourseHubQaView';
 import { MobileAppShell } from '@/components/MobileAppShell';
 import { ScopedChannelsDrawer } from '@/components/ScopedChannelsDrawer';
 import {
@@ -29,16 +30,18 @@ import {
   formatCourseHubName,
   formatEnrolledRosterSummary,
   formatSubChannelDisplayName,
+  formatUnreadBadgeCount,
   getChannelFacultyLabel,
   getChannelParentHubId,
   getSubChannelsForHub,
   resolveCourseHubSelection,
 } from '@/lib/domain-logic';
 import { getChannelMembersCount } from '@/lib/feed-reducer';
+import { resolveHubChatChannels } from '@/lib/qa-reducer';
 import { colors, radii, spacing, touchTarget, typography } from '@/theme';
 import type { Announcement, ApiError, Channel } from '@/types/api';
 
-type HubTabKey = 'noticeboard' | 'chat';
+type HubTabKey = 'noticeboard' | 'qa' | 'chat';
 
 /**
  * ClariFy Mobile Course Hub screen ported from clarify-web/app/channels/[channelId]/page.tsx.
@@ -73,13 +76,21 @@ export default function MobileChannelHubScreen() {
   const realtime = useOptionalRealtime();
 
   const [isChannelsDrawerOpen, setIsChannelsDrawerOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState<HubTabKey>(() =>
-    params?.tab === 'chat' ? 'chat' : 'noticeboard'
-  );
+  const [activeTab, setActiveTab] = useState<HubTabKey>(() => {
+    if (params?.tab === 'chat') return 'chat';
+    if (params?.tab === 'qa') return 'qa';
+    return 'noticeboard';
+  });
   const [selectedSubChannelId, setSelectedSubChannelId] = useState<
     number | null
   >(null);
   const [isScreenFocused, setIsScreenFocused] = useState(false);
+  const [seenBaselineByHub, setSeenBaselineByHub] = useState<
+    Record<number, string | null>
+  >({});
+  const [lastHandledRouteKey, setLastHandledRouteKey] = useState<string>(
+    `${rawChannelParam ?? ''}:${params?.tab ?? ''}`
+  );
 
   // Resolve active hub strictly: if an explicit non-zero channelId was requested and is missing
   // once channels finish loading, report a 404 error and NEVER fall back to another Course Hub.
@@ -146,6 +157,22 @@ export default function MobileChannelHubScreen() {
   const activeChannel = resolution.activeHub;
   const effectiveHubId = activeChannel?.id ?? 0;
 
+  // Sync tab & sub-channel selection when navigating to a new route or deep-linking directly to a sub-channel
+  const routeSyncKey = `${rawChannelParam ?? ''}:${params?.tab ?? ''}:${resolution.requestedSubChannel?.id ?? ''}`;
+  if (routeSyncKey !== lastHandledRouteKey) {
+    setLastHandledRouteKey(routeSyncKey);
+    if (params?.tab === 'qa') {
+      setActiveTab('qa');
+      setSelectedSubChannelId(null);
+    } else if (params?.tab === 'chat' || resolution.requestedSubChannel) {
+      setActiveTab('chat');
+      setSelectedSubChannelId(resolution.requestedSubChannel?.id ?? null);
+    } else if (params?.tab === 'noticeboard') {
+      setActiveTab('noticeboard');
+      setSelectedSubChannelId(null);
+    }
+  }
+
   const subChannels = useMemo(
     () =>
       effectiveHubId > 0
@@ -154,22 +181,29 @@ export default function MobileChannelHubScreen() {
     [channels, effectiveHubId]
   );
 
-  // Derive active chat target (either a tapped sub-channel, requested sub-channel, or parent hub)
+  // Deduplicated chat channels: prevents duplicate "# general" pills when sub-channels already include #general
+  const { chatChannels, defaultChatChannel } = useMemo(
+    () => resolveHubChatChannels(activeChannel, subChannels),
+    [activeChannel, subChannels]
+  );
+
+  // Derive active chat target (explicitly selected sub-channel, requested sub-channel, or deduplicated default)
   const effectiveChatChannel = useMemo<Channel | undefined>(() => {
     if (!activeChannel) return undefined;
     if (selectedSubChannelId) {
-      const found = subChannels.find((s) => s.id === selectedSubChannelId);
+      const found = chatChannels.find((c) => c.id === selectedSubChannelId);
       if (found) return found;
     }
     if (resolution.requestedSubChannel) {
       return resolution.requestedSubChannel;
     }
-    return activeChannel;
+    return defaultChatChannel ?? activeChannel;
   }, [
     activeChannel,
     selectedSubChannelId,
-    subChannels,
+    chatChannels,
     resolution.requestedSubChannel,
+    defaultChatChannel,
   ]);
 
   const effectiveChatChannelId = effectiveChatChannel?.id ?? 0;
@@ -194,12 +228,25 @@ export default function MobileChannelHubScreen() {
         if (seenKeyRef.current !== focusSeenKey) {
           seenKeyRef.current = focusSeenKey;
           void markChannelSeenApi(effectiveChatChannelId)
-            .then(() => {
+            .then((previousSeenAt) => {
+              setSeenBaselineByHub((prev) =>
+                effectiveHubId in prev
+                  ? prev
+                  : {
+                      ...prev,
+                      [effectiveHubId]: previousSeenAt ?? null,
+                    }
+              );
+
               applyChannelsPatch((prev) => {
                 let mutated = false;
                 const next = prev.map((ch) => {
                   if (Number(ch.id) !== effectiveHubId) return ch;
-                  if (!ch.has_updates && (ch.new_activity_count ?? 0) === 0) {
+                  if (
+                    !ch.has_updates &&
+                    (ch.new_activity_count ?? 0) === 0 &&
+                    (ch.unread_count ?? 0) === 0
+                  ) {
                     return ch;
                   }
                   mutated = true;
@@ -207,6 +254,7 @@ export default function MobileChannelHubScreen() {
                     ...ch,
                     has_updates: false,
                     new_activity_count: 0,
+                    unread_count: 0,
                     new_activity_breakdown: {
                       chat: 0,
                       announcements: 0,
@@ -219,7 +267,7 @@ export default function MobileChannelHubScreen() {
               });
             })
             .catch(() => {
-              // Non-fatal: chat/feed views surface 403/network errors cleanly
+              // Non-fatal: chat/feed/qa views surface 403/network errors cleanly
             });
         }
       }
@@ -257,9 +305,34 @@ export default function MobileChannelHubScreen() {
   const handleSelectHub = useCallback(
     (hubId: number) => {
       setSelectedSubChannelId(null);
-      router.replace(`/channels/${hubId}` as never);
+      setActiveTab('noticeboard');
+      if (hubId !== effectiveHubId) {
+        router.replace(`/channels/${hubId}?tab=noticeboard` as never);
+      }
     },
-    [router]
+    [effectiveHubId, router]
+  );
+
+  const handleSelectQa = useCallback(
+    (hubId: number) => {
+      setSelectedSubChannelId(null);
+      setActiveTab('qa');
+      if (hubId !== effectiveHubId) {
+        router.replace(`/channels/${hubId}?tab=qa` as never);
+      }
+    },
+    [effectiveHubId, router]
+  );
+
+  const handleSelectSubChannel = useCallback(
+    (hubId: number, subChannelId: number) => {
+      setSelectedSubChannelId(subChannelId);
+      setActiveTab('chat');
+      if (hubId !== effectiveHubId) {
+        router.replace(`/channels/${subChannelId}?tab=chat` as never);
+      }
+    },
+    [effectiveHubId, router]
   );
 
   const handleRefreshAll = useCallback(() => {
@@ -287,6 +360,16 @@ export default function MobileChannelHubScreen() {
 
   const membersCount = getChannelMembersCount(activeChannel);
   const chatCount = Math.max(0, Number(activeChannel?.chat_messages_count ?? 0));
+  const qaUnreadCount = Math.max(
+    0,
+    Number(
+      activeChannel?.new_activity_breakdown?.qa ??
+        activeChannel?.unread_count ??
+        0
+    )
+  );
+  const previousSeenAtForHub =
+    effectiveHubId > 0 ? (seenBaselineByHub[effectiveHubId] ?? null) : null;
 
   const shellTitle = resolution.isInvalidChannel
     ? 'Course Hub Not Found'
@@ -323,7 +406,11 @@ export default function MobileChannelHubScreen() {
             </View>
             <View style={styles.noticeboardBadge}>
               <Text style={styles.noticeboardBadgeText}>
-                {activeTab === 'chat' ? 'Course Chat' : 'Noticeboard'}
+                {activeTab === 'chat'
+                  ? 'Course Chat'
+                  : activeTab === 'qa'
+                    ? 'Q&A Threads'
+                    : 'Noticeboard'}
               </Text>
             </View>
           </View>
@@ -335,32 +422,15 @@ export default function MobileChannelHubScreen() {
             {formatEnrolledRosterSummary(activeChannel)}
           </Text>
 
-          {subChannels.length > 0 && (
+          {chatChannels.length > 0 && (
             <View style={styles.subPillsRow}>
-              <Pressable
-                onPress={() => setSelectedSubChannelId(null)}
-                accessibilityRole="button"
-                accessibilityLabel="Main Course Hub"
-                style={({ pressed }) => [
-                  styles.subPill,
-                  effectiveChatChannelId === activeChannel.id &&
-                    styles.subPillActive,
-                  pressed && styles.pressed,
-                ]}
-              >
-                <Text
-                  style={[
-                    styles.subPillText,
-                    effectiveChatChannelId === activeChannel.id &&
-                      styles.subPillTextActive,
-                  ]}
-                >
-                  # general
-                </Text>
-              </Pressable>
-
-              {subChannels.map((sub) => {
-                const isSelected = effectiveChatChannelId === sub.id;
+              {chatChannels.map((sub) => {
+                const isSelected =
+                  activeTab === 'chat' && effectiveChatChannelId === sub.id;
+                const displayName =
+                  sub.id === activeChannel.id
+                    ? '# general'
+                    : formatSubChannelDisplayName(sub);
                 return (
                   <Pressable
                     key={String(sub.id)}
@@ -369,9 +439,7 @@ export default function MobileChannelHubScreen() {
                       setActiveTab('chat');
                     }}
                     accessibilityRole="button"
-                    accessibilityLabel={`Open sub-channel ${formatSubChannelDisplayName(
-                      sub
-                    )}`}
+                    accessibilityLabel={`Open channel ${displayName}`}
                     style={({ pressed }) => [
                       styles.subPill,
                       isSelected && styles.subPillActive,
@@ -384,7 +452,7 @@ export default function MobileChannelHubScreen() {
                         isSelected && styles.subPillTextActive,
                       ]}
                     >
-                      {formatSubChannelDisplayName(sub)}
+                      {displayName}
                     </Text>
                   </Pressable>
                 );
@@ -490,7 +558,11 @@ export default function MobileChannelHubScreen() {
               ? 'Select a valid Course Hub'
               : activeChannel
                 ? `${formatCourseHubName(activeChannel)} • ${
-                    activeTab === 'chat' ? 'Chat' : 'Noticeboard'
+                    activeTab === 'chat'
+                      ? 'Chat'
+                      : activeTab === 'qa'
+                        ? 'Q&A'
+                        : 'Feed'
                   }`
                 : 'Select Course Hub'}
           </Text>
@@ -505,14 +577,14 @@ export default function MobileChannelHubScreen() {
         )}
       </View>
 
-      {/* Noticeboard / Chat Segmented Tab Bar (48dp touch targets) */}
+      {/* Feed / Q&A / Chat Segmented Tab Bar (48dp touch targets) */}
       {activeChannel && !resolution.isInvalidChannel && (
         <View style={styles.tabBar} accessibilityRole="tablist">
           <Pressable
             onPress={() => setActiveTab('noticeboard')}
             accessibilityRole="tab"
             accessibilityState={{ selected: activeTab === 'noticeboard' }}
-            accessibilityLabel="Course Noticeboard tab"
+            accessibilityLabel="Course Noticeboard Feed tab"
             style={({ pressed }) => [
               styles.tabButton,
               activeTab === 'noticeboard' && styles.tabButtonActive,
@@ -521,7 +593,7 @@ export default function MobileChannelHubScreen() {
           >
             <Feather
               name="bell"
-              size={16}
+              size={15}
               color={
                 activeTab === 'noticeboard'
                   ? colors.ustpGold
@@ -529,13 +601,58 @@ export default function MobileChannelHubScreen() {
               }
             />
             <Text
+              numberOfLines={1}
               style={[
                 styles.tabButtonText,
                 activeTab === 'noticeboard' && styles.tabButtonTextActive,
               ]}
             >
-              Noticeboard
+              Feed
             </Text>
+          </Pressable>
+
+          <Pressable
+            onPress={() => setActiveTab('qa')}
+            accessibilityRole="tab"
+            accessibilityState={{ selected: activeTab === 'qa' }}
+            accessibilityLabel="Course Q and A Threads tab"
+            style={({ pressed }) => [
+              styles.tabButton,
+              activeTab === 'qa' && styles.tabButtonActive,
+              pressed && styles.pressed,
+            ]}
+          >
+            <Feather
+              name="help-circle"
+              size={15}
+              color={activeTab === 'qa' ? colors.ustpGold : colors.ustpNavy}
+            />
+            <Text
+              numberOfLines={1}
+              style={[
+                styles.tabButtonText,
+                activeTab === 'qa' && styles.tabButtonTextActive,
+              ]}
+            >
+              Q&amp;A
+            </Text>
+            {qaUnreadCount > 0 && (
+              <View
+                style={[
+                  styles.tabCountBadge,
+                  activeTab === 'qa' && styles.tabCountBadgeActive,
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.tabCountText,
+                    activeTab === 'qa' && styles.tabCountTextActive,
+                  ]}
+                >
+                  {formatUnreadBadgeCount(qaUnreadCount)}
+                </Text>
+              </View>
+            )}
           </Pressable>
 
           <Pressable
@@ -551,12 +668,13 @@ export default function MobileChannelHubScreen() {
           >
             <Feather
               name="message-square"
-              size={16}
+              size={15}
               color={
                 activeTab === 'chat' ? colors.ustpGold : colors.ustpNavy
               }
             />
             <Text
+              numberOfLines={1}
               style={[
                 styles.tabButtonText,
                 activeTab === 'chat' && styles.tabButtonTextActive,
@@ -577,7 +695,7 @@ export default function MobileChannelHubScreen() {
                     activeTab === 'chat' && styles.tabCountTextActive,
                   ]}
                 >
-                  {chatCount}
+                  {formatUnreadBadgeCount(chatCount)}
                 </Text>
               </View>
             )}
@@ -605,41 +723,29 @@ export default function MobileChannelHubScreen() {
             <Text style={styles.openChannelsBtnText}>Open Scoped Channels</Text>
           </Pressable>
         </View>
+      ) : activeTab === 'qa' && activeChannel && effectiveHubId > 0 ? (
+        <CourseHubQaView
+          channelId={effectiveHubId}
+          channelTitle={formatCourseHubName(activeChannel)}
+          isFocused={isScreenFocused && activeTab === 'qa'}
+          previousSeenAt={previousSeenAtForHub}
+        />
       ) : activeTab === 'chat' && effectiveChatChannel && effectiveChatChannelId > 0 ? (
         <View style={styles.chatTabContainer}>
-          {subChannels.length > 0 && (
+          {chatChannels.length > 0 && (
             <View style={styles.chatSubStrip}>
-              <Pressable
-                onPress={() => setSelectedSubChannelId(null)}
-                accessibilityRole="button"
-                accessibilityLabel="Switch to main Course Hub chat"
-                style={({ pressed }) => [
-                  styles.subPill,
-                  effectiveChatChannelId === activeChannel?.id &&
-                    styles.subPillActive,
-                  pressed && styles.pressed,
-                ]}
-              >
-                <Text
-                  style={[
-                    styles.subPillText,
-                    effectiveChatChannelId === activeChannel?.id &&
-                      styles.subPillTextActive,
-                  ]}
-                >
-                  # general
-                </Text>
-              </Pressable>
-              {subChannels.map((sub) => {
+              {chatChannels.map((sub) => {
                 const isSelected = effectiveChatChannelId === sub.id;
+                const displayName =
+                  sub.id === activeChannel?.id
+                    ? '# general'
+                    : formatSubChannelDisplayName(sub);
                 return (
                   <Pressable
                     key={String(sub.id)}
                     onPress={() => setSelectedSubChannelId(sub.id)}
                     accessibilityRole="button"
-                    accessibilityLabel={`Switch to ${formatSubChannelDisplayName(
-                      sub
-                    )}`}
+                    accessibilityLabel={`Switch to ${displayName}`}
                     style={({ pressed }) => [
                       styles.subPill,
                       isSelected && styles.subPillActive,
@@ -652,7 +758,7 @@ export default function MobileChannelHubScreen() {
                         isSelected && styles.subPillTextActive,
                       ]}
                     >
-                      {formatSubChannelDisplayName(sub)}
+                      {displayName}
                     </Text>
                   </Pressable>
                 );
@@ -702,10 +808,14 @@ export default function MobileChannelHubScreen() {
         onClose={() => setIsChannelsDrawerOpen(false)}
         channels={channels}
         activeChannel={activeChannel}
+        activeTab={activeTab}
+        activeChatChannelId={effectiveChatChannelId}
         isLoading={isLoadingChannels}
         error={channelsError}
         onRetry={() => void refreshChannels()}
         onSelectHub={handleSelectHub}
+        onSelectQa={handleSelectQa}
+        onSelectSubChannel={handleSelectSubChannel}
       />
     </MobileAppShell>
   );

@@ -14,6 +14,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { ClarifyLogoMark, ClarifyLogoWordmark } from '@/components/ClarifyLogo';
 import { useAuth } from '@/context/AuthContext';
 import { getFieldValidationError } from '@/lib/domain-logic';
 import { colors, radii, spacing, touchTarget, typography } from '@/theme';
@@ -111,8 +112,8 @@ export default function MobileLoginScreen() {
           {/* Top Section: USTP Navy background with centered Institutional Branding Card */}
           <View style={styles.brandingSection}>
             <View style={styles.brandingCard}>
-              <View style={styles.logoBadge}>
-                <Text style={styles.logoBadgeText}>ClariFy</Text>
+              <View style={styles.logoWrap}>
+                <ClarifyLogoWordmark height={48} />
               </View>
               <Text style={styles.platformSubtitle}>
                 Unified Campus Noticeboard &amp; Scoped Communication Platform
@@ -156,9 +157,7 @@ export default function MobileLoginScreen() {
           <View style={styles.loginPanel}>
             <View style={styles.loginFormContainer}>
               <View style={styles.emblemHeader}>
-                <View style={styles.emblemCircle}>
-                  <Text style={styles.emblemMarkText}>CF</Text>
-                </View>
+                <ClarifyLogoMark size={68} />
                 <Text style={styles.signInTitle}>Institutional Sign In</Text>
                 <Text style={styles.signInSubtitle}>
                   Enter your Institutional ID &amp; Password
@@ -419,22 +418,6 @@ const styles = StyleSheet.create({
     padding: spacing.xl,
     alignItems: 'center',
   },
-  logoBadge: {
-    backgroundColor: colors.ustpNavy,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.xs,
-    borderRadius: radii.md,
-    borderWidth: 1,
-    borderColor: colors.ustpGold,
-    marginBottom: spacing.sm,
-  },
-  logoBadgeText: {
-    fontSize: typography.sizes.titleLg,
-    lineHeight: typography.lineHeights.titleLg,
-    fontWeight: '800',
-    color: colors.ustpGold,
-    letterSpacing: 0.4,
-  },
   platformSubtitle: {
     fontSize: typography.sizes.body,
     lineHeight: typography.lineHeights.body,
@@ -515,21 +498,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: spacing.xs,
   },
-  emblemCircle: {
-    width: 76,
-    height: 76,
-    borderRadius: radii.pill,
-    backgroundColor: colors.ustpNavyDark,
-    borderWidth: 4,
-    borderColor: colors.ustpGold,
+  logoWrap: {
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  emblemMarkText: {
-    fontSize: typography.sizes.titleLg,
-    lineHeight: typography.lineHeights.titleLg,
-    fontWeight: '800',
-    color: colors.ustpGold,
+    marginBottom: spacing.xs,
   },
   signInTitle: {
     marginTop: spacing.md,

@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { ClarifyLogoWordmark } from '@/components/ClarifyLogo';
 import { AuthProvider, useAuth } from '@/context/AuthContext';
 import { colors, radii, spacing, touchTarget, typography } from '@/theme';
 
@@ -100,7 +101,12 @@ function RootNavigationGate() {
   if (!isAuthReady) {
     return (
       <View style={styles.loadingScreen}>
-        <ActivityIndicator size="large" color={colors.ustpGold} />
+        <ClarifyLogoWordmark height={44} />
+        <ActivityIndicator
+          size="large"
+          color={colors.ustpGold}
+          style={styles.loadingSpinner}
+        />
         <Text style={styles.loadingLabel}>Verifying USTP Session...</Text>
       </View>
     );
@@ -140,6 +146,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     padding: spacing.xxl,
+  },
+  loadingSpinner: {
+    marginTop: spacing.xl,
   },
   loadingLabel: {
     marginTop: spacing.md,

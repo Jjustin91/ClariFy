@@ -633,6 +633,15 @@ export async function convertThreadToFaqApi(
   );
 }
 
+export async function resolveThreadApi(
+  threadId: number
+): Promise<SingleResourceResponse<QaThread>> {
+  return apiClient<SingleResourceResponse<QaThread>>(
+    `/threads/${threadId}/resolve`,
+    { method: 'PATCH' }
+  );
+}
+
 // ============================================================================
 // INSTRUCTOR DIRECTORY
 // ============================================================================

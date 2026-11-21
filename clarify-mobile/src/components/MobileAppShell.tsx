@@ -26,6 +26,7 @@ import {
   touchTarget,
   typography,
 } from '../theme';
+import { ClarifyLogoWordmark } from './ClarifyLogo';
 import { ProfileSettingsModal } from './ProfileSettingsModal';
 
 const DRAWER_WIDTH = 288;
@@ -238,9 +239,7 @@ export function MobileAppShell({
               pressed && styles.pressed,
             ]}
           >
-            <Text style={styles.brandClarify}>
-              Clari<Text style={styles.brandFy}>Fy</Text>
-            </Text>
+            <ClarifyLogoWordmark height={28} />
           </Pressable>
           <Text style={styles.dividerPipe} accessible={false}>
             |
@@ -268,10 +267,9 @@ export function MobileAppShell({
           >
             <Feather
               name={isSidebarOpen ? 'x' : 'menu'}
-              size={18}
+              size={22}
               color={colors.ustpNavy}
             />
-            <Text style={styles.menuButtonText}>Menu</Text>
           </Pressable>
         </View>
       </View>
@@ -384,6 +382,8 @@ export function MobileAppShell({
                     ]}
                   >
                     <Text
+                      numberOfLines={1}
+                      ellipsizeMode="tail"
                       style={[
                         styles.navItemText,
                         item.active && styles.navItemTextActive,
@@ -531,16 +531,7 @@ const styles = StyleSheet.create({
   brandButton: {
     minHeight: touchTarget.minHeight,
     justifyContent: 'center',
-  },
-  brandClarify: {
-    fontSize: typography.sizes.titleSm,
-    lineHeight: typography.lineHeights.titleSm,
-    fontWeight: '900',
-    color: colors.white,
-    letterSpacing: -0.3,
-  },
-  brandFy: {
-    color: colors.ustpGold,
+    flexShrink: 0,
   },
   dividerPipe: {
     color: colors.placeholder,
@@ -557,6 +548,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.sm,
+    flexShrink: 0,
   },
   ustpBadgeText: {
     fontSize: typography.sizes.body,
@@ -567,18 +559,12 @@ const styles = StyleSheet.create({
   menuButton: {
     minHeight: touchTarget.minHeight,
     minWidth: touchTarget.minWidth,
-    paddingHorizontal: spacing.md,
+    width: touchTarget.minWidth,
+    height: touchTarget.minHeight,
     borderRadius: radii.lg,
     backgroundColor: colors.ustpOrange,
-    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: spacing.xs + 2,
-  },
-  menuButtonText: {
-    fontSize: typography.sizes.xs,
-    fontWeight: '800',
-    color: colors.ustpNavy,
   },
   realtimeUnavailableBanner: {
     backgroundColor: colors.warningBg,
@@ -706,14 +692,16 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   navStack: {
+    width: '100%',
     borderBottomWidth: 1,
     borderBottomColor: colors.ustpOrangeDivider,
   },
   navItem: {
-    minHeight: 50,
-    paddingHorizontal: spacing.xl,
+    width: '100%',
+    minHeight: 52,
+    paddingHorizontal: spacing.lg,
     justifyContent: 'center',
-    alignItems: 'flex-end',
+    alignItems: 'stretch',
     borderBottomWidth: 1,
     borderBottomColor: colors.ustpOrangeDivider,
   },
@@ -725,6 +713,8 @@ const styles = StyleSheet.create({
     opacity: 0.8,
   },
   navItemText: {
+    width: '100%',
+    textAlign: 'right',
     fontSize: typography.sizes.body,
     lineHeight: typography.lineHeights.body,
     fontWeight: '700',
