@@ -404,9 +404,6 @@ export function subscribeChannelReverb(
 ): () => void {
   const numericId = Number(channelId);
   const echo = getReverbEcho();
-    if (__DEV__) {
-    console.log('[reverb] subscribeChannel called', numericId, 'echo:', Boolean(echo));   // <-- NEW 1
-  }
   if (!echo || !numericId || numericId <= 0) {
     return () => {};
   }
@@ -418,17 +415,7 @@ export function subscribeChannelReverb(
       listeners = new Set();
       channelListenersByHubId.set(numericId, listeners);
       const channel = echo.private(channelName);
-      if (__DEV__) {                                                                       // <-- NEW 2
-        channel
-          .subscribed(() => console.log('[reverb] subscribed', channelName))
-          .error((e: unknown) =>
-            console.log('[reverb] channel subscription_error', channelName, JSON.stringify(e))
-          );
-      }
       channel.listen('.realtime.updated', (data: ReverbBroadcastPayload) => {
-        if (__DEV__) {                                                                     // <-- NEW 3
-          console.log('[reverb] event on', channelName, data?.type, 'listeners:', channelListenersByHubId.get(numericId)?.size);
-        }
         const activeSet = channelListenersByHubId.get(numericId);
         if (!activeSet) return;
         activeSet.forEach((cb) => {
