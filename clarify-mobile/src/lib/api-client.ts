@@ -167,11 +167,23 @@ export function mapHttpErrorToApiError(params: {
   }
 
   if (status === 429) {
-    const retryAfter = parseRetryAfterSeconds(retryAfterHeader);
+    let retryAfter = retryAfterHeader
+      ? parseRetryAfterSeconds(retryAfterHeader)
+      : null;
+    if (!retryAfter && serverMessage) {
+      const match = serverMessage.match(/(\d+)\s*seconds?/i);
+      if (match && match[1]) {
+        const parsed = Number(match[1]);
+        if (Number.isFinite(parsed) && parsed > 0) {
+          retryAfter = Math.ceil(parsed);
+        }
+      }
+    }
+    const resolvedRetryAfter = retryAfter ?? 60;
     return {
       status: 429,
-      retryAfter,
-      message: `Too many attempts, try again in ${retryAfter} seconds`,
+      retryAfter: resolvedRetryAfter,
+      message: `Too many attempts, try again in ${resolvedRetryAfter} seconds`,
     };
   }
 
@@ -282,17 +294,21 @@ export async function registerApi(payload: {
   name: string;
   institutional_id: string;
   email: string;
+  contact_number?: string;
   password: string;
   password_confirmation?: string;
   role: 'student' | 'faculty';
   department: string;
   section: string;
 }): Promise<SingleResourceResponse<User>> {
+  const { contact_number, ...rest } = payload;
+  const trimmedContact = contact_number?.trim();
   return apiClient<SingleResourceResponse<User>>('/auth/register', {
     method: 'POST',
     skipAuth: true,
     body: JSON.stringify({
-      ...payload,
+      ...rest,
+      ...(trimmedContact ? { contact_number: trimmedContact } : {}),
       password_confirmation: payload.password_confirmation || payload.password,
     }),
   });
@@ -872,11 +888,19 @@ export async function registerDeviceForPushNotificationsAsync(): Promise<void> {
     const easConfig = (
       Constants as { easConfig?: { projectId?: string } } | undefined
     )?.easConfig;
-    const projectId = extra?.eas?.projectId ?? easConfig?.projectId;
+    const rawProjectId = extra?.eas?.projectId ?? easConfig?.projectId;
+    const projectId =
+      typeof rawProjectId === 'string' && rawProjectId.trim().length > 0
+        ? rawProjectId.trim()
+        : undefined;
 
-    const tokenResult = await Notifications.getExpoPushTokenAsync(
-      projectId ? { projectId } : undefined
-    );
+    if (!projectId) {
+      return;
+    }
+
+    const tokenResult = await Notifications.getExpoPushTokenAsync({
+      projectId,
+    });
     const pushToken = tokenResult?.data?.trim();
     if (pushToken) {
       await registerExpoPushTokenApi(pushToken);

@@ -17,6 +17,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useAuth } from '../context/AuthContext';
 import { useChannels } from '../context/ChannelsContext';
+import { useOptionalRealtime } from '../context/RealtimeContext';
 import {
   colors,
   elevation,
@@ -60,6 +61,7 @@ export function MobileAppShell({
     isSettingsModalOpen,
     setIsSettingsModalOpen,
   } = useChannels();
+  const realtime = useOptionalRealtime();
 
   const [isLogoutConfirmOpen, setIsLogoutConfirmOpen] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
@@ -273,6 +275,19 @@ export function MobileAppShell({
           </Pressable>
         </View>
       </View>
+
+      {/* Visible Realtime Unavailable Banner (never fail silently when REVERB key is blank) */}
+      {realtime?.realtimeUnavailableMessage && (
+        <View
+          accessibilityRole="alert"
+          style={styles.realtimeUnavailableBanner}
+        >
+          <Feather name="wifi-off" size={14} color={colors.warningText} />
+          <Text style={styles.realtimeUnavailableText}>
+            {realtime.realtimeUnavailableMessage}
+          </Text>
+        </View>
+      )}
 
       {/* Main Screen Content */}
       <View style={styles.mainContent}>{children}</View>
@@ -564,6 +579,23 @@ const styles = StyleSheet.create({
     fontSize: typography.sizes.xs,
     fontWeight: '800',
     color: colors.ustpNavy,
+  },
+  realtimeUnavailableBanner: {
+    backgroundColor: colors.warningBg,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.warningBorder,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  realtimeUnavailableText: {
+    flex: 1,
+    fontSize: typography.sizes.xs,
+    lineHeight: typography.lineHeights.xs,
+    fontWeight: '700',
+    color: colors.warningText,
   },
   mainContent: {
     flex: 1,

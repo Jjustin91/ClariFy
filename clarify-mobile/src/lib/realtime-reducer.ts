@@ -710,3 +710,44 @@ export function resolvePushNotificationRoute(
 
   return null;
 }
+
+/**
+ * Computes a visible user-facing status banner message when realtime updates are unavailable
+ * (e.g., blank EXPO_PUBLIC_REVERB_APP_KEY on a non-local host, or socket failed/unavailable).
+ * Returns null when realtime is healthy or intentionally paused in the background.
+ */
+export function getRealtimeUnavailableBannerMessage(params: {
+  isAuthenticated: boolean;
+  isConfigured: boolean;
+  unconfiguredMessage?: string | null;
+  connectionState:
+    | 'unconfigured'
+    | 'initialized'
+    | 'connecting'
+    | 'connected'
+    | 'unavailable'
+    | 'failed'
+    | 'disconnected'
+    | 'paused';
+}): string | null {
+  if (!params.isAuthenticated) {
+    return null;
+  }
+
+  if (!params.isConfigured || params.connectionState === 'unconfigured') {
+    return (
+      params.unconfiguredMessage ||
+      'Live updates unavailable. Pull down to refresh announcements and chat.'
+    );
+  }
+
+  if (
+    params.connectionState === 'unavailable' ||
+    params.connectionState === 'failed'
+  ) {
+    return 'Live updates unavailable — reconnecting. Pull down to refresh.';
+  }
+
+  return null;
+}
+

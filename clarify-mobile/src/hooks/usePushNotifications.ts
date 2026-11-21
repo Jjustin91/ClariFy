@@ -72,11 +72,17 @@ async function resolveExpoPushToken(): Promise<string | null> {
   const easConfig = (
     Constants as { easConfig?: { projectId?: string } } | undefined
   )?.easConfig;
-  const projectId = extra?.eas?.projectId ?? easConfig?.projectId;
+  const rawProjectId = extra?.eas?.projectId ?? easConfig?.projectId;
+  const projectId =
+    typeof rawProjectId === 'string' && rawProjectId.trim().length > 0
+      ? rawProjectId.trim()
+      : undefined;
 
-  const tokenResult = await getExpoPushTokenAsync(
-    projectId ? { projectId } : undefined
-  );
+  if (!projectId) {
+    return null;
+  }
+
+  const tokenResult = await getExpoPushTokenAsync({ projectId });
 
   const pushToken = tokenResult?.data?.trim();
   return pushToken && pushToken.length > 0 ? pushToken : null;

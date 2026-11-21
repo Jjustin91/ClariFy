@@ -8,9 +8,11 @@
     "scheme": "clarifymobile",
     "userInterfaceStyle": "light",
     "ios": {
+      "bundleIdentifier": "com.ustp.clarify",
       "icon": "./assets/expo.icon"
     },
     "android": {
+      "package": "com.ustp.clarify",
       "adaptiveIcon": {
         "backgroundColor": "#1a1851",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
@@ -42,6 +44,11 @@
         }
       ]
     ],
+    "extra": {
+      "eas": {
+        "projectId": ""
+      }
+    },
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true

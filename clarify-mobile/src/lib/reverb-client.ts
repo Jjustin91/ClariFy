@@ -19,12 +19,21 @@ export interface ReverbBroadcastPayload {
 }
 
 export type ReverbConnectionState =
+  | 'unconfigured'
   | 'initialized'
   | 'connecting'
   | 'connected'
   | 'unavailable'
   | 'failed'
   | 'disconnected';
+
+export type ReverbConfigurationStatus =
+  | { configured: true; config: ResolvedReverbConfig }
+  | {
+      configured: false;
+      reason: 'missing_app_key';
+      message: string;
+    };
 
 export interface ResolvedReverbConfig {
   key: string;
@@ -101,6 +110,26 @@ export function resolveReverbConfig(
     authEndpoint: `${normalizedApiBase}/broadcasting/auth`,
     isLocalHost,
   };
+}
+
+/**
+ * Returns whether Reverb realtime is configured for the active environment,
+ * plus a user-facing status message when EXPO_PUBLIC_REVERB_APP_KEY is blank on a non-local host.
+ */
+export function getReverbConfigurationStatus(
+  env: Record<string, string | undefined> = process.env,
+  apiBaseUrl: string = API_BASE_URL
+): ReverbConfigurationStatus {
+  const config = resolveReverbConfig(env, apiBaseUrl);
+  if (!config) {
+    return {
+      configured: false,
+      reason: 'missing_app_key',
+      message:
+        'Live updates unavailable. Pull down to refresh announcements and chat.',
+    };
+  }
+  return { configured: true, config };
 }
 
 let echoInstance: Echo<'reverb'> | null = null;
@@ -274,6 +303,12 @@ export function subscribeGlobalReverb(
   onReconnect?: () => void,
   onStateChange?: (state: ReverbConnectionState) => void
 ): () => void {
+  const configStatus = getReverbConfigurationStatus();
+  if (!configStatus.configured) {
+    onStateChange?.('unconfigured');
+    return () => {};
+  }
+
   const echo = getReverbEcho();
   if (!echo) {
     onStateChange?.('disconnected');

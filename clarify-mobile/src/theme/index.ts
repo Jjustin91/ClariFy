@@ -103,8 +103,8 @@ export const radii = {
 } as const;
 
 export const touchTarget = {
-  minWidth: 44,
-  minHeight: 44,
+  minWidth: 48,
+  minHeight: 48,
 } as const;
 
 /**

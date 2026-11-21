@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  mapHttpErrorToApiError,
   registerExpoPushTokenApi,
 } from './api-client.ts';
 import {
@@ -11,6 +12,7 @@ import {
 import {
   ALL_REALTIME_EVENT_TYPES,
   computeDebouncedRefreshDelayMs,
+  getRealtimeUnavailableBannerMessage,
   normalizeReverbPayloadToEvent,
   patchAnnouncementFeedOnRealtimeEvent,
   planRealtimeEventEffects,
@@ -19,6 +21,7 @@ import {
 } from './realtime-reducer.ts';
 import {
   computeReconnectBackoffMs,
+  getReverbConfigurationStatus,
   getReverbEcho,
   resolveReverbConfig,
 } from './reverb-client.ts';
@@ -499,3 +502,72 @@ test('registerExpoPushTokenApi posts to canonical POST /devices/token with Beare
     await clearSecureToken();
   }
 });
+
+test('getReverbConfigurationStatus and getRealtimeUnavailableBannerMessage surface visible banner when Reverb key is blank', () => {
+  const unconfigured = getReverbConfigurationStatus(
+    { EXPO_PUBLIC_REVERB_APP_KEY: '' },
+    'https://api.ustpclarify.tech/api/v1'
+  );
+  assert.equal(unconfigured.configured, false);
+  assert.equal(unconfigured.reason, 'missing_app_key');
+  assert.match(unconfigured.message, /Live updates unavailable/i);
+
+  const bannerWhenUnconfigured = getRealtimeUnavailableBannerMessage({
+    isAuthenticated: true,
+    isConfigured: false,
+    unconfiguredMessage: unconfigured.message,
+    connectionState: 'unconfigured',
+  });
+  assert.ok(bannerWhenUnconfigured);
+  assert.match(bannerWhenUnconfigured, /Live updates unavailable/i);
+
+  const bannerWhenConnected = getRealtimeUnavailableBannerMessage({
+    isAuthenticated: true,
+    isConfigured: true,
+    connectionState: 'connected',
+  });
+  assert.equal(bannerWhenConnected, null);
+
+  // Background pause should not show an error banner
+  const bannerWhenPaused = getRealtimeUnavailableBannerMessage({
+    isAuthenticated: true,
+    isConfigured: true,
+    connectionState: 'paused',
+  });
+  assert.equal(bannerWhenPaused, null);
+
+  // Socket failure/unavailable shows reconnecting banner
+  const bannerWhenFailed = getRealtimeUnavailableBannerMessage({
+    isAuthenticated: true,
+    isConfigured: true,
+    connectionState: 'failed',
+  });
+  assert.ok(bannerWhenFailed);
+  assert.match(bannerWhenFailed, /Live updates unavailable/i);
+
+  // Logged-out users see no banner
+  assert.equal(
+    getRealtimeUnavailableBannerMessage({
+      isAuthenticated: false,
+      isConfigured: false,
+      connectionState: 'unconfigured',
+    }),
+    null
+  );
+});
+
+test('mapHttpErrorToApiError extracts 429 retry seconds from AuthController JSON message when Retry-After header is absent', () => {
+  const err = mapHttpErrorToApiError({
+    status: 429,
+    json: {
+      status: 429,
+      message: 'Too many registration attempts. Please try again in 37 seconds.',
+    },
+    retryAfterHeader: null,
+    endpoint: '/auth/register',
+  });
+  assert.equal(err.status, 429);
+  assert.equal(err.retryAfter, 37);
+  assert.equal(err.message, 'Too many attempts, try again in 37 seconds');
+});
+

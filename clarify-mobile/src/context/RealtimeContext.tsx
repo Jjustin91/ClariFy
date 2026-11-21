@@ -13,12 +13,14 @@ import { getAnnouncementsApi } from '../lib/api-client';
 import { getSubscribableCourseHubIds } from '../lib/domain-logic';
 import {
   computeDebouncedRefreshDelayMs,
+  getRealtimeUnavailableBannerMessage,
   normalizeReverbPayloadToEvent,
   planRealtimeEventEffects,
   reduceChannelsOnRealtimeEvent,
 } from '../lib/realtime-reducer';
 import {
   disconnectReverb,
+  getReverbConfigurationStatus,
   subscribeChannelReverb,
   subscribeGlobalReverb,
   type ReverbBroadcastPayload,
@@ -32,6 +34,8 @@ export type RealtimeEventListener = (event: RealtimeEvent) => void;
 
 export interface RealtimeContextValue {
   connectionState: ReverbConnectionState | 'paused';
+  isRealtimeConfigured: boolean;
+  realtimeUnavailableMessage: string | null;
   announcementVersion: number;
   adminVersion: number;
   urgentPopupAnnouncement: Announcement | null;
@@ -62,9 +66,11 @@ export function RealtimeProvider({ children }: { children: React.ReactNode }) {
     refreshChannelRoster,
   } = useChannels();
 
+  const reverbConfigStatus = useMemo(() => getReverbConfigurationStatus(), []);
+
   const [connectionState, setConnectionState] = useState<
     ReverbConnectionState | 'paused'
-  >('disconnected');
+  >(() => (reverbConfigStatus.configured ? 'disconnected' : 'unconfigured'));
   const [announcementVersion, setAnnouncementVersion] = useState<number>(0);
   const [adminVersion, setAdminVersion] = useState<number>(0);
   const [urgentPopupAnnouncement, setUrgentPopupAnnouncement] =
@@ -389,15 +395,39 @@ export function RealtimeProvider({ children }: { children: React.ReactNode }) {
   }, [clearDebouncedChannelTimer]);
 
   const effectiveConnectionState: ReverbConnectionState | 'paused' =
-    isAuthenticated && user?.id ? connectionState : 'disconnected';
+    !isAuthenticated || !user?.id
+      ? 'disconnected'
+      : !reverbConfigStatus.configured
+        ? 'unconfigured'
+        : connectionState;
   const effectiveUrgentPopup =
     isAuthenticated && user?.id ? urgentPopupAnnouncement : null;
   const effectiveActiveChannelId =
     isAuthenticated && user?.id ? activeChannelId : 0;
 
+  const realtimeUnavailableMessage = useMemo(
+    () =>
+      getRealtimeUnavailableBannerMessage({
+        isAuthenticated: Boolean(isAuthenticated && user?.id),
+        isConfigured: reverbConfigStatus.configured,
+        unconfiguredMessage: reverbConfigStatus.configured
+          ? null
+          : reverbConfigStatus.message,
+        connectionState: effectiveConnectionState,
+      }),
+    [
+      isAuthenticated,
+      user?.id,
+      reverbConfigStatus,
+      effectiveConnectionState,
+    ]
+  );
+
   const value = useMemo<RealtimeContextValue>(
     () => ({
       connectionState: effectiveConnectionState,
+      isRealtimeConfigured: reverbConfigStatus.configured,
+      realtimeUnavailableMessage,
       announcementVersion,
       adminVersion,
       urgentPopupAnnouncement: effectiveUrgentPopup,
@@ -409,6 +439,8 @@ export function RealtimeProvider({ children }: { children: React.ReactNode }) {
     }),
     [
       effectiveConnectionState,
+      reverbConfigStatus.configured,
+      realtimeUnavailableMessage,
       announcementVersion,
       adminVersion,
       effectiveUrgentPopup,
