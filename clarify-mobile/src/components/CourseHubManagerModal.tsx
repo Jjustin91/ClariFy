@@ -86,14 +86,14 @@ function extractEditableHubTitle(hub: Channel): {
 }
 
 /**
- * Unified Course Hub Manager Modal ported from
+ * Course Hub Manager Modal ported from
  * clarify-web/src/components/modals/ChannelRosterModal.tsx.
  *
- * Supports four modes in one tabbed dialog:
- * - `browse`: Browse & search all Course Hubs, request/join/cancel, or jump into joined hubs
- * - `create_hub`: Create a new Course Hub (with built-in Noticeboard Feed & Q&A Threads)
- * - `create_channel`: Add a custom `#channel` inside a parent Course Hub (`[HUB:{id}]` contract)
- * - `edit_hub`: Course Admin edit metadata & 2-step Delete Course Hub confirmation
+ * - `browse`: Standalone Browse & Join Course Hubs modal (no top tab bar)
+ * - `create_hub`: Standalone Add Course Hub modal (no top tab bar)
+ * - `edit_hub` / `create_channel`: Hub management context; shows a 2-tab
+ *   `Edit Hub` | `Add Channel` bar for Course Admins and standalone `Add Channel`
+ *   for non-admin members.
  */
 export function CourseHubManagerModal({
   visible,
@@ -174,6 +174,7 @@ export function CourseHubManagerModal({
         setScopeDepartment(defaultDept);
         setScopeSection(defaultSection);
       } else if (initialTab === 'create_channel') {
+        setEditingHubId(fallbackParentId || null);
         setSubChannelName('');
         setSubChannelTopic('');
       } else {
@@ -215,6 +216,19 @@ export function CourseHubManagerModal({
     [allCourseHubs, selectedParentHubId, selectableParentHubs]
   );
 
+  const manageableHub = useMemo(
+    () =>
+      activeTab === 'edit_hub'
+        ? (editingHub ?? targetParentHub)
+        : (targetParentHub ?? editingHub),
+    [activeTab, editingHub, targetParentHub]
+  );
+
+  const showHubAdminTabs =
+    (activeTab === 'edit_hub' || activeTab === 'create_channel') &&
+    Boolean(manageableHub) &&
+    isUserCourseAdmin(manageableHub, user);
+
   const filteredBrowseHubs = useMemo(() => {
     const q = browseSearch.trim().toLowerCase();
     if (!q) return allCourseHubs;
@@ -227,20 +241,20 @@ export function CourseHubManagerModal({
     );
   }, [allCourseHubs, browseSearch]);
 
-  const handleSwitchMode = (nextTab: CourseHubModalTab) => {
+  const handleSwitchMode = (nextTab: 'edit_hub' | 'create_channel') => {
     setFieldErrors({});
     setConfirmDeleteHubId(null);
-    if (nextTab === 'create_hub') {
-      setEditingHubId(null);
-      setCourseCode('');
-      setHubName('');
-      setDescription('');
-      setScopeDepartment(defaultDept);
-      setScopeSection(defaultSection);
-    } else if (nextTab === 'edit_hub' && editingHub) {
-      populateEditFields(editingHub);
+    if (nextTab === 'edit_hub') {
+      const hubToEdit = manageableHub ?? editingHub;
+      if (hubToEdit) {
+        populateEditFields(hubToEdit);
+        setSelectedParentHubId(hubToEdit.id);
+      }
     } else if (nextTab === 'create_channel') {
-      if (
+      const hubToTarget = manageableHub ?? editingHub;
+      if (hubToTarget) {
+        setSelectedParentHubId(hubToTarget.id);
+      } else if (
         !selectedParentHubId ||
         !allCourseHubs.some((h) => h.id === selectedParentHubId)
       ) {
@@ -529,72 +543,9 @@ export function CourseHubManagerModal({
             </Pressable>
           </View>
 
-          {/* Compact Mode Switcher Tabs */}
-          <View style={styles.modeTabsBar}>
-            <Pressable
-              onPress={() => handleSwitchMode('browse')}
-              accessibilityRole="tab"
-              accessibilityState={{ selected: activeTab === 'browse' }}
-              accessibilityLabel="Browse Course Hubs tab"
-              style={({ pressed }) => [
-                styles.modeTab,
-                activeTab === 'browse' && styles.modeTabActive,
-                pressed && styles.pressed,
-              ]}
-            >
-              <Text
-                style={[
-                  styles.modeTabText,
-                  activeTab === 'browse' && styles.modeTabTextActive,
-                ]}
-              >
-                Browse
-              </Text>
-            </Pressable>
-
-            <Pressable
-              onPress={() => handleSwitchMode('create_hub')}
-              accessibilityRole="tab"
-              accessibilityState={{ selected: activeTab === 'create_hub' }}
-              accessibilityLabel="Add Course Hub tab"
-              style={({ pressed }) => [
-                styles.modeTab,
-                activeTab === 'create_hub' && styles.modeTabActive,
-                pressed && styles.pressed,
-              ]}
-            >
-              <Text
-                style={[
-                  styles.modeTabText,
-                  activeTab === 'create_hub' && styles.modeTabTextActive,
-                ]}
-              >
-                Add Hub
-              </Text>
-            </Pressable>
-
-            <Pressable
-              onPress={() => handleSwitchMode('create_channel')}
-              accessibilityRole="tab"
-              accessibilityState={{ selected: activeTab === 'create_channel' }}
-              accessibilityLabel="Add Channel tab"
-              style={({ pressed }) => [
-                styles.modeTab,
-                activeTab === 'create_channel' && styles.modeTabActive,
-                pressed && styles.pressed,
-              ]}
-            >
-              <Text
-                style={[
-                  styles.modeTabText,
-                  activeTab === 'create_channel' && styles.modeTabTextActive,
-                ]}
-              >
-                Add Channel
-              </Text>
-            </Pressable>
-
-            {editingHub && canAdminEditCurrentHub && (
+          {/* 2-Tab Switcher shown ONLY in Hub Management context (Edit Hub / Add Channel) for Course Admins */}
+          {showHubAdminTabs && (
+            <View style={styles.modeTabsBar}>
               <Pressable
                 onPress={() => handleSwitchMode('edit_hub')}
                 accessibilityRole="tab"
@@ -615,8 +566,31 @@ export function CourseHubManagerModal({
                   Edit Hub
                 </Text>
               </Pressable>
-            )}
-          </View>
+
+              <Pressable
+                onPress={() => handleSwitchMode('create_channel')}
+                accessibilityRole="tab"
+                accessibilityState={{
+                  selected: activeTab === 'create_channel',
+                }}
+                accessibilityLabel="Add Channel tab"
+                style={({ pressed }) => [
+                  styles.modeTab,
+                  activeTab === 'create_channel' && styles.modeTabActive,
+                  pressed && styles.pressed,
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.modeTabText,
+                    activeTab === 'create_channel' && styles.modeTabTextActive,
+                  ]}
+                >
+                  Add Channel
+                </Text>
+              </Pressable>
+            </View>
+          )}
 
           <ScrollView
             contentContainerStyle={styles.bodyContent}
@@ -1282,6 +1256,7 @@ export function CourseHubManagerModal({
                           {isJoined && (
                             <Pressable
                               onPress={() => {
+                                setEditingHubId(hub.id);
                                 setSelectedParentHubId(hub.id);
                                 setSubChannelName('');
                                 setSubChannelTopic('');
@@ -1310,6 +1285,7 @@ export function CourseHubManagerModal({
                             <Pressable
                               onPress={() => {
                                 populateEditFields(hub);
+                                setSelectedParentHubId(hub.id);
                                 setActiveTab('edit_hub');
                               }}
                               accessibilityRole="button"

@@ -321,26 +321,7 @@ export function ScopedChannelsDrawer({
 
             {/* 2. Active Nested Chat Channels */}
             <View style={styles.subChannelsBlock}>
-              <View style={styles.subSectionHeaderRow}>
-                <Text style={styles.subSectionLabel}>CHANNELS</Text>
-                {onOpenAddChannel && (
-                  <Pressable
-                    onPress={() => {
-                      onClose();
-                      onOpenAddChannel(hub.id);
-                    }}
-                    accessibilityRole="button"
-                    accessibilityLabel={`Add Channel in ${formatCourseHubName(hub)}`}
-                    style={({ pressed }) => [
-                      styles.inlineAddChannelBtn,
-                      pressed && styles.pressed,
-                    ]}
-                  >
-                    <Feather name="plus" size={12} color={colors.ustpGold} />
-                    <Text style={styles.inlineAddChannelText}>Add Channel</Text>
-                  </Pressable>
-                )}
-              </View>
+              <Text style={styles.subSectionLabel}>CHANNELS</Text>
 
               {subChannels.length === 0 ? (
                 <Pressable
@@ -514,8 +495,8 @@ export function ScopedChannelsDrawer({
           style={[
             styles.drawerPanel,
             {
-              paddingTop: Math.max(insets.top, spacing.md),
-              paddingBottom: Math.max(insets.bottom, spacing.md),
+              paddingTop: Math.max(insets.top, spacing.sm),
+              paddingBottom: Math.max(insets.bottom + spacing.xs, spacing.sm),
             },
           ]}
         >
@@ -702,7 +683,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.ustpNavy,
     borderRightWidth: 1,
     borderRightColor: colors.ustpNavyBorder,
-    paddingHorizontal: spacing.md,
+    paddingHorizontal: spacing.sm + 4,
     ...elevation.overlay,
   },
   backdrop: {
@@ -713,7 +694,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: spacing.sm,
+    marginBottom: spacing.xs,
   },
   headerTitle: {
     fontSize: typography.sizes.xs,
@@ -722,13 +703,13 @@ const styles = StyleSheet.create({
     letterSpacing: 0.9,
   },
   closeBtn: {
-    minWidth: touchTarget.minWidth,
-    minHeight: touchTarget.minHeight,
+    minWidth: 44,
+    minHeight: 44,
     alignItems: 'center',
     justifyContent: 'center',
   },
   searchWrap: {
-    minHeight: touchTarget.minHeight,
+    minHeight: 44,
     backgroundColor: colors.ustpNavySurface,
     borderWidth: 1,
     borderColor: colors.ustpNavyBorder,
@@ -737,17 +718,18 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.sm,
-    marginBottom: spacing.md,
+    marginBottom: spacing.sm,
   },
   searchInput: {
     flex: 1,
-    minHeight: touchTarget.minHeight,
+    minHeight: 44,
+    paddingVertical: 0,
     fontSize: typography.sizes.sm,
     color: colors.white,
   },
   topActionsStack: {
     gap: spacing.xs + 2,
-    marginBottom: spacing.md,
+    marginBottom: spacing.sm + 2,
   },
   addHubActionBtn: {
     minHeight: 44,
@@ -782,10 +764,10 @@ const styles = StyleSheet.create({
     color: colors.white,
   },
   listContent: {
-    paddingBottom: spacing.lg,
+    paddingBottom: spacing.sm,
   },
   listGap: {
-    height: spacing.sm + 2,
+    height: spacing.sm,
   },
   hubCard: {
     backgroundColor: colors.ustpNavySurface,
@@ -803,13 +785,13 @@ const styles = StyleSheet.create({
   },
   hubHeaderBtn: {
     flex: 1,
-    minHeight: touchTarget.minHeight,
+    minHeight: 44,
     paddingLeft: spacing.sm + 2,
     paddingRight: spacing.xs,
-    paddingVertical: spacing.sm,
+    paddingVertical: spacing.xs + 2,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing.sm,
+    gap: spacing.xs + 2,
   },
   hubQuickActions: {
     flexDirection: 'row',
@@ -825,7 +807,7 @@ const styles = StyleSheet.create({
   },
   hubHeaderTextWrap: {
     flex: 1,
-    gap: 2,
+    gap: 1,
   },
   hubNameText: {
     fontSize: typography.sizes.sm,
@@ -856,11 +838,11 @@ const styles = StyleSheet.create({
   hubBody: {
     borderTopWidth: 1,
     borderTopColor: colors.ustpNavyBorder,
-    padding: spacing.sm,
-    gap: spacing.xs + 2,
+    padding: spacing.xs + 2,
+    gap: spacing.xs,
   },
   spaceRow: {
-    minHeight: touchTarget.minHeight,
+    minHeight: 44,
     borderRadius: radii.md,
     paddingHorizontal: spacing.sm + 2,
     flexDirection: 'row',
@@ -900,33 +882,16 @@ const styles = StyleSheet.create({
   subChannelsBlock: {
     borderTopWidth: 1,
     borderTopColor: colors.ustpNavyBorder,
-    paddingTop: spacing.sm,
-    gap: spacing.xs,
-  },
-  subSectionHeaderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: spacing.xs,
+    paddingTop: spacing.xs + 2,
+    gap: 2,
   },
   subSectionLabel: {
+    paddingHorizontal: spacing.xs,
+    paddingBottom: 2,
     fontSize: 10,
     fontWeight: '800',
     color: colors.ustpNavyMutedText,
     letterSpacing: 0.7,
-  },
-  inlineAddChannelBtn: {
-    minHeight: 32,
-    paddingHorizontal: spacing.xs + 2,
-    borderRadius: radii.sm,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 3,
-  },
-  inlineAddChannelText: {
-    fontSize: 11,
-    fontWeight: '800',
-    color: colors.ustpGold,
   },
   subChannelItemWrap: {
     gap: spacing.xs,
@@ -1074,8 +1039,8 @@ const styles = StyleSheet.create({
   footerMeta: {
     borderTopWidth: 1,
     borderTopColor: colors.ustpNavyBorder,
-    paddingTop: spacing.md,
-    gap: 3,
+    paddingTop: spacing.sm,
+    gap: 2,
   },
   footerScope: {
     fontSize: typography.sizes.xs,

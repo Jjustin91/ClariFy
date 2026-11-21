@@ -909,7 +909,7 @@ export default function MobileChannelHubScreen() {
         )}
       </View>
 
-      {/* Compact Course Hub Header Bar: Hub + Space | Course Admin Edit | Settings Gear */}
+      {/* Compact Course Hub Header Bar: Hub + Space | Settings Gear */}
       {activeChannel && !resolution.isInvalidChannel && (
         <View style={styles.hubHeaderBar}>
           <View style={styles.hubHeaderBarCopy}>
@@ -923,20 +923,6 @@ export default function MobileChannelHubScreen() {
           </View>
 
           <View style={styles.hubHeaderBarActions}>
-            {isCourseAdmin && (
-              <Pressable
-                onPress={() => openManagerModal('edit_hub', effectiveHubId)}
-                accessibilityRole="button"
-                accessibilityLabel={`Edit ${formatCourseHubName(activeChannel)}`}
-                style={({ pressed }) => [
-                  styles.headerActionIconBtn,
-                  pressed && styles.pressed,
-                ]}
-              >
-                <Feather name="edit-3" size={18} color={colors.ustpNavy} />
-              </Pressable>
-            )}
-
             <Pressable
               onPress={() => setIsSettingsModalOpen(true)}
               accessibilityRole="button"

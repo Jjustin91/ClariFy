@@ -285,7 +285,13 @@ export function CourseHubSettingsModal({
       visible={visible}
       transparent
       animationType="fade"
-      onRequestClose={handleClose}
+      onRequestClose={() => {
+        if (confirmingLeave) {
+          if (!isManagingRoster) setConfirmingLeave(false);
+          return;
+        }
+        handleClose();
+      }}
     >
       <KeyboardAvoidingView
         style={styles.modalBackdrop}
@@ -398,51 +404,23 @@ export function CourseHubSettingsModal({
                   </Pressable>
                 )}
 
-                {confirmingLeave ? (
-                  <View style={styles.leaveConfirmGroup}>
-                    <Pressable
-                      disabled={isManagingRoster}
-                      onPress={() => void handleLeaveCourseHub()}
-                      accessibilityRole="button"
-                      accessibilityLabel="Confirm leaving Course Hub"
-                      style={({ pressed }) => [
-                        styles.confirmLeaveBtn,
-                        pressed && styles.pressed,
-                      ]}
-                    >
-                      <Text style={styles.confirmLeaveBtnText}>
-                        {isManagingRoster ? 'Leaving...' : 'Confirm Leave'}
-                      </Text>
-                    </Pressable>
-                    <Pressable
-                      disabled={isManagingRoster}
-                      onPress={() => setConfirmingLeave(false)}
-                      accessibilityRole="button"
-                      accessibilityLabel="Cancel leaving Course Hub"
-                      style={styles.cancelInlineBtn}
-                    >
-                      <Text style={styles.cancelInlineText}>Cancel</Text>
-                    </Pressable>
-                  </View>
-                ) : (
-                  <Pressable
-                    disabled={isManagingRoster}
-                    onPress={() => setConfirmingLeave(true)}
-                    accessibilityRole="button"
-                    accessibilityLabel="Leave Course Hub"
-                    style={({ pressed }) => [
-                      styles.leaveHubBtn,
-                      pressed && styles.pressed,
-                    ]}
-                  >
-                    <Feather
-                      name="log-out"
-                      size={14}
-                      color={colors.dangerText}
-                    />
-                    <Text style={styles.leaveHubBtnText}>Leave Course Hub</Text>
-                  </Pressable>
-                )}
+                <Pressable
+                  disabled={isManagingRoster}
+                  onPress={() => setConfirmingLeave(true)}
+                  accessibilityRole="button"
+                  accessibilityLabel="Leave Course Hub"
+                  style={({ pressed }) => [
+                    styles.leaveHubBtn,
+                    pressed && styles.pressed,
+                  ]}
+                >
+                  <Feather
+                    name="log-out"
+                    size={14}
+                    color={colors.dangerText}
+                  />
+                  <Text style={styles.leaveHubBtnText}>Leave Course Hub</Text>
+                </Pressable>
               </View>
             </View>
 
@@ -722,6 +700,75 @@ export function CourseHubSettingsModal({
             </View>
           </ScrollView>
         </View>
+
+        {/* Centered Confirmation Popup Dialog for Leaving Course Hub */}
+        {confirmingLeave && (
+          <View style={styles.confirmOverlay}>
+            <Pressable
+              style={StyleSheet.absoluteFill}
+              onPress={() => {
+                if (!isManagingRoster) setConfirmingLeave(false);
+              }}
+              accessibilityRole="button"
+              accessibilityLabel="Cancel leaving Course Hub"
+            />
+            <View
+              accessibilityViewIsModal
+              style={styles.confirmDialogCard}
+            >
+              <View style={styles.confirmDialogHeader}>
+                <Feather
+                  name="alert-triangle"
+                  size={20}
+                  color={colors.dangerText}
+                />
+                <Text style={styles.confirmDialogTitle}>Leave Course Hub?</Text>
+              </View>
+              <Text style={styles.confirmDialogBody}>
+                Are you sure you want to leave{' '}
+                <Text style={styles.confirmDialogHubName}>
+                  {formatCourseHubName(detailedChannel)}
+                </Text>
+                ? You will lose access to its noticeboard, Q&amp;A threads, and
+                chat channels until you rejoin.
+              </Text>
+              <View style={styles.confirmDialogActions}>
+                <Pressable
+                  disabled={isManagingRoster}
+                  onPress={() => setConfirmingLeave(false)}
+                  accessibilityRole="button"
+                  accessibilityLabel="Cancel leaving Course Hub"
+                  style={({ pressed }) => [
+                    styles.confirmCancelBtn,
+                    isManagingRoster && styles.disabledBtn,
+                    pressed && styles.pressed,
+                  ]}
+                >
+                  <Text style={styles.confirmCancelBtnText}>Cancel</Text>
+                </Pressable>
+                <Pressable
+                  disabled={isManagingRoster}
+                  onPress={() => void handleLeaveCourseHub()}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Confirm leaving ${formatCourseHubName(detailedChannel)}`}
+                  style={({ pressed }) => [
+                    styles.confirmDestructiveBtn,
+                    isManagingRoster && styles.disabledBtn,
+                    pressed && styles.pressed,
+                  ]}
+                >
+                  {isManagingRoster ? (
+                    <ActivityIndicator size="small" color={colors.white} />
+                  ) : (
+                    <Text style={styles.confirmDestructiveBtnText}>
+                      Leave Course Hub
+                    </Text>
+                  )}
+                </Pressable>
+              </View>
+            </View>
+          </View>
+        )}
       </KeyboardAvoidingView>
     </Modal>
   );
@@ -875,34 +922,83 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: colors.dangerText,
   },
-  leaveConfirmGroup: {
+  confirmOverlay: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    backgroundColor: colors.overlayBackdrop,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing.lg,
+  },
+  confirmDialogCard: {
+    width: '100%',
+    maxWidth: 360,
+    backgroundColor: colors.white,
+    borderRadius: radii.xl,
+    borderWidth: 1,
+    borderColor: colors.borderStrong,
+    padding: spacing.lg,
+    gap: spacing.md,
+    ...elevation.overlay,
+  },
+  confirmDialogHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing.xs,
+    gap: spacing.sm,
   },
-  confirmLeaveBtn: {
+  confirmDialogTitle: {
+    flex: 1,
+    fontSize: typography.sizes.titleSm,
+    fontWeight: '800',
+    color: colors.ustpNavy,
+  },
+  confirmDialogBody: {
+    fontSize: typography.sizes.sm,
+    lineHeight: typography.lineHeights.sm,
+    color: colors.ustpText,
+  },
+  confirmDialogHubName: {
+    fontWeight: '800',
+    color: colors.ustpNavy,
+  },
+  confirmDialogActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    gap: spacing.sm,
+    paddingTop: spacing.xs,
+  },
+  confirmCancelBtn: {
     minHeight: 44,
+    paddingHorizontal: spacing.md,
+    borderRadius: radii.md,
+    borderWidth: 1,
+    borderColor: colors.borderStrong,
+    backgroundColor: colors.white,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  confirmCancelBtnText: {
+    fontSize: typography.sizes.xs,
+    fontWeight: '800',
+    color: colors.ustpNavy,
+  },
+  confirmDestructiveBtn: {
+    minHeight: 44,
+    minWidth: 132,
     paddingHorizontal: spacing.md,
     borderRadius: radii.md,
     backgroundColor: colors.dangerBorder,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  confirmLeaveBtnText: {
+  confirmDestructiveBtnText: {
     fontSize: typography.sizes.xs,
     fontWeight: '800',
     color: colors.white,
-  },
-  cancelInlineBtn: {
-    minHeight: 44,
-    paddingHorizontal: spacing.sm,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  cancelInlineText: {
-    fontSize: typography.sizes.xs,
-    fontWeight: '700',
-    color: colors.mutedSlate,
   },
   rosterHeaderRow: {
     flexDirection: 'row',
