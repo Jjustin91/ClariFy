@@ -31,6 +31,36 @@ const RAW_API_URL =
 export const API_BASE_URL = RAW_API_URL.replace(/\/+$/, '');
 
 export const DEFAULT_REQUEST_TIMEOUT_MS = 15000;
+export const UPLOAD_REQUEST_TIMEOUT_MS = 60000;
+
+/**
+ * Extracts the scheme + host origin from an API base URL (e.g., https://api.ustpclarify.tech/api/v1 -> https://api.ustpclarify.tech).
+ */
+export function getApiOrigin(apiBaseUrl: string = API_BASE_URL): string {
+  const trimmed = (apiBaseUrl || '').trim().replace(/\/+$/, '');
+  const match = trimmed.match(/^(https?:\/\/[^/]+)/i);
+  return match ? match[1] : trimmed.replace(/\/api\/v\d+$/i, '');
+}
+
+/**
+ * Resolves relative `/storage/...` or `/assets/...` attachment/avatar paths against the API origin
+ * while preserving absolute `https://`, `http://`, `data:`, `file:`, and `content:` URIs.
+ */
+export function resolveApiAssetUrl(
+  rawUrl: string | null | undefined,
+  apiBaseUrl: string = API_BASE_URL
+): string | null {
+  if (!rawUrl) return null;
+  const trimmed = rawUrl.trim();
+  if (!trimmed) return null;
+  if (/^(https?:|data:|blob:|file:|content:)/i.test(trimmed)) {
+    return trimmed;
+  }
+  const origin = getApiOrigin(apiBaseUrl);
+  if (!origin) return trimmed;
+  const normalizedPath = trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
+  return `${origin}${normalizedPath}`;
+}
 
 type SessionExpiredListener = (message: string) => void;
 const sessionExpiredListeners = new Set<SessionExpiredListener>();
@@ -354,6 +384,7 @@ export async function updateProfileApi(
   return apiClient<SingleResourceResponse<User>>('/profile', {
     method: 'POST',
     body: formData,
+    timeoutMs: UPLOAD_REQUEST_TIMEOUT_MS,
   });
 }
 
@@ -519,6 +550,7 @@ export async function createAnnouncementApi(
   return apiClient<SingleResourceResponse<Announcement>>('/announcements', {
     method: 'POST',
     body: formData,
+    timeoutMs: UPLOAD_REQUEST_TIMEOUT_MS,
   });
 }
 
@@ -532,6 +564,7 @@ export async function updateAnnouncementApi(
     {
       method: 'POST',
       body: formData,
+      timeoutMs: UPLOAD_REQUEST_TIMEOUT_MS,
     }
   );
 }

@@ -21,6 +21,7 @@ import {
 } from 'react-native';
 
 import { AnnouncementCard } from '@/components/AnnouncementCard';
+import { AnnouncementFormModal } from '@/components/AnnouncementFormModal';
 import { ClassFaqsDrawer } from '@/components/ClassFaqsDrawer';
 import { CourseHubChatView } from '@/components/CourseHubChatView';
 import {
@@ -42,6 +43,7 @@ import { useOptionalRealtime } from '@/context/RealtimeContext';
 import { useAnnouncementsFeed } from '@/hooks/useAnnouncementsFeed';
 import { getChannelThreadsApi, markChannelSeenApi } from '@/lib/api-client';
 import {
+  canPublishOrManageAnnouncements,
   formatCourseHubName,
   formatEnrolledRosterSummary,
   formatSubChannelDisplayName,
@@ -120,6 +122,13 @@ export default function MobileChannelHubScreen() {
     visible: false,
     initialTab: 'browse',
     targetHubId: null,
+  });
+  const [announcementComposerState, setAnnouncementComposerState] = useState<{
+    visible: boolean;
+    editingAnnouncement: Announcement | null;
+  }>({
+    visible: false,
+    editingAnnouncement: null,
   });
 
   const [activeSpace, setActiveSpace] = useState<HubSpaceKey>(() => {
@@ -684,16 +693,56 @@ export default function MobileChannelHubScreen() {
     refreshChannelRoster,
   ]);
 
+  const canManageHubAnnouncements = Boolean(
+    user && canPublishOrManageAnnouncements(user.role)
+  );
+
+  const handleOpenCreateAnnouncement = useCallback(() => {
+    setAnnouncementComposerState({
+      visible: true,
+      editingAnnouncement: null,
+    });
+  }, []);
+
+  const handleOpenEditAnnouncement = useCallback((announcement: Announcement) => {
+    setAnnouncementComposerState({
+      visible: true,
+      editingAnnouncement: announcement,
+    });
+  }, []);
+
+  const handleCloseAnnouncementComposer = useCallback(() => {
+    setAnnouncementComposerState({
+      visible: false,
+      editingAnnouncement: null,
+    });
+  }, []);
+
   const renderItem = useCallback(
     ({ item }: { item: Announcement }) => (
       <AnnouncementCard
         announcement={item}
         channels={channels}
         isAckLoading={feed.ackLoadingIds.includes(item.id)}
+        isDeleting={feed.deletingIds.includes(item.id)}
         onAcknowledge={feed.acknowledge}
+        onEdit={
+          canManageHubAnnouncements ? handleOpenEditAnnouncement : undefined
+        }
+        onDelete={
+          canManageHubAnnouncements ? feed.deleteAnnouncement : undefined
+        }
       />
     ),
-    [channels, feed.ackLoadingIds, feed.acknowledge]
+    [
+      channels,
+      feed.ackLoadingIds,
+      feed.deletingIds,
+      feed.acknowledge,
+      feed.deleteAnnouncement,
+      canManageHubAnnouncements,
+      handleOpenEditAnnouncement,
+    ]
   );
 
   const keyExtractor = useCallback((item: Announcement) => String(item.id), []);
@@ -789,6 +838,35 @@ export default function MobileChannelHubScreen() {
           </Text>
         </View>
       )}
+
+      {/* Faculty / Dept Head Course Hub Announcement Create Trigger (Strictly Hidden for Students) */}
+      {activeChannel &&
+        effectiveHubId > 0 &&
+        canManageHubAnnouncements &&
+        isCourseAdmin && (
+          <Pressable
+            onPress={handleOpenCreateAnnouncement}
+            accessibilityRole="button"
+            accessibilityLabel={`Create announcement in ${formatCourseHubName(activeChannel)}`}
+            style={({ pressed }) => [
+              styles.hubCreateAnnouncementBar,
+              pressed && styles.pressed,
+            ]}
+          >
+            <View style={styles.hubCreateAnnouncementLeft}>
+              <View style={styles.hubCreateAnnouncementBadge}>
+                <Feather name="plus" size={14} color={colors.ustpGold} />
+              </View>
+              <Text style={styles.hubCreateAnnouncementText}>
+                Create Course Hub Announcement
+              </Text>
+            </View>
+            <View style={styles.hubCreateAnnouncementIcons}>
+              <Feather name="file-text" size={16} color={colors.ustpNavy} />
+              <Feather name="image" size={16} color={colors.ustpNavy} />
+            </View>
+          </Pressable>
+        )}
 
       {feed.error && feed.items.length > 0 && activeSpace === 'noticeboard' && (
         <ErrorBanner error={feed.error} onRetry={feed.retry} />
@@ -1121,6 +1199,23 @@ export default function MobileChannelHubScreen() {
         onOpenSubChannel={handleSelectSubChannel}
         onDeletedHub={handleHubRemovedOrLeft}
       />
+
+      {/* Faculty / Dept Head Announcement Composer Modal */}
+      {canManageHubAnnouncements && (
+        <AnnouncementFormModal
+          visible={announcementComposerState.visible}
+          mode={
+            announcementComposerState.editingAnnouncement?.channel_type ===
+            'university'
+              ? 'campus_wide'
+              : 'course_hub'
+          }
+          editingAnnouncement={announcementComposerState.editingAnnouncement}
+          defaultChannelId={effectiveHubId > 0 ? effectiveHubId : null}
+          onClose={handleCloseAnnouncementComposer}
+          onSaved={() => void feed.refresh()}
+        />
+      )}
     </MobileAppShell>
   );
 }
@@ -1425,6 +1520,44 @@ const styles = StyleSheet.create({
     fontSize: typography.sizes.sm,
     fontWeight: '800',
     color: colors.ustpNavy,
+  },
+  hubCreateAnnouncementBar: {
+    minHeight: touchTarget.minHeight + 4,
+    backgroundColor: colors.white,
+    borderWidth: 1,
+    borderColor: colors.ustpNavy,
+    borderRadius: radii.xl,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+  },
+  hubCreateAnnouncementLeft: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  hubCreateAnnouncementBadge: {
+    width: 28,
+    height: 28,
+    borderRadius: radii.md,
+    backgroundColor: colors.ustpNavy,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  hubCreateAnnouncementText: {
+    flex: 1,
+    fontSize: typography.sizes.sm,
+    fontWeight: '700',
+    color: colors.ustpText,
+  },
+  hubCreateAnnouncementIcons: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
   },
   pressed: {
     opacity: 0.85,

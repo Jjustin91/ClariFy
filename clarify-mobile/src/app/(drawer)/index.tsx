@@ -1,5 +1,5 @@
 import { useRouter } from 'expo-router';
-import React, { useCallback } from 'react';
+import React, { useCallback, useState } from 'react';
 import {
   Pressable,
   RefreshControl,
@@ -9,7 +9,9 @@ import {
   View,
 } from 'react-native';
 
+import { AdminConsoleView } from '@/components/AdminConsoleView';
 import { AnnouncementCard } from '@/components/AnnouncementCard';
+import { AnnouncementFormModal } from '@/components/AnnouncementFormModal';
 import { MobileAppShell } from '@/components/MobileAppShell';
 import {
   EmptyState,
@@ -20,11 +22,13 @@ import { useAuth } from '@/context/AuthContext';
 import { useChannels } from '@/context/ChannelsContext';
 import { useAnnouncementsFeed } from '@/hooks/useAnnouncementsFeed';
 import {
+  canPublishOrManageAnnouncements,
   formatCourseHubName,
   formatHubActivityBreakdownChips,
 } from '@/lib/domain-logic';
 import { getChannelMembersCount } from '@/lib/feed-reducer';
 import { colors, radii, spacing, touchTarget, typography } from '@/theme';
+import type { Announcement } from '@/types/api';
 
 /**
  * ClariFy Mobile Dashboard ported from clarify-web/app/page.tsx.
@@ -47,6 +51,11 @@ export default function MobileDashboardScreen() {
   } = useChannels();
 
   const isAdmin = user?.role === 'it_admin';
+  const canManageAnnouncements = Boolean(
+    user && canPublishOrManageAnnouncements(user.role)
+  );
+  const [editingAnnouncement, setEditingAnnouncement] =
+    useState<Announcement | null>(null);
 
   const feed = useAnnouncementsFeed({
     sort: 'latest',
@@ -60,6 +69,14 @@ export default function MobileDashboardScreen() {
 
   if (!user) {
     return null;
+  }
+
+  if (isAdmin) {
+    return (
+      <MobileAppShell title="IT Admin Console">
+        <AdminConsoleView />
+      </MobileAppShell>
+    );
   }
 
   const updatedHubs = joinedCourseHubs.filter((ch) => ch.has_updates === true);
@@ -83,60 +100,56 @@ export default function MobileDashboardScreen() {
           <Text style={styles.welcomeText}>Welcome back!</Text>
         </View>
 
-        {isAdmin ? (
-          <View style={styles.adminNoticeCard}>
-            <Text style={styles.adminNoticeTitle}>
-              ICTO Administrator Account
-            </Text>
-            <Text style={styles.adminNoticeBody}>
-              Account verification, role governance, and PRISMS roster sync tools
-              are available in the ClariFy Web Admin Console. You can manage your
-              contact settings or sign out from the right-hand menu.
-            </Text>
+        {/* Section 1: Latest announcements */}
+        <View style={styles.section}>
+          <View style={styles.sectionHeaderRow}>
+            <Text style={styles.sectionTitle}>Latest announcements</Text>
+            <Pressable
+              onPress={() => router.push('/announcements' as never)}
+              accessibilityRole="button"
+              accessibilityLabel="See all announcements"
+              style={({ pressed }) => [
+                styles.sectionLinkBtn,
+                pressed && styles.pressed,
+              ]}
+            >
+              <Text style={styles.sectionLinkText}>See all...</Text>
+            </Pressable>
           </View>
-        ) : (
-          <>
-            {/* Section 1: Latest announcements */}
-            <View style={styles.section}>
-              <View style={styles.sectionHeaderRow}>
-                <Text style={styles.sectionTitle}>Latest announcements</Text>
-                <Pressable
-                  onPress={() => router.push('/announcements' as never)}
-                  accessibilityRole="button"
-                  accessibilityLabel="See all announcements"
-                  style={({ pressed }) => [
-                    styles.sectionLinkBtn,
-                    pressed && styles.pressed,
-                  ]}
-                >
-                  <Text style={styles.sectionLinkText}>See all...</Text>
-                </Pressable>
-              </View>
 
-              {feed.isLoading ? (
-                <SkeletonCards count={2} />
-              ) : feed.error ? (
-                <ErrorBanner error={feed.error} onRetry={feed.retry} />
-              ) : feed.items.length === 0 ? (
-                <EmptyState
-                  title="No Campus Announcements Yet"
-                  description="Scoped announcements for your courses and CDO Campus will appear here."
+          {feed.isLoading ? (
+            <SkeletonCards count={2} />
+          ) : feed.error ? (
+            <ErrorBanner error={feed.error} onRetry={feed.retry} />
+          ) : feed.items.length === 0 ? (
+            <EmptyState
+              title="No Campus Announcements Yet"
+              description="Scoped announcements for your courses and CDO Campus will appear here."
+            />
+          ) : (
+            <View style={styles.cardsStack}>
+              {feed.items.map((item) => (
+                <AnnouncementCard
+                  key={String(item.id)}
+                  announcement={item}
+                  channels={channels}
+                  compact
+                  isAckLoading={feed.ackLoadingIds.includes(item.id)}
+                  isDeleting={feed.deletingIds.includes(item.id)}
+                  onAcknowledge={feed.acknowledge}
+                  onEdit={
+                    canManageAnnouncements
+                      ? (ann) => setEditingAnnouncement(ann)
+                      : undefined
+                  }
+                  onDelete={
+                    canManageAnnouncements ? feed.deleteAnnouncement : undefined
+                  }
                 />
-              ) : (
-                <View style={styles.cardsStack}>
-                  {feed.items.map((item) => (
-                    <AnnouncementCard
-                      key={String(item.id)}
-                      announcement={item}
-                      channels={channels}
-                      compact
-                      isAckLoading={feed.ackLoadingIds.includes(item.id)}
-                      onAcknowledge={feed.acknowledge}
-                    />
-                  ))}
-                </View>
-              )}
+              ))}
             </View>
+          )}
+        </View>
 
             {/* Section 2: Course Hubs */}
             <View style={styles.section}>
@@ -253,9 +266,21 @@ export default function MobileDashboardScreen() {
                 </View>
               )}
             </View>
-          </>
-        )}
       </ScrollView>
+
+      {canManageAnnouncements && (
+        <AnnouncementFormModal
+          visible={Boolean(editingAnnouncement)}
+          mode={
+            editingAnnouncement?.channel_type === 'university'
+              ? 'campus_wide'
+              : 'course_hub'
+          }
+          editingAnnouncement={editingAnnouncement}
+          onClose={() => setEditingAnnouncement(null)}
+          onSaved={() => void feed.refresh()}
+        />
+      )}
     </MobileAppShell>
   );
 }
@@ -278,25 +303,6 @@ const styles = StyleSheet.create({
     lineHeight: typography.lineHeights.titleLg,
     fontWeight: '900',
     color: colors.white,
-  },
-  adminNoticeCard: {
-    backgroundColor: colors.white,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radii.lg,
-    padding: spacing.lg,
-    gap: spacing.sm,
-  },
-  adminNoticeTitle: {
-    fontSize: typography.sizes.titleSm,
-    lineHeight: typography.lineHeights.titleSm,
-    fontWeight: '800',
-    color: colors.ustpNavy,
-  },
-  adminNoticeBody: {
-    fontSize: typography.sizes.body,
-    lineHeight: typography.lineHeights.body,
-    color: colors.mutedSlate,
   },
   section: {
     gap: spacing.md,

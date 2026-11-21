@@ -30,6 +30,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '../context/AuthContext';
 import {
   getChannelChatMessagesApi,
+  resolveApiAssetUrl,
   sendChannelChatMessageApi,
   unsendChannelChatMessageApi,
 } from '../lib/api-client';
@@ -87,10 +88,7 @@ function ChatSenderAvatar({
   const [failedUrl, setFailedUrl] = useState<string | null>(null);
   const isFaculty = isFacultyChatRole(role);
   const initial = getChatSenderInitial(name, role);
-  const normalizedUrl =
-    typeof avatarUrl === 'string' && avatarUrl.trim().length > 0
-      ? avatarUrl.trim()
-      : null;
+  const normalizedUrl = resolveApiAssetUrl(avatarUrl);
   const showImage = Boolean(normalizedUrl && failedUrl !== normalizedUrl);
 
   return (

@@ -13,6 +13,10 @@ import {
 } from 'react-native';
 
 import { AnnouncementCard } from '@/components/AnnouncementCard';
+import {
+  AnnouncementFormModal,
+  type AnnouncementComposerMode,
+} from '@/components/AnnouncementFormModal';
 import { MobileAppShell } from '@/components/MobileAppShell';
 import {
   EmptyState,
@@ -22,6 +26,10 @@ import {
 import { useAuth } from '@/context/AuthContext';
 import { useChannels } from '@/context/ChannelsContext';
 import { useAnnouncementsFeed } from '@/hooks/useAnnouncementsFeed';
+import {
+  canPublishCampusWideAnnouncements,
+  canPublishOrManageAnnouncements,
+} from '@/lib/domain-logic';
 import { colors, radii, spacing, touchTarget, typography } from '@/theme';
 import type { Announcement } from '@/types/api';
 
@@ -49,13 +57,13 @@ const SORT_OPTIONS: SortOption[] = [
 
 /**
  * ClariFy Mobile Announcements Feed ported from clarify-web/app/announcements/page.tsx.
- * Read-only feed: no create, edit, delete, pin, or attachments in this step.
  * - Server-paginated via GET /announcements?search=...&tag=...&sort=...&page=...&per_page=10
  * - FlatList with stable keyExtractor, pull-to-refresh, and infinite scroll pagination
+ * - Faculty & Department Head Create / Edit / Delete announcement flows (strictly hidden for students)
  */
 export default function MobileAnnouncementsScreen() {
   const { user } = useAuth();
-  const { channels } = useChannels();
+  const { channels, joinedCourseHubs, allCourseHubs } = useChannels();
 
   const [searchInput, setSearchInput] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
@@ -63,6 +71,15 @@ export default function MobileAnnouncementsScreen() {
   const [sortBy, setSortBy] = useState<'latest' | 'oldest' | 'read_reach'>(
     'latest'
   );
+  const [composerState, setComposerState] = useState<{
+    visible: boolean;
+    mode: AnnouncementComposerMode;
+    editingAnnouncement: Announcement | null;
+  }>({
+    visible: false,
+    mode: 'campus_wide',
+    editingAnnouncement: null,
+  });
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -88,16 +105,65 @@ export default function MobileAnnouncementsScreen() {
     setSortBy('latest');
   }, []);
 
+  const canPublish = Boolean(
+    user && canPublishOrManageAnnouncements(user.role)
+  );
+  const canPublishCampusWide = Boolean(
+    user && canPublishCampusWideAnnouncements(user.role)
+  );
+  const hasHandledHubs = joinedCourseHubs.length > 0 || allCourseHubs.length > 0;
+
+  const handleOpenCreate = useCallback(
+    (mode: AnnouncementComposerMode) => {
+      setComposerState({
+        visible: true,
+        mode,
+        editingAnnouncement: null,
+      });
+    },
+    []
+  );
+
+  const handleOpenEdit = useCallback((announcement: Announcement) => {
+    setComposerState({
+      visible: true,
+      mode:
+        announcement.channel_type === 'university'
+          ? 'campus_wide'
+          : 'course_hub',
+      editingAnnouncement: announcement,
+    });
+  }, []);
+
+  const handleCloseComposer = useCallback(() => {
+    setComposerState((prev) => ({
+      ...prev,
+      visible: false,
+      editingAnnouncement: null,
+    }));
+  }, []);
+
   const renderItem = useCallback(
     ({ item }: { item: Announcement }) => (
       <AnnouncementCard
         announcement={item}
         channels={channels}
         isAckLoading={feed.ackLoadingIds.includes(item.id)}
+        isDeleting={feed.deletingIds.includes(item.id)}
         onAcknowledge={feed.acknowledge}
+        onEdit={canPublish ? handleOpenEdit : undefined}
+        onDelete={canPublish ? feed.deleteAnnouncement : undefined}
       />
     ),
-    [channels, feed.ackLoadingIds, feed.acknowledge]
+    [
+      channels,
+      feed.ackLoadingIds,
+      feed.deletingIds,
+      feed.acknowledge,
+      feed.deleteAnnouncement,
+      canPublish,
+      handleOpenEdit,
+    ]
   );
 
   const keyExtractor = useCallback((item: Announcement) => String(item.id), []);
@@ -199,6 +265,42 @@ export default function MobileAnnouncementsScreen() {
         })}
       </ScrollView>
 
+      {/* Faculty / Department Head Quick-Create Trigger Bar (Strictly Hidden for Students) */}
+      {canPublish && (canPublishCampusWide || hasHandledHubs) && (
+        <Pressable
+          onPress={() =>
+            handleOpenCreate(
+              canPublishCampusWide ? 'campus_wide' : 'course_hub'
+            )
+          }
+          accessibilityRole="button"
+          accessibilityLabel={
+            canPublishCampusWide
+              ? 'Create Campus-Wide Announcement'
+              : 'Create Course Hub Announcement'
+          }
+          style={({ pressed }) => [
+            styles.quickCreateBar,
+            pressed && styles.pressed,
+          ]}
+        >
+          <View style={styles.quickCreateLeft}>
+            <View style={styles.quickCreateBadge}>
+              <Feather name="plus" size={14} color={colors.ustpGold} />
+            </View>
+            <Text style={styles.quickCreateText}>
+              {canPublishCampusWide
+                ? 'Create Campus-Wide Announcement'
+                : 'Create Course Hub Announcement'}
+            </Text>
+          </View>
+          <View style={styles.quickCreateIcons}>
+            <Feather name="file-text" size={16} color={colors.ustpNavy} />
+            <Feather name="image" size={16} color={colors.ustpNavy} />
+          </View>
+        </Pressable>
+      )}
+
       {/* Inline error banner if refresh/pagination failed while items are displayed */}
       {feed.error && feed.items.length > 0 && (
         <ErrorBanner error={feed.error} onRetry={feed.retry} />
@@ -292,6 +394,17 @@ export default function MobileAnnouncementsScreen() {
         onEndReached={() => void feed.loadMore()}
         onEndReachedThreshold={0.4}
       />
+
+      {canPublish && (
+        <AnnouncementFormModal
+          visible={composerState.visible}
+          mode={composerState.mode}
+          editingAnnouncement={composerState.editingAnnouncement}
+          allowModeSwitch={canPublishCampusWide}
+          onClose={handleCloseComposer}
+          onSaved={() => void feed.refresh()}
+        />
+      )}
     </MobileAppShell>
   );
 }
@@ -431,6 +544,44 @@ const styles = StyleSheet.create({
     fontSize: typography.sizes.sm,
     fontWeight: '800',
     color: colors.ustpNavy,
+  },
+  quickCreateBar: {
+    minHeight: touchTarget.minHeight + 4,
+    backgroundColor: colors.white,
+    borderWidth: 1,
+    borderColor: colors.ustpNavy,
+    borderRadius: radii.xl,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+  },
+  quickCreateLeft: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  quickCreateBadge: {
+    width: 28,
+    height: 28,
+    borderRadius: radii.md,
+    backgroundColor: colors.ustpNavy,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  quickCreateText: {
+    flex: 1,
+    fontSize: typography.sizes.sm,
+    fontWeight: '700',
+    color: colors.ustpText,
+  },
+  quickCreateIcons: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
   },
   pressed: {
     opacity: 0.85,

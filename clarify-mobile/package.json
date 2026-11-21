@@ -10,9 +10,11 @@
     "expo-clipboard": "~58.0.4",
     "expo-constants": "~58.0.16",
     "expo-device": "~58.0.5",
+    "expo-document-picker": "~58.0.5",
     "expo-font": "~58.0.12",
     "expo-glass-effect": "~58.0.5",
     "expo-image": "~58.0.18",
+    "expo-image-picker": "~58.0.10",
     "expo-linking": "~58.0.17",
     "expo-notifications": "~58.1.9",
     "expo-router": "~58.0.32",
@@ -49,7 +51,7 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "lint": "expo lint",
-    "test": "node --experimental-strip-types --test src/lib/api-client.test.ts src/lib/feed-reducer.test.ts src/lib/realtime-reducer.test.ts src/lib/chat-reducer.test.ts src/lib/qa-reducer.test.ts"
+    "test": "node --experimental-strip-types --test src/lib/api-client.test.ts src/lib/feed-reducer.test.ts src/lib/realtime-reducer.test.ts src/lib/chat-reducer.test.ts src/lib/qa-reducer.test.ts src/lib/admin-and-media.test.ts"
   },
   "private": true
 }

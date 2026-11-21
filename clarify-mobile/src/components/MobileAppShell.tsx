@@ -18,6 +18,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '../context/AuthContext';
 import { useChannels } from '../context/ChannelsContext';
 import { useOptionalRealtime } from '../context/RealtimeContext';
+import { resolveApiAssetUrl } from '../lib/api-client';
 import {
   colors,
   elevation,
@@ -149,7 +150,7 @@ export function MobileAppShell({
     ? [
         {
           key: 'dashboard',
-          label: 'Dashboard',
+          label: 'IT Admin Console',
           href: '/',
           active: isDashboardActive,
         },
@@ -349,9 +350,11 @@ export function MobileAppShell({
               <View style={styles.profileSection}>
                 <View style={styles.avatarOuterRing}>
                   <View style={styles.avatarInnerRing}>
-                    {user.avatar_url ? (
+                    {resolveApiAssetUrl(user.avatar_url) ? (
                       <Image
-                        source={{ uri: user.avatar_url }}
+                        source={{
+                          uri: resolveApiAssetUrl(user.avatar_url)!,
+                        }}
                         accessibilityLabel={user.name}
                         style={styles.avatarImage}
                       />

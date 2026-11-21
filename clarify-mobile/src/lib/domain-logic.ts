@@ -1065,3 +1065,398 @@ export function reconcileFetchedChannelsWithStaleGuard(params: {
 
   return { channels: merged, isStale: true };
 }
+
+// ============================================================================
+// ANNOUNCEMENT ATTACHMENTS, COMPOSER FORM DATA & PROFILE AVATAR HELPERS
+// ============================================================================
+
+const ANNOUNCEMENT_MEDIA_PREFIX = '__CLARIFY_ANN_MEDIA__';
+
+export const MAX_ANNOUNCEMENT_ATTACHMENT_BYTES = 10 * 1024 * 1024; // 10 MB
+export const MAX_PROFILE_AVATAR_BYTES = 5 * 1024 * 1024; // 5 MB
+
+export const ANNOUNCEMENT_IMAGE_EXTENSIONS = [
+  'jpg',
+  'jpeg',
+  'png',
+  'webp',
+  'gif',
+] as const;
+
+export const ANNOUNCEMENT_DOCUMENT_EXTENSIONS = [
+  'pdf',
+  'doc',
+  'docx',
+  'ppt',
+  'pptx',
+  'xls',
+  'xlsx',
+  'txt',
+] as const;
+
+export const ANNOUNCEMENT_ALLOWED_EXTENSIONS = [
+  ...ANNOUNCEMENT_IMAGE_EXTENSIONS,
+  ...ANNOUNCEMENT_DOCUMENT_EXTENSIONS,
+] as const;
+
+export const PROFILE_AVATAR_EXTENSIONS = [
+  'jpg',
+  'jpeg',
+  'png',
+  'webp',
+] as const;
+
+export const CAMPUS_WIDE_AVAILABLE_TAGS = [
+  'URGENT NOTICE',
+  'OFFICIAL MEMO',
+  'CDO CAMPUS',
+  'CITC',
+  'CEA',
+  'COT',
+  'CSM',
+  'Faculty',
+  'MEMORANDUM',
+] as const;
+
+export const CAMPUS_DEPARTMENTS = ['CITC', 'CEA', 'COT', 'CSM'] as const;
+
+/**
+ * Parses an announcement's text content and attachment metadata, resolving either dedicated
+ * `attachment_url` / `attachment_name` / `attachment_type` columns or a legacy embedded header.
+ * Ported from clarify-web/src/lib/domain-logic.ts.
+ */
+export function parseAnnouncementAttachment(announcement: {
+  content: string;
+  attachment_url?: string | null;
+  attachment_name?: string | null;
+  attachment_type?: 'image' | 'pdf' | 'document' | null;
+}): {
+  cleanContent: string;
+  attachmentUrl: string | null;
+  attachmentName: string | null;
+  attachmentType: 'image' | 'document' | null;
+} {
+  const rawContent = announcement.content || '';
+  let cleanContent = rawContent;
+  let embeddedMeta: {
+    name?: string;
+    type?: 'image' | 'pdf' | 'document';
+    dataUrl?: string;
+    url?: string;
+  } | null = null;
+
+  if (rawContent.startsWith(ANNOUNCEMENT_MEDIA_PREFIX)) {
+    const newlineIdx = rawContent.indexOf('\n');
+    const jsonPart =
+      newlineIdx === -1
+        ? rawContent.slice(ANNOUNCEMENT_MEDIA_PREFIX.length)
+        : rawContent.slice(ANNOUNCEMENT_MEDIA_PREFIX.length, newlineIdx);
+    cleanContent =
+      newlineIdx === -1 ? '' : rawContent.slice(newlineIdx + 1).trim();
+    try {
+      const parsed = JSON.parse(jsonPart);
+      if (parsed && (parsed.dataUrl || parsed.url)) {
+        embeddedMeta = parsed;
+      }
+    } catch {
+      cleanContent = rawContent;
+    }
+  }
+
+  const rawUrl = announcement.attachment_url || null;
+  const embeddedUrl = embeddedMeta?.dataUrl || embeddedMeta?.url || null;
+  const isSyntheticStoragePath =
+    rawUrl && rawUrl.startsWith('/storage/memos/') && embeddedUrl;
+
+  const attachmentUrl = isSyntheticStoragePath
+    ? embeddedUrl
+    : rawUrl || embeddedUrl;
+
+  const attachmentName =
+    announcement.attachment_name || embeddedMeta?.name || null;
+
+  const inferType = (): 'image' | 'document' | null => {
+    if (announcement.attachment_type === 'image') return 'image';
+    if (
+      announcement.attachment_type === 'pdf' ||
+      announcement.attachment_type === 'document'
+    ) {
+      return 'document';
+    }
+    if (embeddedMeta?.type === 'image') return 'image';
+    if (embeddedMeta?.type === 'pdf' || embeddedMeta?.type === 'document') {
+      return 'document';
+    }
+    if (attachmentUrl?.startsWith('data:image/')) return 'image';
+    if (
+      attachmentUrl &&
+      /\.(png|jpe?g|gif|webp|svg|bmp)(\?.*)?$/i.test(attachmentUrl)
+    ) {
+      return 'image';
+    }
+    if (
+      attachmentName &&
+      /\.(png|jpe?g|gif|webp|svg|bmp)$/i.test(attachmentName)
+    ) {
+      return 'image';
+    }
+    if (attachmentUrl || attachmentName) return 'document';
+    return null;
+  };
+
+  return {
+    cleanContent,
+    attachmentUrl,
+    attachmentName,
+    attachmentType: inferType(),
+  };
+}
+
+function extractLowerExtension(fileName: string): string {
+  const trimmed = (fileName || '').trim();
+  if (!trimmed.includes('.')) return '';
+  return trimmed.split('.').pop()!.toLowerCase();
+}
+
+/**
+ * Validates a selected file for an announcement attachment against clarify-api rules:
+ * max 10 MB, allowed image/document extensions, no executable/script files.
+ */
+export function validateAnnouncementAttachmentFile(
+  file: {
+    name: string;
+    size?: number;
+    type?: string;
+  },
+  preferredKind?: 'image' | 'document'
+):
+  | { valid: true; attachmentType: 'image' | 'document' }
+  | { valid: false; error: string } {
+  if (!file || !file.name || !file.name.trim()) {
+    return { valid: false, error: 'Selected attachment file is invalid.' };
+  }
+
+  if (typeof file.size === 'number') {
+    if (file.size <= 0) {
+      return { valid: false, error: 'Selected attachment file is empty.' };
+    }
+    if (file.size > MAX_ANNOUNCEMENT_ATTACHMENT_BYTES) {
+      return {
+        valid: false,
+        error: 'Attachment file size must not exceed 10 MB.',
+      };
+    }
+  }
+
+  const ext = extractLowerExtension(file.name);
+  const mime = (file.type || '').toLowerCase();
+
+  if (
+    FORBIDDEN_CHAT_EXTENSIONS.has(ext) ||
+    mime.includes('php') ||
+    mime.includes('x-msdownload') ||
+    mime.includes('x-executable') ||
+    mime.includes('javascript') ||
+    mime.includes('text/html')
+  ) {
+    return {
+      valid: false,
+      error: 'Executable or script files are not allowed as announcement attachments.',
+    };
+  }
+
+  const isAllowed = (ANNOUNCEMENT_ALLOWED_EXTENSIONS as readonly string[]).includes(
+    ext
+  );
+  if (!isAllowed) {
+    return {
+      valid: false,
+      error:
+        'Unsupported file type. Allowed: JPG, PNG, WEBP, GIF, PDF, DOC, DOCX, PPT, PPTX, XLS, XLSX, or TXT.',
+    };
+  }
+
+  const isImage =
+    (ANNOUNCEMENT_IMAGE_EXTENSIONS as readonly string[]).includes(ext) ||
+    mime.startsWith('image/');
+
+  if (preferredKind === 'image' && !isImage) {
+    return {
+      valid: false,
+      error: 'Please select a valid image file (JPG, PNG, WEBP, or GIF).',
+    };
+  }
+
+  return { valid: true, attachmentType: isImage ? 'image' : 'document' };
+}
+
+/**
+ * Validates a profile avatar image against clarify-api ProfileController rules:
+ * max 5 MB, jpg/jpeg/png/webp only.
+ */
+export function validateProfileAvatarFile(file: {
+  name: string;
+  size?: number;
+  type?: string;
+}): { valid: true } | { valid: false; error: string } {
+  if (!file || !file.name || !file.name.trim()) {
+    return { valid: false, error: 'Selected image is invalid.' };
+  }
+  if (typeof file.size === 'number') {
+    if (file.size <= 0) {
+      return { valid: false, error: 'Selected image file is empty.' };
+    }
+    if (file.size > MAX_PROFILE_AVATAR_BYTES) {
+      return {
+        valid: false,
+        error: 'Profile photo must not exceed 5 MB.',
+      };
+    }
+  }
+  const ext = extractLowerExtension(file.name);
+  const mime = (file.type || '').toLowerCase();
+  const isAllowedExt = (PROFILE_AVATAR_EXTENSIONS as readonly string[]).includes(
+    ext
+  );
+  const isAllowedMime =
+    mime === 'image/jpeg' ||
+    mime === 'image/jpg' ||
+    mime === 'image/png' ||
+    mime === 'image/webp';
+
+  if (!isAllowedExt && !isAllowedMime) {
+    return {
+      valid: false,
+      error: 'Profile photo must be a JPG, PNG, or WEBP image.',
+    };
+  }
+  return { valid: true };
+}
+
+/**
+ * Formats byte sizes into concise human-readable labels (e.g., 1.4 MB, 320 KB).
+ */
+export function formatFileSize(bytes?: number | null): string {
+  if (typeof bytes !== 'number' || !Number.isFinite(bytes) || bytes <= 0) {
+    return '';
+  }
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/**
+ * Determines whether the signed-in user should see Edit/Delete UX controls for an announcement.
+ * Strictly returns false for students and IT admins; matches clarify-web AnnouncementCard.
+ */
+export function canManageAnnouncement(
+  announcement: Announcement,
+  user: User | null | undefined,
+  channels: Channel[] = []
+): boolean {
+  if (!user || user.role === 'student' || user.role === 'it_admin') {
+    return false;
+  }
+  const matchedChannel = channels.find(
+    (c) => Number(c.id) === Number(announcement.channel_id)
+  );
+  const isCampusWideMemo =
+    announcement.channel_type === 'university' ||
+    matchedChannel?.channel_type === 'university';
+  return isCampusWideMemo
+    ? user.role === 'dept_head'
+    : canPublishOrManageAnnouncements(user.role);
+}
+
+/**
+ * Builds a multipart/form-data payload for POST /announcements or PATCH /announcements/{id}
+ * matching clarify-web AnnouncementFormModal and clarify-api AnnouncementController.
+ */
+export function buildAnnouncementFormData(params: {
+  title: string;
+  content: string;
+  isCampusWide: boolean;
+  isEditing: boolean;
+  tags: string[];
+  isUrgent: boolean;
+  triggerSmsFallback: boolean;
+  status: 'published' | 'draft';
+  selectedChannelIds?: number[];
+  attachment?: NativeUploadFile | null;
+  attachmentType?: 'image' | 'document' | null;
+  removeExistingAttachment?: boolean;
+}): FormData {
+  const formData = new FormData();
+  const outgoingTags = params.isCampusWide ? params.tags : [];
+
+  formData.append('title', params.title.trim());
+  formData.append('content', params.content.trim());
+  formData.append('tags', JSON.stringify(outgoingTags));
+  formData.append('is_urgent', params.isUrgent ? '1' : '0');
+  formData.append(
+    'trigger_sms_fallback',
+    params.triggerSmsFallback ? '1' : '0'
+  );
+  formData.append('status', params.status);
+
+  if (params.attachment) {
+    formData.append('attachment', {
+      uri: params.attachment.uri,
+      name: params.attachment.name,
+      type: params.attachment.type || 'application/octet-stream',
+    } as unknown as Blob);
+    formData.append('attachment_name', params.attachment.name);
+    if (params.attachmentType) {
+      formData.append('attachment_type', params.attachmentType);
+    }
+  } else if (params.removeExistingAttachment) {
+    formData.append('remove_attachment', '1');
+  }
+
+  if (!params.isEditing) {
+    formData.append(
+      'scope_mode',
+      params.isCampusWide ? 'campus_wide' : 'course_hub'
+    );
+    if (!params.isCampusWide) {
+      const targetIds = (params.selectedChannelIds || []).filter(
+        (id) => Number.isInteger(id) && id > 0
+      );
+      if (targetIds.length > 0) {
+        formData.append('channel_id', String(targetIds[0]));
+        formData.append('channel_ids', JSON.stringify(targetIds));
+      }
+    }
+  }
+
+  return formData;
+}
+
+/**
+ * Builds a multipart/form-data payload for POST /profile (_method=PATCH appended by updateProfileApi).
+ */
+export function buildProfileUpdateFormData(params: {
+  contactNumber: string;
+  avatarFile?: NativeUploadFile | null;
+  removeAvatar?: boolean;
+  existingAvatarUrl?: string | null;
+}): FormData {
+  const formData = new FormData();
+  formData.append('contact_number', params.contactNumber.trim());
+
+  if (params.avatarFile) {
+    formData.append('avatar', {
+      uri: params.avatarFile.uri,
+      name: params.avatarFile.name,
+      type: params.avatarFile.type || 'image/jpeg',
+    } as unknown as Blob);
+  } else if (params.removeAvatar) {
+    // Empty string instructs ProfileController to set avatar_url = null
+    formData.append('avatar_preview_url', '');
+  } else if (params.existingAvatarUrl) {
+    formData.append('avatar_preview_url', params.existingAvatarUrl);
+  }
+
+  return formData;
+}
+

@@ -38,6 +38,13 @@
       ],
       "expo-secure-store",
       [
+        "expo-image-picker",
+        {
+          "photosPermission": "ClariFy accesses your photo library so you can attach images to announcements and set your profile photo.",
+          "cameraPermission": "ClariFy accesses your camera so you can take photos for announcements and your profile photo."
+        }
+      ],
+      [
         "expo-notifications",
         {
           "color": "#fcb315",

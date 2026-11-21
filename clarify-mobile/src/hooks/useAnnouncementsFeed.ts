@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useReducer, useRef } from 'react';
+import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
 import { AppState } from 'react-native';
 
 import { useAuth } from '../context/AuthContext';
 import { useOptionalRealtime } from '../context/RealtimeContext';
 import {
   acknowledgeAnnouncementApi,
+  deleteAnnouncementApi,
   getAnnouncementsApi,
 } from '../lib/api-client';
 import {
@@ -48,6 +49,7 @@ export function useAnnouncementsFeed({
     perPage,
     createInitialAnnouncementFeedState
   );
+  const [deletingIds, setDeletingIds] = useState<number[]>([]);
 
   const stateRef = useRef(state);
   useEffect(() => {
@@ -315,12 +317,59 @@ export function useAnnouncementsFeed({
     [state.ackLoadingIds, showToast, refetchSingleAnnouncementFallback]
   );
 
+  const deleteAnnouncement = useCallback(
+    async (announcement: Announcement) => {
+      if (deletingIds.includes(announcement.id)) {
+        return;
+      }
+      setDeletingIds((prev) => [...prev, announcement.id]);
+      try {
+        const res = await deleteAnnouncementApi(announcement.id);
+        if (!mountedRef.current) return;
+        dispatch({
+          type: 'REMOVE_ANNOUNCEMENT',
+          announcementId: announcement.id,
+        });
+        realtime?.triggerAnnouncementRefresh();
+        showToast(
+          res?.message || 'Announcement archived and removed from noticeboard.',
+          'info'
+        );
+      } catch (err) {
+        if (!mountedRef.current) return;
+        const apiErr = err as ApiError;
+        if (apiErr.status === 404 || apiErr.status === 409) {
+          dispatch({
+            type: 'REMOVE_ANNOUNCEMENT',
+            announcementId: announcement.id,
+          });
+          showToast(
+            'Announcement was already archived. Refreshed feed.',
+            'info'
+          );
+        } else if (apiErr.status !== 401) {
+          showToast(
+            apiErr.message || 'Failed to archive announcement.',
+            'error'
+          );
+        }
+      } finally {
+        if (mountedRef.current) {
+          setDeletingIds((prev) => prev.filter((id) => id !== announcement.id));
+        }
+      }
+    },
+    [deletingIds, realtime, showToast]
+  );
+
   return {
     ...state,
+    deletingIds,
     hasMore: hasMoreAnnouncementPages(state),
     refresh,
     retry,
     loadMore,
     acknowledge,
+    deleteAnnouncement,
   };
 }
