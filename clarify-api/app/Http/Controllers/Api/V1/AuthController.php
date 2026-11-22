@@ -65,13 +65,10 @@ class AuthController
                 'unique:users,email',
             ],
             'contact_number' => [
-                'nullable',
+                'required',
                 'string',
                 'max:32',
                 function (string $attribute, mixed $value, Closure $fail): void {
-                    if ($value === null || trim((string) $value) === '') {
-                        return;
-                    }
                     if (! PhoneNormalizer::isValid((string) $value)) {
                         $fail('Please enter a valid Philippine mobile number (e.g., +639171234567 or 09171234567).');
                     }
@@ -84,13 +81,12 @@ class AuthController
         ], [
             'institutional_id.unique' => 'This Institutional ID is already registered.',
             'email.unique' => 'This institutional email address is already registered.',
+            'contact_number.required' => 'Mobile number is required for urgent campus SMS alerts.',
             'password.min' => 'Password must be at least 8 characters long.',
             'role.in' => 'Only Student and Faculty accounts can be registered on this page.',
         ]);
 
-        $normalizedPhone = ! empty($validated['contact_number'])
-            ? PhoneNormalizer::normalize($validated['contact_number'])
-            : null;
+        $normalizedPhone = PhoneNormalizer::normalize((string) $validated['contact_number']);
 
         $user = new User([
             'institutional_id' => trim($validated['institutional_id']),

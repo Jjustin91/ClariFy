@@ -1855,17 +1855,6 @@ export function MessengerChatBox({
           </div>
 
           <div className="flex items-center gap-1 shrink-0">
-            {isCurrentUserCourseAdmin && (
-              <button
-                type="button"
-                onClick={() => openEditCourseHubModal(channel.id)}
-                aria-label="Edit Course Hub"
-                title="Edit Course Hub"
-                className="p-2 rounded-full text-ustp-navy hover:bg-slate-300/70 transition-colors cursor-pointer"
-              >
-                <Edit3 className="w-4 h-4 stroke-[2.2]" />
-              </button>
-            )}
             <button
               type="button"
               onClick={() => setShowSettingsMenu((prev) => !prev)}

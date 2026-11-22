@@ -1072,6 +1072,7 @@ class ChannelAuthorizationTest extends TestCase
             'name' => 'Outside User',
             'institutional_id' => '2026000001',
             'email' => 'outside@gmail.com',
+            'contact_number' => '09171234567',
             'password' => 'password123',
             'role' => 'student',
             'department' => 'CITC',
@@ -1084,6 +1085,7 @@ class ChannelAuthorizationTest extends TestCase
             'name' => 'Lookalike User',
             'institutional_id' => '2026000002',
             'email' => 'x@ustp.edu.ph.evil.com',
+            'contact_number' => '09171234567',
             'password' => 'password123',
             'role' => 'student',
             'department' => 'CITC',
@@ -1095,6 +1097,7 @@ class ChannelAuthorizationTest extends TestCase
             'name' => 'Subdomain User',
             'institutional_id' => '2026000003',
             'email' => 'x@mail.ustp.edu.ph',
+            'contact_number' => '09171234567',
             'password' => 'password123',
             'role' => 'student',
             'department' => 'CITC',
@@ -1102,11 +1105,37 @@ class ChannelAuthorizationTest extends TestCase
         ])->assertStatus(422)
           ->assertJsonValidationErrors(['email']);
 
+        // Missing or invalid mobile number must return 422
+        \Illuminate\Support\Facades\RateLimiter::clear('register:127.0.0.1');
+        $this->postJson('/api/v1/auth/register', [
+            'name' => 'No Phone Student',
+            'institutional_id' => '2026000005',
+            'email' => 'nophone@ustp.edu.ph',
+            'password' => 'password123',
+            'role' => 'student',
+            'department' => 'CITC',
+            'section' => 'IT3R2',
+        ])->assertStatus(422)
+          ->assertJsonValidationErrors(['contact_number']);
+
+        $this->postJson('/api/v1/auth/register', [
+            'name' => 'Bad Phone Student',
+            'institutional_id' => '2026000006',
+            'email' => 'badphone@ustp.edu.ph',
+            'contact_number' => '12345',
+            'password' => 'password123',
+            'role' => 'student',
+            'department' => 'CITC',
+            'section' => 'IT3R2',
+        ])->assertStatus(422)
+          ->assertJsonValidationErrors(['contact_number']);
+
         \Illuminate\Support\Facades\RateLimiter::clear('register:127.0.0.1');
         $res = $this->postJson('/api/v1/auth/register', [
             'name' => 'Valid USTP Student',
             'institutional_id' => '2026000004',
             'email' => '  VALID.STUDENT@USTP.EDU.PH  ',
+            'contact_number' => '0917 123 4567',
             'password' => 'password123',
             'role' => 'student',
             'department' => 'CITC',
@@ -1114,6 +1143,7 @@ class ChannelAuthorizationTest extends TestCase
         ])->assertStatus(201);
 
         $this->assertSame('valid.student@ustp.edu.ph', $res->json('data.email'));
+        $this->assertSame('+639171234567', $res->json('data.contact_number'));
     }
 
     public function test_phone_normalizer_formats_and_rejects_invalid_numbers(): void

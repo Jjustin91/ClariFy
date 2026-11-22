@@ -279,6 +279,7 @@ export async function registerApi(payload: {
   name: string;
   institutional_id: string;
   email: string;
+  contact_number: string;
   password: string;
   password_confirmation?: string;
   role: 'student' | 'faculty';

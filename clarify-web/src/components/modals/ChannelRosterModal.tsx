@@ -37,6 +37,7 @@ import {
   isUserPendingInCourseHub,
 } from '../../lib/domain-logic';
 import type { Channel, LaravelValidationError } from '../../types/api';
+import { ConfirmDeleteModal } from '../ui/ConfirmDeleteModal';
 
 export function ChannelRosterModal() {
   const router = useRouter();
@@ -598,41 +599,15 @@ export function ChannelRosterModal() {
                   {activeTab === 'edit_hub' &&
                     editingHub &&
                     canAdminEditCurrentHub && (
-                      <>
-                        {confirmDeleteHubId === editingHub.id ? (
-                          <div className="inline-flex items-center gap-2 bg-red-50 border border-red-200 rounded px-3 py-1.5">
-                            <span className="text-[11px] font-bold text-red-800">
-                              Delete {formatCourseHubName(editingHub)}?
-                            </span>
-                            <button
-                              type="button"
-                              disabled={isDeletingId === editingHub.id}
-                              onClick={() => handleDeleteHub(editingHub)}
-                              className="px-2.5 py-1 rounded bg-red-600 hover:bg-red-700 text-white text-[11px] font-extrabold disabled:opacity-50 cursor-pointer"
-                            >
-                              {isDeletingId === editingHub.id
-                                ? 'Deleting...'
-                                : 'Confirm Delete'}
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setConfirmDeleteHubId(null)}
-                              className="text-[11px] font-semibold text-slate-600 hover:text-slate-900 cursor-pointer"
-                            >
-                              Cancel
-                            </button>
-                          </div>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={() => setConfirmDeleteHubId(editingHub.id)}
-                            className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-extrabold border border-red-300 bg-red-50 text-red-700 hover:bg-red-100 rounded cursor-pointer"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                            <span>Delete Course Hub</span>
-                          </button>
-                        )}
-                      </>
+                      <button
+                        type="button"
+                        disabled={isDeletingId === editingHub.id}
+                        onClick={() => setConfirmDeleteHubId(editingHub.id)}
+                        className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-extrabold border border-red-300 bg-red-50 text-red-700 hover:bg-red-100 rounded disabled:opacity-50 cursor-pointer"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                        <span>Delete Course Hub</span>
+                      </button>
                     )}
                 </div>
 
@@ -952,6 +927,26 @@ export function ChannelRosterModal() {
           )}
         </div>
       </div>
+
+      <ConfirmDeleteModal
+        isOpen={Boolean(editingHub && confirmDeleteHubId === editingHub.id)}
+        title="Delete Course Hub?"
+        description={
+          editingHub
+            ? `Are you sure you want to permanently delete "${formatCourseHubName(
+                editingHub
+              )}"? All inner chat channels, announcements, and Q&A inquiries inside this Course Hub will be removed and cannot be undone.`
+            : ''
+        }
+        confirmLabel="Delete Course Hub"
+        isLoading={Boolean(editingHub && isDeletingId === editingHub.id)}
+        onConfirm={() => {
+          if (editingHub) {
+            void handleDeleteHub(editingHub);
+          }
+        }}
+        onCancel={() => setConfirmDeleteHubId(null)}
+      />
     </div>
   );
 }

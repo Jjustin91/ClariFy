@@ -84,69 +84,65 @@ export default function LoginPage() {
 
   return (
     <div className="min-h-screen flex flex-col lg:flex-row">
-      {/* Left Side (70% width on desktop): Deep ustp-navy (#1a1851) background with centered institutional branding card */}
+      {/* Left Side (70% width on desktop): Deep ustp-navy (#1a1851) background with ClariFy Mobile App QR card */}
       <div className="w-full lg:w-[70%] bg-ustp-navy text-white p-4 sm:p-8 lg:p-16 flex flex-col items-center justify-center">
-        <div className="bg-slate-100 text-ustp-text border-2 border-ustp-gold rounded-lg p-5 sm:p-12 max-w-xl w-full text-center shadow-lg">
-          <div className="inline-flex items-center justify-center mb-3">
-            <Image
-              src="/assets/clarify-logo.svg"
-              alt="ClariFy"
-              width={220}
-              height={76}
-              priority
-              unoptimized
-              className="h-12 sm:h-16 w-auto object-contain"
-            />
-          </div>
-          <p className="text-sm sm:text-base font-bold text-ustp-blue mt-1">
-            Unified Campus Noticeboard &amp; Scoped Communication Platform
-          </p>
-          <p className="text-xs sm:text-sm text-slate-600 mt-3 leading-relaxed">
-            University of Science and Technology of Southern Philippines — Cagayan de Oro Campus
+        <div className="bg-slate-100 text-ustp-text border-2 border-ustp-gold rounded-lg p-6 sm:p-10 max-w-md w-full text-center shadow-lg">
+          <h1 className="text-xl sm:text-2xl font-extrabold text-ustp-navy tracking-tight">
+            ClariFy Mobile App
+          </h1>
+          <p className="text-xs sm:text-sm font-semibold text-ustp-blue mt-1">
+            Stay connected to campus notices on the go
           </p>
 
-          {/* Student/Faculty Registration Link */}
-          <div className="mt-6 sm:mt-8 pt-5 sm:pt-6 border-t border-slate-300 text-left">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              <div>
-                <p className="text-xs font-extrabold text-ustp-navy">
-                  Student or Faculty Member?
-                </p>
-                <p className="text-[11px] text-slate-600">
-                  Register your Student or Faculty account and get verified by the IT Admin.
-                </p>
-              </div>
-              <Link
-                href="/register"
-                className="inline-flex items-center justify-center gap-1.5 px-4 py-2.5 bg-ustp-navy text-ustp-gold text-xs font-extrabold rounded hover:opacity-95 whitespace-nowrap shrink-0"
-              >
-                <UserPlus className="w-3.5 h-3.5" />
-                <span>Sign Up</span>
-              </Link>
+          <div className="mt-5 mb-5 flex justify-center">
+            <div className="bg-white p-3.5 rounded-lg border border-slate-300 inline-flex items-center justify-center">
+              <Image
+                src="/assets/aistudio/image_82c2a523.png"
+                alt="ClariFy Mobile App QR Code"
+                width={224}
+                height={224}
+                priority
+                unoptimized
+                className="w-48 h-48 sm:w-56 sm:h-56 object-contain"
+              />
             </div>
           </div>
+
+          <p className="text-xs sm:text-sm text-slate-600 leading-relaxed max-w-xs mx-auto">
+            Scan this QR code with your phone camera to download and open the ClariFy Mobile app.
+          </p>
         </div>
       </div>
 
-      {/* Right Side (30% width on desktop): Full-height ustp-orange (#ff9718) vertical login panel */}
-      <div className="w-full lg:w-[30%] bg-ustp-orange text-ustp-text p-5 sm:p-10 flex flex-col items-center justify-center border-l border-amber-700/30">
-        <div className="w-full max-w-xs space-y-6">
-          <div className="flex flex-col items-center">
-            <div className="w-20 h-20 rounded-full bg-[#000b3d] border-4 border-ustp-gold flex items-center justify-center shadow-md overflow-hidden p-2.5">
+      {/* Right Side (30% width on desktop): Full-height ustp-orange (#ff9718) institutional branding & login panel */}
+      <div className="w-full lg:w-[30%] bg-ustp-orange text-ustp-text p-5 sm:p-8 flex flex-col items-center justify-center border-l border-amber-700/30">
+        <div className="w-full max-w-xs space-y-5">
+          {/* Moved Institutional Branding Header */}
+          <div className="flex flex-col items-center text-center">
+            <div className="mb-3 px-5 py-2.5 rounded-xl bg-ustp-navy border-2 border-ustp-gold inline-flex items-center justify-center shadow-sm">
               <Image
-                src="/assets/clarify-mark.svg"
-                alt="ClariFy Emblem"
-                width={64}
-                height={64}
+                src="/assets/clarify-logo.svg"
+                alt="ClariFy"
+                width={180}
+                height={56}
                 priority
                 unoptimized
-                className="w-full h-full object-contain"
+                className="h-10 sm:h-11 w-auto object-contain"
               />
             </div>
-            <h2 className="mt-4 text-lg font-extrabold text-ustp-navy">
+            <p className="text-xs sm:text-sm font-extrabold text-ustp-navy leading-snug">
+              Unified Campus Noticeboard &amp; Scoped Communication Platform
+            </p>
+            <p className="text-[11px] font-semibold text-ustp-text/80 mt-1 leading-relaxed">
+              University of Science and Technology of Southern Philippines — Cagayan de Oro Campus
+            </p>
+          </div>
+
+          <div className="border-t border-ustp-navy/15 pt-4">
+            <h2 className="text-base font-extrabold text-ustp-navy text-center">
               Institutional Sign In
             </h2>
-            <p className="text-xs font-semibold text-ustp-text/80">
+            <p className="text-xs font-semibold text-ustp-text/80 text-center mt-0.5">
               Enter your Institutional ID &amp; Password
             </p>
           </div>
@@ -235,13 +231,7 @@ export default function LoginPage() {
               )}
             </div>
 
-            <div className="flex items-center justify-between">
-              <Link
-                href="/register"
-                className="text-xs font-extrabold text-ustp-navy hover:underline"
-              >
-                Create Account (Sign Up)
-              </Link>
+            <div className="flex items-center justify-end">
               <button
                 type="button"
                 onClick={() =>
@@ -256,16 +246,37 @@ export default function LoginPage() {
               </button>
             </div>
 
-            <div className="pt-2 flex justify-center">
+            <div className="pt-1 flex justify-center">
               <button
                 type="submit"
                 disabled={isLoading}
-                className="px-8 py-2.5 bg-ustp-navy text-white text-sm font-extrabold rounded border border-ustp-navy hover:opacity-95 disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-white cursor-pointer"
+                className="w-full px-8 py-2.5 bg-ustp-navy text-white text-sm font-extrabold rounded border border-ustp-navy hover:opacity-95 disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-white cursor-pointer"
               >
                 {isLoading ? 'Verifying...' : 'Enter'}
               </button>
             </div>
           </form>
+
+          {/* Single Student/Faculty Registration CTA moved from left card */}
+          <div className="pt-4 border-t border-ustp-navy/20">
+            <div className="flex flex-col gap-2.5 text-center">
+              <div>
+                <p className="text-xs font-extrabold text-ustp-navy">
+                  Student or Faculty Member?
+                </p>
+                <p className="text-[11px] font-medium text-ustp-text/85 mt-0.5 leading-snug">
+                  Register your Student or Faculty account and get verified by the IT Admin.
+                </p>
+              </div>
+              <Link
+                href="/register"
+                className="inline-flex items-center justify-center gap-1.5 px-4 py-2.5 bg-ustp-navy text-ustp-gold text-xs font-extrabold rounded hover:opacity-95 whitespace-nowrap"
+              >
+                <UserPlus className="w-3.5 h-3.5" />
+                <span>Sign Up</span>
+              </Link>
+            </div>
+          </div>
         </div>
       </div>
     </div>

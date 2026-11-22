@@ -24,6 +24,7 @@ import {
   parseAnnouncementAttachment,
 } from '../../lib/domain-logic';
 import { TagBadge } from '../ui/StateViews';
+import { ConfirmDeleteModal } from '../ui/ConfirmDeleteModal';
 
 export function formatShortTime(iso: string): string {
   try {
@@ -58,6 +59,7 @@ export function AnnouncementCard({
 
   const [isAckLoading, setIsAckLoading] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [isConfirmDeleteOpen, setIsConfirmDeleteOpen] = useState(false);
   const [isLightboxOpen, setIsLightboxOpen] = useState(false);
   const [isAttachmentNameRevealed, setIsAttachmentNameRevealed] =
     useState(false);
@@ -215,6 +217,7 @@ export function AnnouncementCard({
     setIsDeleting(true);
     try {
       const res = await deleteAnnouncementApi(announcement.id);
+      setIsConfirmDeleteOpen(false);
       showToast(res.message || 'Announcement archived.', 'info');
       triggerAnnouncementRefresh();
       onUpdated?.();
@@ -224,6 +227,18 @@ export function AnnouncementCard({
       setIsDeleting(false);
     }
   };
+
+  const confirmDeleteModal = (
+    <ConfirmDeleteModal
+      isOpen={isConfirmDeleteOpen}
+      title="Delete Announcement?"
+      description={`Are you sure you want to permanently delete "${announcement.title}"? This action cannot be undone.`}
+      confirmLabel="Delete Announcement"
+      isLoading={isDeleting}
+      onConfirm={() => void handleDelete()}
+      onCancel={() => setIsConfirmDeleteOpen(false)}
+    />
+  );
 
   const lightboxModal =
     isLightboxOpen && isRenderableImage && attachmentUrl ? (
@@ -353,7 +368,7 @@ export function AnnouncementCard({
                 <button
                   type="button"
                   disabled={isDeleting}
-                  onClick={handleDelete}
+                  onClick={() => setIsConfirmDeleteOpen(true)}
                   aria-label={`Delete announcement ${announcement.title}`}
                   className="p-1.5 text-slate-600 hover:text-red-700 hover:bg-red-50 rounded cursor-pointer"
                 >
@@ -477,6 +492,7 @@ export function AnnouncementCard({
           </div>
         </article>
         {lightboxModal}
+        {confirmDeleteModal}
       </>
     );
   }
@@ -529,7 +545,7 @@ export function AnnouncementCard({
                   </button>
                   <button
                     type="button"
-                    onClick={handleDelete}
+                    onClick={() => setIsConfirmDeleteOpen(true)}
                     disabled={isDeleting}
                     aria-label={`Delete ${announcement.title}`}
                     className="p-1 text-slate-500 hover:text-red-700 rounded cursor-pointer"
@@ -665,6 +681,7 @@ export function AnnouncementCard({
         </div>
       </article>
       {lightboxModal}
+      {confirmDeleteModal}
     </>
   );
 }

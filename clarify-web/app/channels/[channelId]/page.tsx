@@ -35,6 +35,7 @@ import {
   ErrorBanner,
   SkeletonCards,
 } from '@/src/components/ui/StateViews';
+import { ConfirmDeleteModal } from '@/src/components/ui/ConfirmDeleteModal';
 import { useClarify } from '@/src/context/ClarifyContext';
 import {
   convertThreadToFaqApi,
@@ -154,11 +155,19 @@ export default function CourseHubPage() {
     );
   };
 
+  const [pendingDeleteTarget, setPendingDeleteTarget] = useState<
+    | { kind: 'sub_channel'; id: number; label: string }
+    | { kind: 'inquiry'; id: number; label: string }
+    | null
+  >(null);
+  const [isDeletingInquiry, setIsDeletingInquiry] = useState(false);
+
   const handleDeleteSubChannel = async (targetSubId: number) => {
     setIsDeletingHubId(targetSubId);
     try {
       const res = await deleteChannelApi(targetSubId);
       await refreshChannels();
+      setPendingDeleteTarget(null);
       showToast(res.message || 'Channel deleted.', 'info');
       if (activeSubChannel?.id === targetSubId && activeChannel) {
         setActiveTab('feed');
@@ -456,13 +465,17 @@ export default function CourseHubPage() {
   };
 
   const handleDeleteInquiry = async (threadId: number) => {
+    setIsDeletingInquiry(true);
     try {
       const res = await deleteThreadApi(threadId);
+      setPendingDeleteTarget(null);
       showToast(res.message || 'Inquiry deleted.', 'info');
       await loadHubData(channelId);
     } catch (err) {
       const apiErr = err as LaravelValidationError;
       showToast(apiErr.message || 'Could not delete inquiry.', 'error');
+    } finally {
+      setIsDeletingInquiry(false);
     }
   };
 
@@ -886,7 +899,11 @@ export default function CourseHubPage() {
                                         type="button"
                                         disabled={isDeletingHubId === sub.id}
                                         onClick={() =>
-                                          void handleDeleteSubChannel(sub.id)
+                                          setPendingDeleteTarget({
+                                            kind: 'sub_channel',
+                                            id: sub.id,
+                                            label: `#${cleanSubName}`,
+                                          })
                                         }
                                         title={`Delete #${cleanSubName}`}
                                         aria-label={`Delete #${cleanSubName}`}
@@ -1396,7 +1413,11 @@ export default function CourseHubPage() {
                                     <button
                                       type="button"
                                       onClick={() =>
-                                        handleDeleteInquiry(thread.id)
+                                        setPendingDeleteTarget({
+                                          kind: 'inquiry',
+                                          id: thread.id,
+                                          label: thread.subject_hashtag,
+                                        })
                                       }
                                       aria-label={`Delete inquiry ${thread.subject_hashtag}`}
                                       className="p-1 text-slate-500 hover:text-red-700 rounded cursor-pointer"
@@ -1762,6 +1783,41 @@ export default function CourseHubPage() {
           )}
         </aside>
       </div>
+
+      <ConfirmDeleteModal
+        isOpen={Boolean(pendingDeleteTarget)}
+        title={
+          pendingDeleteTarget?.kind === 'sub_channel'
+            ? 'Delete Channel?'
+            : 'Delete Q&A Inquiry?'
+        }
+        description={
+          pendingDeleteTarget?.kind === 'sub_channel'
+            ? `Are you sure you want to permanently delete channel "${pendingDeleteTarget.label}"? All chat messages in this channel will be removed and cannot be undone.`
+            : pendingDeleteTarget
+            ? `Are you sure you want to permanently delete inquiry "${pendingDeleteTarget.label}"? This action cannot be undone.`
+            : ''
+        }
+        confirmLabel={
+          pendingDeleteTarget?.kind === 'sub_channel'
+            ? 'Delete Channel'
+            : 'Delete Inquiry'
+        }
+        isLoading={
+          pendingDeleteTarget?.kind === 'sub_channel'
+            ? isDeletingHubId === pendingDeleteTarget.id
+            : isDeletingInquiry
+        }
+        onConfirm={() => {
+          if (!pendingDeleteTarget) return;
+          if (pendingDeleteTarget.kind === 'sub_channel') {
+            void handleDeleteSubChannel(pendingDeleteTarget.id);
+          } else {
+            void handleDeleteInquiry(pendingDeleteTarget.id);
+          }
+        }}
+        onCancel={() => setPendingDeleteTarget(null)}
+      />
     </AppShell>
   );
 }

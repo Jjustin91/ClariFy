@@ -15,6 +15,7 @@ import {
 import { registerApi } from '@/src/lib/api-client';
 import {
   getFieldValidationError,
+  normalizePhilippineMobileNumber,
   normalizeUstpEmail,
   validateUstpEmail,
 } from '@/src/lib/domain-logic';
@@ -30,6 +31,7 @@ export default function RegisterPage() {
   const [name, setName] = useState('');
   const [institutionalId, setInstitutionalId] = useState('');
   const [email, setEmail] = useState('');
+  const [contactNumber, setContactNumber] = useState('');
   const [department, setDepartment] = useState<string>('CITC');
   const [section, setSection] = useState('IT3R2');
   const [password, setPassword] = useState('');
@@ -68,33 +70,69 @@ export default function RegisterPage() {
     });
   };
 
+  const handleContactNumberBlur = () => {
+    const raw = contactNumber.trim();
+    if (!raw) return;
+    const normalized = normalizePhilippineMobileNumber(raw);
+    if (normalized) {
+      setContactNumber(normalized);
+      setFieldErrors((prev) => {
+        if (!prev.contact_number) return prev;
+        const next = { ...prev };
+        delete next.contact_number;
+        return next;
+      });
+    } else {
+      setFieldErrors((prev) => ({
+        ...prev,
+        contact_number: [
+          'Please enter a valid Philippine mobile number (e.g., 09171234567 or +639171234567).',
+        ],
+      }));
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setFieldErrors({});
     setGeneralError(null);
 
+    const clientErrors: Record<string, string[]> = {};
     const normalizedEmail = normalizeUstpEmail(email);
     const emailDomainErr = validateUstpEmail(normalizedEmail);
     if (emailDomainErr) {
-      setFieldErrors({
-        email: [emailDomainErr],
-      });
-      return;
+      clientErrors.email = [emailDomainErr];
+    }
+
+    const trimmedContact = contactNumber.trim();
+    const normalizedPhone = normalizePhilippineMobileNumber(trimmedContact);
+    if (!trimmedContact) {
+      clientErrors.contact_number = [
+        'Mobile number is required for urgent campus SMS alerts.',
+      ];
+    } else if (!normalizedPhone) {
+      clientErrors.contact_number = [
+        'Please enter a valid Philippine mobile number (e.g., 09171234567 or +639171234567).',
+      ];
     }
 
     if (password !== confirmPassword) {
-      setFieldErrors({
-        confirm_password: ['Passwords do not match.'],
-      });
+      clientErrors.confirm_password = ['Passwords do not match.'];
+    }
+
+    if (Object.keys(clientErrors).length > 0) {
+      setFieldErrors(clientErrors);
       return;
     }
 
+    setContactNumber(normalizedPhone!);
     setIsSubmitting(true);
     try {
       const res = await registerApi({
         name,
         institutional_id: institutionalId,
         email: normalizedEmail,
+        contact_number: normalizedPhone!,
         password,
         role,
         department,
@@ -123,6 +161,10 @@ export default function RegisterPage() {
   const nameError = getFieldValidationError(fieldErrors, 'name');
   const idError = getFieldValidationError(fieldErrors, 'institutional_id');
   const emailError = getFieldValidationError(fieldErrors, 'email');
+  const contactNumberError = getFieldValidationError(
+    fieldErrors,
+    'contact_number'
+  );
   const sectionError = getFieldValidationError(fieldErrors, 'section');
   const passwordError = getFieldValidationError(fieldErrors, 'password');
   const confirmPasswordError = getFieldValidationError(
@@ -270,6 +312,7 @@ export default function RegisterPage() {
                     setName('');
                     setInstitutionalId('');
                     setEmail('');
+                    setContactNumber('');
                     setPassword('');
                     setConfirmPassword('');
                   }}
@@ -430,6 +473,47 @@ export default function RegisterPage() {
                     </p>
                   )}
                 </div>
+              </div>
+
+              {/* Philippine Mobile Number (Required for SMS alerts) */}
+              <div>
+                <label
+                  htmlFor="reg-contact-number"
+                  className="block text-xs font-bold text-ustp-text mb-1"
+                >
+                  Mobile Number <span className="text-red-700">*</span>
+                </label>
+                <input
+                  id="reg-contact-number"
+                  type="tel"
+                  inputMode="tel"
+                  required
+                  value={contactNumber}
+                  onChange={(e) => {
+                    setContactNumber(e.target.value);
+                    if (fieldErrors.contact_number) {
+                      setFieldErrors((prev) => {
+                        const next = { ...prev };
+                        delete next.contact_number;
+                        return next;
+                      });
+                    }
+                  }}
+                  onBlur={handleContactNumberBlur}
+                  placeholder="+639171234567 or 09171234567"
+                  className="w-full px-3 py-2 text-sm font-mono tabular-nums bg-white text-ustp-text border border-slate-300 rounded focus:outline-none focus:border-ustp-navy"
+                />
+                <p className="text-[11px] text-slate-600 mt-1">
+                  Philippine mobile number used for urgent campus SMS alerts
+                </p>
+                {contactNumberError && (
+                  <p
+                    className="text-xs font-bold text-red-700 mt-1"
+                    role="alert"
+                  >
+                    {contactNumberError}
+                  </p>
+                )}
               </div>
 
               {/* Department & Section */}
