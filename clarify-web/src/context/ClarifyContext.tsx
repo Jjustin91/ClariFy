@@ -99,6 +99,8 @@ interface ClarifyContextValue {
   setRosterChannelSnapshot: (channelId: number, data: Channel) => void;
   announcementVersion: number;
   triggerAnnouncementRefresh: () => void;
+  adminPendingCount: number | null;
+  setAdminPendingCount: React.Dispatch<React.SetStateAction<number | null>>;
   toasts: ToastItem[];
   showToast: (message: string, variant?: ToastItem['variant']) => void;
   dismissToast: (id: string) => void;
@@ -195,6 +197,7 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
     Record<number, boolean>
   >({});
   const [announcementVersion, setAnnouncementVersion] = useState<number>(0);
+  const [adminPendingCount, setAdminPendingCount] = useState<number | null>(null);
   const [toasts, setToasts] = useState<ToastItem[]>([]);
 
   const [previousSeenAtByHubId, setPreviousSeenAtByHubId] = useState<
@@ -1626,6 +1629,8 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
         setRosterChannelSnapshot,
         announcementVersion,
         triggerAnnouncementRefresh,
+        adminPendingCount,
+        setAdminPendingCount,
         toasts,
         showToast,
         dismissToast,

@@ -1,14 +1,27 @@
 'use client';
 
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, {
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import {
   Activity,
+  AlertTriangle,
   CheckCircle2,
   Database,
   History,
   RefreshCw,
+  RotateCcw,
+  Search,
   ShieldCheck,
   UserCheck,
+  Users,
+  X,
   XCircle,
 } from 'lucide-react';
 import { AppShell } from '@/src/components/layout/AppShell';
@@ -26,7 +39,20 @@ import {
   updateUserRoleApi,
   verifyUserAccountApi,
 } from '@/src/lib/api-client';
-import { getFieldValidationError } from '@/src/lib/domain-logic';
+import {
+  ADMIN_DEPARTMENT_TAGS,
+  type AdminSectionTab,
+  type AuditChangeTypeFilter,
+  type VerificationStatusFilter,
+  filterAnnouncementAudits,
+  filterRbacUsers,
+  filterSyncLogs,
+  filterVerificationQueueUsers,
+  formatMeasuredLatency,
+  getAdminSectionTitle,
+  getFieldValidationError,
+  parseAdminSectionTab,
+} from '@/src/lib/domain-logic';
 import type {
   AdminMetricsResponse,
   LaravelValidationError,
@@ -34,70 +60,188 @@ import type {
   UserRole,
 } from '@/src/types/api';
 
-type AdminTab = 'verifications' | 'rbac' | 'prisms' | 'metrics';
+const ROLE_LABELS: Record<UserRole, string> = {
+  student: 'Student',
+  faculty: 'Faculty',
+  dept_head: 'Dept Head',
+  it_admin: 'IT Admin',
+};
 
-export default function AdminConsolePage() {
+function getRoleTagStyle(role: UserRole): string {
+  switch (role) {
+    case 'faculty':
+      return 'bg-emerald-50 text-emerald-800 border-emerald-300';
+    case 'dept_head':
+      return 'bg-amber-50 text-amber-900 border-amber-300';
+    case 'it_admin':
+      return 'bg-ustp-navy text-ustp-gold border-ustp-navy';
+    default:
+      return 'bg-sky-50 text-sky-900 border-sky-300';
+  }
+}
+
+function getDeptTagStyle(dept: string | null | undefined): string {
+  const normalized = (dept || '').trim().toUpperCase();
+  if (
+    normalized === 'CITC' ||
+    normalized === 'CEA' ||
+    normalized === 'COT' ||
+    normalized === 'CSM'
+  ) {
+    return 'bg-sky-50 text-ustp-blue border-sky-200';
+  }
+  return 'bg-slate-100 text-slate-700 border-slate-200';
+}
+
+function AdminConsoleContent() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const activeTab: AdminSectionTab = parseAdminSectionTab(
+    searchParams.get('tab')
+  );
+
   const {
     user,
     isAuthenticated,
     isAuthReady,
     announcementVersion,
+    setAdminPendingCount,
+    subscribeRealtimeEvents,
     showToast,
   } = useClarify();
 
-  const [activeTab, setActiveTab] = useState<AdminTab>('verifications');
-  const [pendingUsers, setPendingUsers] = useState<User[]>([]);
+  const [queueUsers, setQueueUsers] = useState<User[]>([]);
   const [allUsers, setAllUsers] = useState<User[]>([]);
   const [metrics, setMetrics] = useState<AdminMetricsResponse | null>(null);
+  const [clientRoundTripMs, setClientRoundTripMs] = useState<number | null>(
+    null
+  );
   const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const hasLoadedOnceRef = useRef(false);
 
-  // PRISMS Sync state (FR-10)
+  // Per-row saving states
+  const [busyUserIds, setBusyUserIds] = useState<Record<number, boolean>>({});
+
+  // Section 1: Account Verification Queue filters
+  const [queueSearch, setQueueSearch] = useState('');
+  const [queueStatusFilter, setQueueStatusFilter] =
+    useState<VerificationStatusFilter>('pending');
+  const [queueRoleFilter, setQueueRoleFilter] = useState<
+    'all' | 'student' | 'faculty'
+  >('all');
+  const [queueDeptFilter, setQueueDeptFilter] = useState<string>('ALL');
+
+  // Section 2: RBAC Role Management filters
+  const [rbacSearch, setRbacSearch] = useState('');
+  const [rbacRoleFilter, setRbacRoleFilter] = useState<'all' | UserRole>('all');
+  const [rbacDeptFilter, setRbacDeptFilter] = useState<string>('ALL');
+
+  // Section 3: Registered Account & Roster Sync Console state + log filters
   const [semesterCode, setSemesterCode] = useState('2026-1ST-SEM');
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncErrors, setSyncErrors] = useState<Record<string, string[]>>({});
+  const [syncSearch, setSyncSearch] = useState('');
+  const [syncTypeFilter, setSyncTypeFilter] = useState<
+    'all' | 'manual_admin' | 'scheduled_midnight'
+  >('all');
+  const [syncStatusFilter, setSyncStatusFilter] = useState<
+    'all' | 'completed' | 'partial_warning' | 'failed'
+  >('all');
 
-  const loadAdminData = useCallback(async () => {
-    if (!isAuthReady || !isAuthenticated || user.role !== 'it_admin') {
-      setIsLoading(false);
-      return;
-    }
-    if (!hasLoadedOnceRef.current) {
-      setIsLoading(true);
-    }
-    setError(null);
-    try {
-      const [pendingRes, usersRes, metricsRes] = await Promise.all([
-        getPendingUsersApi(),
-        getAllUsersApi(),
-        getAdminMetricsApi(),
-      ]);
-      setPendingUsers(pendingRes.data);
-      setAllUsers(usersRes.data);
-      setMetrics(metricsRes.data);
-      hasLoadedOnceRef.current = true;
-    } catch (err) {
-      const apiErr = err as LaravelValidationError;
-      setError(
-        apiErr.message || 'Failed to load IT Administrator Console data.'
-      );
-    } finally {
-      setIsLoading(false);
-    }
-  }, [isAuthReady, isAuthenticated, user.role]);
+  // Section 4: System Metrics & Audit Trail filters
+  const [auditSearch, setAuditSearch] = useState('');
+  const [auditEditorRoleFilter, setAuditEditorRoleFilter] = useState<
+    'all' | UserRole
+  >('all');
+  const [auditChangeTypeFilter, setAuditChangeTypeFilter] =
+    useState<AuditChangeTypeFilter>('all');
+
+  const loadAdminData = useCallback(
+    async (options?: { manual?: boolean }) => {
+      if (!isAuthReady || !isAuthenticated || user.role !== 'it_admin') {
+        setIsLoading(false);
+        return;
+      }
+      if (!hasLoadedOnceRef.current) {
+        setIsLoading(true);
+      } else if (options?.manual) {
+        setIsRefreshing(true);
+      }
+      setError(null);
+      try {
+        const startedAt =
+          typeof performance !== 'undefined' ? performance.now() : Date.now();
+        const [queueRes, usersRes, metricsRes] = await Promise.all([
+          getPendingUsersApi({ status: 'all', per_page: 100 }),
+          getAllUsersApi(),
+          getAdminMetricsApi(),
+        ]);
+        const endedAt =
+          typeof performance !== 'undefined' ? performance.now() : Date.now();
+        const measuredMs = Math.max(1, Math.round(endedAt - startedAt));
+        setClientRoundTripMs(measuredMs);
+
+        const loadedQueue = queueRes.data || [];
+        const loadedUsers = usersRes.data || [];
+        setQueueUsers(loadedQueue);
+        setAllUsers(loadedUsers);
+        setMetrics(metricsRes.data);
+
+        const pendingLiveCount = loadedQueue.filter(
+          (u) => u.verification_status === 'pending'
+        ).length;
+        setAdminPendingCount(
+          typeof metricsRes.data?.pending_verifications_count === 'number'
+            ? metricsRes.data.pending_verifications_count
+            : pendingLiveCount
+        );
+        hasLoadedOnceRef.current = true;
+      } catch (err) {
+        const apiErr = err as LaravelValidationError;
+        setError(
+          apiErr.message || 'Failed to load IT Administrator Console data.'
+        );
+      } finally {
+        setIsLoading(false);
+        setIsRefreshing(false);
+      }
+    },
+    [isAuthReady, isAuthenticated, user.role, setAdminPendingCount]
+  );
 
   useEffect(() => {
     if (!isAuthReady || !isAuthenticated) {
       return;
     }
-    loadAdminData();
+    void loadAdminData();
   }, [loadAdminData, announcementVersion, isAuthReady, isAuthenticated]);
+
+  useEffect(() => {
+    if (!isAuthenticated || user.role !== 'it_admin') return;
+    return subscribeRealtimeEvents((event) => {
+      if (
+        event.type === 'admin.updated' ||
+        event.type === 'announcement.updated' ||
+        event.type === 'announcement.created' ||
+        event.type === 'announcement.urgent' ||
+        event.type === 'channel.created'
+      ) {
+        void loadAdminData();
+      }
+    });
+  }, [isAuthenticated, user.role, subscribeRealtimeEvents, loadAdminData]);
+
+  const navigateToSection = (tab: AdminSectionTab) => {
+    router.push(`/admin?tab=${tab}`);
+  };
 
   const handleVerifyUser = async (
     userId: number,
     status: 'approved' | 'rejected'
   ) => {
+    setBusyUserIds((prev) => ({ ...prev, [userId]: true }));
     try {
       const res = await verifyUserAccountApi(userId, status);
       showToast(
@@ -108,35 +252,52 @@ export default function AdminConsolePage() {
     } catch (err) {
       const apiErr = err as LaravelValidationError;
       showToast(apiErr.message || 'Verification update failed.', 'error');
+    } finally {
+      setBusyUserIds((prev) => {
+        const next = { ...prev };
+        delete next[userId];
+        return next;
+      });
     }
   };
 
-  const handleRoleChange = async (
+  const handleRoleOrDepartmentChange = async (
     userId: number,
     newRole: UserRole,
-    department: string
+    newDepartment: string
   ) => {
+    setBusyUserIds((prev) => ({ ...prev, [userId]: true }));
     try {
       const res = await updateUserRoleApi(userId, {
         role: newRole,
-        department,
+        department: newDepartment,
       });
-      showToast(res.message || 'Role updated.', 'success');
+      showToast(res.message || 'Account permissions updated.', 'success');
       await loadAdminData();
     } catch (err) {
       const apiErr = err as LaravelValidationError;
-      showToast(apiErr.message || 'Role update failed.', 'error');
+      showToast(
+        apiErr.message || 'Failed to update account role or department.',
+        'error'
+      );
+    } finally {
+      setBusyUserIds((prev) => {
+        const next = { ...prev };
+        delete next[userId];
+        return next;
+      });
     }
   };
 
-  const handleTriggerPrismsSync = async (e: React.FormEvent) => {
+  const handleTriggerRosterSync = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSyncing(true);
     setSyncErrors({});
     try {
-      const res = await triggerPrismsSyncApi(semesterCode);
+      const res = await triggerPrismsSyncApi(semesterCode.trim());
       showToast(
-        `${res.message} (${res.total_updated} records synced)`,
+        res.message ||
+          `Synchronized ${res.total_updated} registered accounts.`,
         'success'
       );
       await loadAdminData();
@@ -145,12 +306,138 @@ export default function AdminConsolePage() {
       if (apiErr.status === 422 && apiErr.errors) {
         setSyncErrors(apiErr.errors);
       } else {
-        showToast(apiErr.message || 'PRISMS sync failed.', 'error');
+        showToast(
+          apiErr.message || 'Account & roster synchronization failed.',
+          'error'
+        );
       }
     } finally {
       setIsSyncing(false);
     }
   };
+
+  // Live counts derived strictly from real database records (zero hardcoded placeholders)
+  const pendingCount = useMemo(() => {
+    const queuePending = queueUsers.filter(
+      (u) => u.verification_status === 'pending'
+    ).length;
+    if (typeof metrics?.pending_verifications_count === 'number') {
+      return metrics.pending_verifications_count;
+    }
+    return queuePending;
+  }, [queueUsers, metrics]);
+
+  const rejectedCount = useMemo(() => {
+    const queueRejected = queueUsers.filter(
+      (u) => u.verification_status === 'rejected'
+    ).length;
+    if (typeof metrics?.rejected_verifications_count === 'number') {
+      return metrics.rejected_verifications_count;
+    }
+    return queueRejected;
+  }, [queueUsers, metrics]);
+
+  const verifiedAccountsCount = useMemo(() => {
+    if (typeof metrics?.verified_accounts_count === 'number') {
+      return metrics.verified_accounts_count;
+    }
+    return allUsers.length;
+  }, [metrics, allUsers]);
+
+  const totalRegisteredAccountsCount = useMemo(() => {
+    if (typeof metrics?.total_registered_users_count === 'number') {
+      return metrics.total_registered_users_count;
+    }
+    return verifiedAccountsCount + pendingCount + rejectedCount;
+  }, [metrics, verifiedAccountsCount, pendingCount, rejectedCount]);
+
+  const roleCounts = useMemo(() => {
+    if (metrics?.role_breakdown) {
+      return metrics.role_breakdown;
+    }
+    const counts = { student: 0, faculty: 0, dept_head: 0, it_admin: 0 };
+    for (const u of allUsers) {
+      if (u.role in counts) {
+        counts[u.role] += 1;
+      }
+    }
+    return counts;
+  }, [metrics, allUsers]);
+
+  const departmentCounts = useMemo(() => {
+    if (
+      metrics?.department_breakdown &&
+      Object.keys(metrics.department_breakdown).length > 0
+    ) {
+      return metrics.department_breakdown;
+    }
+    const map: Record<string, number> = {};
+    for (const u of allUsers) {
+      const dept =
+        (u.academic_profile?.department || 'UNASSIGNED').trim().toUpperCase() ||
+        'UNASSIGNED';
+      map[dept] = (map[dept] || 0) + 1;
+    }
+    return map;
+  }, [metrics, allUsers]);
+
+  const latencyInfo = useMemo(
+    () =>
+      formatMeasuredLatency({
+        apiLatencyMs: metrics?.api_latency_ms ?? null,
+        clientRoundTripMs,
+      }),
+    [metrics, clientRoundTripMs]
+  );
+
+  const auditsTotal = useMemo(() => {
+    if (typeof metrics?.announcement_audits_total === 'number') {
+      return metrics.announcement_audits_total;
+    }
+    return metrics?.announcement_audits?.length ?? 0;
+  }, [metrics]);
+
+  // Filtered datasets for Sections 1, 2, 3, and 4
+  const filteredQueueUsers = useMemo(
+    () =>
+      filterVerificationQueueUsers(queueUsers, {
+        search: queueSearch,
+        status: queueStatusFilter,
+        role: queueRoleFilter,
+        department: queueDeptFilter,
+      }),
+    [queueUsers, queueSearch, queueStatusFilter, queueRoleFilter, queueDeptFilter]
+  );
+
+  const filteredRbacUsers = useMemo(
+    () =>
+      filterRbacUsers(allUsers, {
+        search: rbacSearch,
+        role: rbacRoleFilter,
+        department: rbacDeptFilter,
+      }),
+    [allUsers, rbacSearch, rbacRoleFilter, rbacDeptFilter]
+  );
+
+  const filteredSyncLogs = useMemo(
+    () =>
+      filterSyncLogs(metrics?.sync_logs || [], {
+        search: syncSearch,
+        syncType: syncTypeFilter,
+        status: syncStatusFilter,
+      }),
+    [metrics, syncSearch, syncTypeFilter, syncStatusFilter]
+  );
+
+  const filteredAudits = useMemo(
+    () =>
+      filterAnnouncementAudits(metrics?.announcement_audits || [], {
+        search: auditSearch,
+        editorRole: auditEditorRoleFilter,
+        changeType: auditChangeTypeFilter,
+      }),
+    [metrics, auditSearch, auditEditorRoleFilter, auditChangeTypeFilter]
+  );
 
   const semesterError = getFieldValidationError(syncErrors, 'semester_code');
 
@@ -162,7 +449,7 @@ export default function AdminConsolePage() {
     return (
       <AppShell title="IT Admin Console">
         <div className="p-6 lg:p-8 max-w-2xl w-full mx-auto">
-          <div className="bg-white border-2 border-ustp-navy rounded-lg p-6 text-center space-y-3 shadow-sm">
+          <div className="bg-white border-2 border-ustp-navy rounded-lg p-6 text-center space-y-3">
             <ShieldCheck className="w-10 h-10 text-ustp-navy mx-auto" />
             <h2 className="text-lg font-extrabold text-ustp-navy">
               IT Administrator Domain Isolated
@@ -172,7 +459,9 @@ export default function AdminConsolePage() {
               <span className="font-bold text-ustp-navy uppercase">
                 {user.role.replace('_', ' ')}
               </span>{' '}
-              domain ({user.name}). To access the ICTO Registrar Verification Queue, RBAC Manager, and PRISMS Sync Console, please sign in with an IT Administrator account on the Login page.
+              domain ({user.name}). To access the Account Verification Queue,
+              RBAC Role Management, Account &amp; Roster Sync, and System
+              Metrics, please sign in with an IT Administrator account.
             </p>
             <div className="pt-2">
               <a
@@ -188,136 +477,325 @@ export default function AdminConsolePage() {
     );
   }
 
+  const hasActiveQueueFilters =
+    queueSearch.trim() !== '' ||
+    queueRoleFilter !== 'all' ||
+    queueDeptFilter !== 'ALL' ||
+    queueStatusFilter !== 'pending';
+
+  const hasActiveRbacFilters =
+    rbacSearch.trim() !== '' ||
+    rbacRoleFilter !== 'all' ||
+    rbacDeptFilter !== 'ALL';
+
+  const hasActiveSyncFilters =
+    syncSearch.trim() !== '' ||
+    syncTypeFilter !== 'all' ||
+    syncStatusFilter !== 'all';
+
+  const hasActiveAuditFilters =
+    auditSearch.trim() !== '' ||
+    auditEditorRoleFilter !== 'all' ||
+    auditChangeTypeFilter !== 'all';
+
+  const verificationRatePercent =
+    totalRegisteredAccountsCount > 0
+      ? Math.round((verifiedAccountsCount / totalRegisteredAccountsCount) * 100)
+      : 0;
+
   return (
-    <AppShell title="IT Admin Console">
+    <AppShell
+      title={getAdminSectionTitle(activeTab)}
+      activeAdminTab={activeTab}
+    >
       <div className="p-4 sm:p-6 lg:p-8 max-w-6xl w-full mx-auto space-y-5 sm:space-y-6">
-        {/* Top Summary KPI Cards */}
-        {metrics && (
-          <div className="grid grid-cols-1 xs:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
-            <div className="bg-white border border-slate-200 rounded-lg p-3.5 sm:p-4">
+        {/* Top Live KPI Summary Row (4 cards matching live PostgreSQL records) */}
+        <div className="space-y-2.5">
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
+              Live Platform Overview (Actual Registered Accounts)
+            </p>
+            <button
+              type="button"
+              onClick={() => void loadAdminData({ manual: true })}
+              disabled={isRefreshing || isLoading}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-bold text-ustp-navy bg-white border border-slate-300 rounded hover:bg-slate-50 disabled:opacity-50 cursor-pointer"
+            >
+              <RefreshCw
+                className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin' : ''}`}
+              />
+              <span>{isRefreshing ? 'Refreshing...' : 'Refresh Data'}</span>
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+            {/* KPI 1: Pending Verifications */}
+            <button
+              type="button"
+              onClick={() => navigateToSection('verifications')}
+              className={`text-left bg-white rounded-lg p-3.5 sm:p-4 border transition-colors cursor-pointer ${
+                activeTab === 'verifications'
+                  ? 'border-ustp-navy ring-1 ring-ustp-navy/15'
+                  : 'border-slate-200 hover:border-slate-300'
+              }`}
+            >
               <p className="text-xs font-bold text-slate-500">
                 Pending Verifications
               </p>
-              <p className="text-xl sm:text-2xl font-extrabold text-ustp-navy font-mono tabular-nums mt-1">
-                {pendingUsers.length}
+              <p
+                className={`text-xl sm:text-2xl font-extrabold font-mono tabular-nums mt-1 ${
+                  pendingCount > 0 ? 'text-amber-700' : 'text-ustp-navy'
+                }`}
+              >
+                {pendingCount.toLocaleString()}
               </p>
-            </div>
-            <div className="bg-white border border-slate-200 rounded-lg p-3.5 sm:p-4">
+              <p className="text-[11px] text-slate-500 mt-1 font-mono tabular-nums">
+                {rejectedCount > 0
+                  ? `${rejectedCount} rejected in archive`
+                  : 'Registrar queue live'}
+              </p>
+            </button>
+
+            {/* KPI 2: Registered Accounts (Actual DB Count, zero fake floor) */}
+            <button
+              type="button"
+              onClick={() => navigateToSection('rbac')}
+              className={`text-left bg-white rounded-lg p-3.5 sm:p-4 border transition-colors cursor-pointer ${
+                activeTab === 'rbac'
+                  ? 'border-ustp-navy ring-1 ring-ustp-navy/15'
+                  : 'border-slate-200 hover:border-slate-300'
+              }`}
+            >
               <p className="text-xs font-bold text-slate-500">
-                PRISMS Synced Accounts
+                Registered Accounts
               </p>
               <p className="text-xl sm:text-2xl font-extrabold text-ustp-navy font-mono tabular-nums mt-1">
-                {metrics.active_users_count.toLocaleString()}
+                {verifiedAccountsCount.toLocaleString()}
               </p>
-            </div>
-            <div className="bg-white border border-slate-200 rounded-lg p-3.5 sm:p-4">
+              <p className="text-[11px] text-slate-500 mt-1 font-mono tabular-nums">
+                {totalRegisteredAccountsCount.toLocaleString()} total •{' '}
+                {roleCounts.student} students,{' '}
+                {roleCounts.faculty + roleCounts.dept_head} faculty
+              </p>
+            </button>
+
+            {/* KPI 3: Live API Latency & Urgent Alerts (Real Measured Latency) */}
+            <button
+              type="button"
+              onClick={() => navigateToSection('metrics')}
+              className={`text-left bg-white rounded-lg p-3.5 sm:p-4 border transition-colors cursor-pointer ${
+                activeTab === 'metrics'
+                  ? 'border-ustp-navy ring-1 ring-ustp-navy/15'
+                  : 'border-slate-200 hover:border-slate-300'
+              }`}
+            >
               <p className="text-xs font-bold text-slate-500">
-                Urgent Push Latency (&le;2.0s)
+                Live API Latency (&le;2.0s)
               </p>
-              <p className="text-xl sm:text-2xl font-extrabold text-emerald-700 font-mono tabular-nums mt-1">
-                {metrics.push_queue_latency_seconds}s
+              <p
+                className={`text-xl sm:text-2xl font-extrabold font-mono tabular-nums mt-1 ${
+                  latencyInfo.withinSla ? 'text-emerald-700' : 'text-red-700'
+                }`}
+              >
+                {latencyInfo.primaryDisplay}
               </p>
-            </div>
-            <div className="bg-white border border-slate-200 rounded-lg p-3.5 sm:p-4">
+              <p className="text-[11px] text-slate-500 mt-1 font-mono tabular-nums">
+                {typeof metrics?.urgent_announcements_count === 'number'
+                  ? `${metrics.urgent_announcements_count} urgent alerts sent`
+                  : 'Live DB round-trip'}
+              </p>
+            </button>
+
+            {/* KPI 4: Immutable Edit Audits */}
+            <button
+              type="button"
+              onClick={() => navigateToSection('metrics')}
+              className={`text-left bg-white rounded-lg p-3.5 sm:p-4 border transition-colors cursor-pointer ${
+                activeTab === 'metrics'
+                  ? 'border-ustp-navy ring-1 ring-ustp-navy/15'
+                  : 'border-slate-200 hover:border-slate-300'
+              }`}
+            >
               <p className="text-xs font-bold text-slate-500">
                 Immutable Edit Audits
               </p>
               <p className="text-xl sm:text-2xl font-extrabold text-ustp-navy font-mono tabular-nums mt-1">
-                {metrics.announcement_audits.length}
+                {auditsTotal.toLocaleString()}
               </p>
-            </div>
+              <p className="text-[11px] text-slate-500 mt-1 font-mono tabular-nums">
+                {typeof metrics?.published_announcements_count === 'number'
+                  ? `${metrics.published_announcements_count} published notices`
+                  : 'Append-only revision log'}
+              </p>
+            </button>
           </div>
-        )}
-
-        {/* 4 Tabbed Views matching Section A.7 */}
-        <div
-          className="flex items-center gap-2 overflow-x-auto pb-3 border-b border-slate-200 whitespace-nowrap"
-          role="tablist"
-          aria-label="IT Administrator Console Tabs"
-        >
-          <button
-            type="button"
-            role="tab"
-            aria-selected={activeTab === 'verifications'}
-            onClick={() => setActiveTab('verifications')}
-            className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-md text-xs font-bold transition-colors cursor-pointer ${
-              activeTab === 'verifications'
-                ? 'bg-ustp-navy text-ustp-gold'
-                : 'bg-white text-slate-700 border border-slate-300 hover:bg-slate-100'
-            }`}
-          >
-            <UserCheck className="w-3.5 h-3.5" />
-            <span>1. Account Verification Queue ({pendingUsers.length})</span>
-          </button>
-
-          <button
-            type="button"
-            role="tab"
-            aria-selected={activeTab === 'rbac'}
-            onClick={() => setActiveTab('rbac')}
-            className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-md text-xs font-bold transition-colors cursor-pointer ${
-              activeTab === 'rbac'
-                ? 'bg-ustp-navy text-ustp-gold'
-                : 'bg-white text-slate-700 border border-slate-300 hover:bg-slate-100'
-            }`}
-          >
-            <ShieldCheck className="w-3.5 h-3.5" />
-            <span>2. RBAC Role Management</span>
-          </button>
-
-          <button
-            type="button"
-            role="tab"
-            aria-selected={activeTab === 'prisms'}
-            onClick={() => setActiveTab('prisms')}
-            className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-md text-xs font-bold transition-colors cursor-pointer ${
-              activeTab === 'prisms'
-                ? 'bg-ustp-navy text-ustp-gold'
-                : 'bg-white text-slate-700 border border-slate-300 hover:bg-slate-100'
-            }`}
-          >
-            <Database className="w-3.5 h-3.5" />
-            <span>3. PRISMS Database Sync Console</span>
-          </button>
-
-          <button
-            type="button"
-            role="tab"
-            aria-selected={activeTab === 'metrics'}
-            onClick={() => setActiveTab('metrics')}
-            className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-md text-xs font-bold transition-colors cursor-pointer ${
-              activeTab === 'metrics'
-                ? 'bg-ustp-navy text-ustp-gold'
-                : 'bg-white text-slate-700 border border-slate-300 hover:bg-slate-100'
-            }`}
-          >
-            <History className="w-3.5 h-3.5" />
-            <span>4. System Metrics &amp; Audit Trail</span>
-          </button>
         </div>
 
         {isLoading ? (
           <SkeletonCards count={2} />
         ) : error ? (
-          <ErrorBanner message={error} onRetry={loadAdminData} />
+          <ErrorBanner message={error} onRetry={() => void loadAdminData()} />
         ) : activeTab === 'verifications' ? (
-          /* TAB 1: ACCOUNT VERIFICATION QUEUE */
+          /* ================================================================
+             SECTION 1: ACCOUNT VERIFICATION QUEUE (SEARCH + TAGS + REJECTED)
+             ================================================================ */
           <section className="bg-white border border-slate-200 rounded-lg overflow-hidden">
-            <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between">
+            <div className="px-5 py-4 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
               <div>
-                <h2 className="text-sm font-extrabold text-ustp-text">
-                  Registrar Account Verification Queue
+                <h2 className="text-sm font-extrabold text-ustp-text flex items-center gap-2">
+                  <UserCheck className="w-4 h-4 text-ustp-navy" />
+                  <span>Registrar Account Verification Queue</span>
                 </h2>
-                <p className="text-xs text-slate-500">
-                  Cross-check pending Student and Faculty registrations against USTP Registrar records.
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Review, approve, or reject pending Student and Faculty sign-ups, or re-approve previously rejected accounts.
                 </p>
+              </div>
+              <span className="text-xs font-mono font-bold tabular-nums text-slate-500">
+                Showing {filteredQueueUsers.length} of {queueUsers.length}
+              </span>
+            </div>
+
+            {/* Search & Filter Tag Controls */}
+            <div className="px-5 py-3.5 bg-slate-50/80 border-b border-slate-200 space-y-3">
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5">
+                <div className="relative flex-1">
+                  <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                  <input
+                    type="text"
+                    value={queueSearch}
+                    onChange={(e) => setQueueSearch(e.target.value)}
+                    placeholder="Search by name, Institutional ID, @ustp.edu.ph email, mobile, or section..."
+                    aria-label="Search verification queue"
+                    className="w-full pl-9 pr-8 py-2 text-xs bg-white border border-slate-300 rounded-md text-ustp-text placeholder:text-slate-400 focus:outline-none focus:border-ustp-navy"
+                  />
+                  {queueSearch && (
+                    <button
+                      type="button"
+                      onClick={() => setQueueSearch('')}
+                      aria-label="Clear verification search"
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700 cursor-pointer"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+
+                {hasActiveQueueFilters && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setQueueSearch('');
+                      setQueueStatusFilter('pending');
+                      setQueueRoleFilter('all');
+                      setQueueDeptFilter('ALL');
+                    }}
+                    className="inline-flex items-center justify-center gap-1 px-3 py-2 text-xs font-bold text-slate-600 bg-white border border-slate-300 rounded-md hover:bg-slate-100 cursor-pointer shrink-0"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    <span>Reset Filters</span>
+                  </button>
+                )}
+              </div>
+
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                {/* Status Tags */}
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="text-[11px] font-bold uppercase tracking-wide text-slate-500 mr-1">
+                    Status:
+                  </span>
+                  {(
+                    [
+                      {
+                        key: 'pending',
+                        label: `Pending (${pendingCount})`,
+                      },
+                      {
+                        key: 'rejected',
+                        label: `Rejected (${rejectedCount})`,
+                      },
+                      {
+                        key: 'all',
+                        label: `All Queue (${queueUsers.length})`,
+                      },
+                    ] as const
+                  ).map((item) => (
+                    <button
+                      key={item.key}
+                      type="button"
+                      onClick={() => setQueueStatusFilter(item.key)}
+                      className={`px-2.5 py-1 rounded text-[11px] font-bold border transition-colors cursor-pointer font-mono tabular-nums ${
+                        queueStatusFilter === item.key
+                          ? 'bg-ustp-navy text-ustp-gold border-ustp-navy'
+                          : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'
+                      }`}
+                    >
+                      {item.label}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Role Tags */}
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="text-[11px] font-bold uppercase tracking-wide text-slate-500 mr-1">
+                    Role:
+                  </span>
+                  {(
+                    [
+                      { key: 'all', label: 'All' },
+                      { key: 'student', label: 'Student' },
+                      { key: 'faculty', label: 'Faculty' },
+                    ] as const
+                  ).map((item) => (
+                    <button
+                      key={item.key}
+                      type="button"
+                      onClick={() => setQueueRoleFilter(item.key)}
+                      className={`px-2.5 py-1 rounded text-[11px] font-bold border transition-colors cursor-pointer ${
+                        queueRoleFilter === item.key
+                          ? 'bg-ustp-navy text-ustp-gold border-ustp-navy'
+                          : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'
+                      }`}
+                    >
+                      {item.label}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Department Tags */}
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="text-[11px] font-bold uppercase tracking-wide text-slate-500 mr-1">
+                    Dept:
+                  </span>
+                  {(['ALL', ...ADMIN_DEPARTMENT_TAGS] as const).map((dept) => (
+                    <button
+                      key={dept}
+                      type="button"
+                      onClick={() => setQueueDeptFilter(dept)}
+                      className={`px-2.5 py-1 rounded text-[11px] font-bold border transition-colors cursor-pointer ${
+                        queueDeptFilter === dept
+                          ? 'bg-ustp-blue text-white border-ustp-blue'
+                          : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'
+                      }`}
+                    >
+                      {dept === 'ALL' ? 'All Depts' : dept}
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
 
-            {pendingUsers.length === 0 ? (
+            {filteredQueueUsers.length === 0 ? (
               <EmptyState
-                title="All Pending Accounts Verified"
-                description="There are zero unverified registrations waiting in the registrar queue."
+                title={
+                  queueStatusFilter === 'pending' && !hasActiveQueueFilters
+                    ? 'All Pending Accounts Verified'
+                    : 'No Matching Registrations Found'
+                }
+                description={
+                  queueStatusFilter === 'pending' && !hasActiveQueueFilters
+                    ? 'There are zero unverified registrations waiting in the registrar queue.'
+                    : 'Try adjusting your search keywords or status, role, and department filter tags.'
+                }
               />
             ) : (
               <div className="overflow-x-auto">
@@ -325,133 +803,424 @@ export default function AdminConsolePage() {
                   <thead>
                     <tr className="bg-slate-50 border-b border-slate-200 text-slate-600 font-bold">
                       <th className="py-3 px-4">Institutional ID</th>
-                      <th className="py-3 px-4">Full Name &amp; Email</th>
-                      <th className="py-3 px-4">Requested Role</th>
-                      <th className="py-3 px-4">Department / Section</th>
-                      <th className="py-3 px-4 text-right">Actions (PATCH /verify)</th>
+                      <th className="py-3 px-4">Applicant &amp; Contact</th>
+                      <th className="py-3 px-4">Role &amp; Scope Tags</th>
+                      <th className="py-3 px-4">Status</th>
+                      <th className="py-3 px-4 text-right">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-200">
-                    {pendingUsers.map((pending) => (
-                      <tr key={pending.id} className="hover:bg-slate-50/80">
-                        <td className="py-3 px-4 font-mono font-bold text-ustp-navy tabular-nums">
-                          {pending.institutional_id}
-                        </td>
-                        <td className="py-3 px-4">
-                          <p className="font-bold text-ustp-text">{pending.name}</p>
-                          <p className="text-slate-500">{pending.email}</p>
-                        </td>
-                        <td className="py-3 px-4 font-semibold uppercase">
-                          {pending.role}
-                        </td>
-                        <td className="py-3 px-4">
-                          {pending.academic_profile?.department} •{' '}
-                          {pending.academic_profile?.section}
-                        </td>
-                        <td className="py-3 px-4 text-right space-x-2 whitespace-nowrap">
-                          <button
-                            type="button"
-                            onClick={() =>
-                              handleVerifyUser(pending.id, 'approved')
-                            }
-                            className="inline-flex items-center gap-1 px-3 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white font-bold rounded cursor-pointer"
-                          >
-                            <CheckCircle2 className="w-3.5 h-3.5" />
-                            <span>Approve</span>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() =>
-                              handleVerifyUser(pending.id, 'rejected')
-                            }
-                            className="inline-flex items-center gap-1 px-3 py-1.5 bg-red-100 hover:bg-red-200 text-red-800 font-bold rounded border border-red-300 cursor-pointer"
-                          >
-                            <XCircle className="w-3.5 h-3.5" />
-                            <span>Reject</span>
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
+                    {filteredQueueUsers.map((applicant) => {
+                      const isBusy = Boolean(busyUserIds[applicant.id]);
+                      const isRejected =
+                        applicant.verification_status === 'rejected';
+                      const dept =
+                        applicant.academic_profile?.department || 'UNASSIGNED';
+                      const section = applicant.academic_profile?.section;
+
+                      return (
+                        <tr
+                          key={applicant.id}
+                          className="hover:bg-slate-50/80"
+                        >
+                          <td className="py-3 px-4 font-mono font-bold text-ustp-navy tabular-nums whitespace-nowrap">
+                            {applicant.institutional_id}
+                            {applicant.created_at && (
+                              <p className="text-[11px] font-normal text-slate-500 mt-0.5">
+                                {new Date(
+                                  applicant.created_at
+                                ).toLocaleDateString()}
+                              </p>
+                            )}
+                          </td>
+                          <td className="py-3 px-4">
+                            <p className="font-bold text-ustp-text">
+                              {applicant.name}
+                            </p>
+                            <p className="text-slate-500">{applicant.email}</p>
+                            {applicant.contact_number && (
+                              <p className="text-[11px] font-mono text-slate-500 tabular-nums mt-0.5">
+                                {applicant.contact_number}
+                              </p>
+                            )}
+                          </td>
+                          <td className="py-3 px-4">
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <span
+                                className={`inline-flex items-center px-2 py-0.5 rounded text-[11px] font-bold border uppercase ${getRoleTagStyle(
+                                  applicant.role
+                                )}`}
+                              >
+                                {ROLE_LABELS[applicant.role]}
+                              </span>
+                              <span
+                                className={`inline-flex items-center px-2 py-0.5 rounded text-[11px] font-bold border uppercase ${getDeptTagStyle(
+                                  dept
+                                )}`}
+                              >
+                                {dept}
+                              </span>
+                              {section && (
+                                <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-mono font-bold bg-slate-100 text-slate-700 border border-slate-200">
+                                  {section}
+                                </span>
+                              )}
+                            </div>
+                          </td>
+                          <td className="py-3 px-4 whitespace-nowrap">
+                            <span
+                              className={`inline-flex items-center px-2 py-0.5 rounded text-[11px] font-bold border uppercase ${
+                                isRejected
+                                  ? 'bg-red-50 text-red-800 border-red-200'
+                                  : 'bg-amber-50 text-amber-800 border-amber-300'
+                              }`}
+                            >
+                              {applicant.verification_status}
+                            </span>
+                          </td>
+                          <td className="py-3 px-4 text-right space-x-2 whitespace-nowrap">
+                            <button
+                              type="button"
+                              disabled={isBusy}
+                              onClick={() =>
+                                void handleVerifyUser(applicant.id, 'approved')
+                              }
+                              className="inline-flex items-center gap-1 px-3 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white font-bold rounded disabled:opacity-50 cursor-pointer"
+                            >
+                              <CheckCircle2 className="w-3.5 h-3.5" />
+                              <span>
+                                {isRejected ? 'Re-Approve' : 'Approve'}
+                              </span>
+                            </button>
+                            {!isRejected && (
+                              <button
+                                type="button"
+                                disabled={isBusy}
+                                onClick={() =>
+                                  void handleVerifyUser(
+                                    applicant.id,
+                                    'rejected'
+                                  )
+                                }
+                                className="inline-flex items-center gap-1 px-3 py-1.5 bg-red-100 hover:bg-red-200 text-red-800 font-bold rounded border border-red-300 disabled:opacity-50 cursor-pointer"
+                              >
+                                <XCircle className="w-3.5 h-3.5" />
+                                <span>Reject</span>
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
             )}
           </section>
         ) : activeTab === 'rbac' ? (
-          /* TAB 2: RBAC ROLE MANAGEMENT (FR-09) */
+          /* ================================================================
+             SECTION 2: RBAC ROLE MANAGEMENT (SEARCH + TAGS + DEPT EDITING)
+             ================================================================ */
           <section className="bg-white border border-slate-200 rounded-lg overflow-hidden">
-            <div className="px-5 py-4 border-b border-slate-200">
-              <h2 className="text-sm font-extrabold text-ustp-text">
-                Role-Based Access Control (RBAC) Directory
-              </h2>
-              <p className="text-xs text-slate-500">
-                Assign, modify, or revoke institutional roles and department scopes.
-              </p>
+            <div className="px-5 py-4 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div>
+                <h2 className="text-sm font-extrabold text-ustp-text flex items-center gap-2">
+                  <ShieldCheck className="w-4 h-4 text-ustp-navy" />
+                  <span>Role-Based Access Control (RBAC) Directory</span>
+                </h2>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Manage verified ClariFy accounts, update institutional roles, and reassign department scopes in real time.
+                </p>
+              </div>
+              <span className="text-xs font-mono font-bold tabular-nums text-slate-500">
+                Showing {filteredRbacUsers.length} of {allUsers.length} approved
+              </span>
             </div>
 
-            <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse text-xs">
-                <thead>
-                  <tr className="bg-slate-50 border-b border-slate-200 text-slate-600 font-bold">
-                    <th className="py-3 px-4">ID Number</th>
-                    <th className="py-3 px-4">User</th>
-                    <th className="py-3 px-4">Department Scope</th>
-                    <th className="py-3 px-4">Assigned Role</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-200">
-                  {allUsers.map((u) => (
-                    <tr key={u.id} className="hover:bg-slate-50/80">
-                      <td className="py-3 px-4 font-mono font-bold text-ustp-navy tabular-nums">
-                        {u.institutional_id}
-                      </td>
-                      <td className="py-3 px-4">
-                        <p className="font-bold text-ustp-text">{u.name}</p>
-                        <p className="text-slate-500">{u.email}</p>
-                      </td>
-                      <td className="py-3 px-4 font-semibold">
-                        {u.academic_profile?.department || 'CITC'} (
-                        {u.academic_profile?.section || 'Scope'})
-                      </td>
-                      <td className="py-3 px-4">
-                        <select
-                          aria-label={`Assign role for ${u.name}`}
-                          value={u.role}
-                          onChange={(e) =>
-                            handleRoleChange(
-                              u.id,
-                              e.target.value as UserRole,
-                              u.academic_profile?.department || 'CITC'
-                            )
-                          }
-                          className="px-2.5 py-1.5 text-xs font-bold bg-white border border-slate-300 rounded text-ustp-navy focus:outline-none focus:border-ustp-navy"
-                        >
-                          <option value="student">student</option>
-                          <option value="faculty">faculty</option>
-                          <option value="dept_head">dept_head</option>
-                          <option value="it_admin">it_admin</option>
-                        </select>
-                      </td>
-                    </tr>
+            {/* Search & Filter Tags */}
+            <div className="px-5 py-3.5 bg-slate-50/80 border-b border-slate-200 space-y-3">
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5">
+                <div className="relative flex-1">
+                  <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                  <input
+                    type="text"
+                    value={rbacSearch}
+                    onChange={(e) => setRbacSearch(e.target.value)}
+                    placeholder="Search approved accounts by name, ID number, email, section, or role..."
+                    aria-label="Search RBAC directory"
+                    className="w-full pl-9 pr-8 py-2 text-xs bg-white border border-slate-300 rounded-md text-ustp-text placeholder:text-slate-400 focus:outline-none focus:border-ustp-navy"
+                  />
+                  {rbacSearch && (
+                    <button
+                      type="button"
+                      onClick={() => setRbacSearch('')}
+                      aria-label="Clear RBAC search"
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700 cursor-pointer"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+
+                {hasActiveRbacFilters && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setRbacSearch('');
+                      setRbacRoleFilter('all');
+                      setRbacDeptFilter('ALL');
+                    }}
+                    className="inline-flex items-center justify-center gap-1 px-3 py-2 text-xs font-bold text-slate-600 bg-white border border-slate-300 rounded-md hover:bg-slate-100 cursor-pointer shrink-0"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    <span>Reset Filters</span>
+                  </button>
+                )}
+              </div>
+
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                {/* Role Filter Tags */}
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="text-[11px] font-bold uppercase tracking-wide text-slate-500 mr-1">
+                    Role:
+                  </span>
+                  {(
+                    [
+                      { key: 'all', label: `All (${allUsers.length})` },
+                      {
+                        key: 'student',
+                        label: `Student (${roleCounts.student})`,
+                      },
+                      {
+                        key: 'faculty',
+                        label: `Faculty (${roleCounts.faculty})`,
+                      },
+                      {
+                        key: 'dept_head',
+                        label: `Dept Head (${roleCounts.dept_head})`,
+                      },
+                      {
+                        key: 'it_admin',
+                        label: `IT Admin (${roleCounts.it_admin})`,
+                      },
+                    ] as const
+                  ).map((item) => (
+                    <button
+                      key={item.key}
+                      type="button"
+                      onClick={() => setRbacRoleFilter(item.key)}
+                      className={`px-2.5 py-1 rounded text-[11px] font-bold border transition-colors cursor-pointer font-mono tabular-nums ${
+                        rbacRoleFilter === item.key
+                          ? 'bg-ustp-navy text-ustp-gold border-ustp-navy'
+                          : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'
+                      }`}
+                    >
+                      {item.label}
+                    </button>
                   ))}
-                </tbody>
-              </table>
+                </div>
+
+                {/* Department Filter Tags */}
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="text-[11px] font-bold uppercase tracking-wide text-slate-500 mr-1">
+                    Dept:
+                  </span>
+                  {(['ALL', ...ADMIN_DEPARTMENT_TAGS] as const).map((dept) => (
+                    <button
+                      key={dept}
+                      type="button"
+                      onClick={() => setRbacDeptFilter(dept)}
+                      className={`px-2.5 py-1 rounded text-[11px] font-bold border transition-colors cursor-pointer ${
+                        rbacDeptFilter === dept
+                          ? 'bg-ustp-blue text-white border-ustp-blue'
+                          : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'
+                      }`}
+                    >
+                      {dept === 'ALL' ? 'All Depts' : dept}
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
+
+            {filteredRbacUsers.length === 0 ? (
+              <EmptyState
+                title="No Accounts Match Your Filters"
+                description="Try clearing the search query or switching the role and department filter tags."
+              />
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse text-xs">
+                  <thead>
+                    <tr className="bg-slate-50 border-b border-slate-200 text-slate-600 font-bold">
+                      <th className="py-3 px-4">ID Number</th>
+                      <th className="py-3 px-4">Registered User</th>
+                      <th className="py-3 px-4">Department Scope</th>
+                      <th className="py-3 px-4">Assigned Role</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-200">
+                    {filteredRbacUsers.map((u) => {
+                      const isSelf = Number(u.id) === Number(user.id);
+                      const isBusy = Boolean(busyUserIds[u.id]);
+                      const currentDept = (
+                        u.academic_profile?.department || 'CITC'
+                      )
+                        .trim()
+                        .toUpperCase();
+                      const deptOptions = Array.from(
+                        new Set([...ADMIN_DEPARTMENT_TAGS, currentDept])
+                      );
+
+                      return (
+                        <tr key={u.id} className="hover:bg-slate-50/80">
+                          <td className="py-3 px-4 font-mono font-bold text-ustp-navy tabular-nums whitespace-nowrap">
+                            {u.institutional_id}
+                          </td>
+                          <td className="py-3 px-4">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <p className="font-bold text-ustp-text">
+                                {u.name}
+                              </p>
+                              <span
+                                className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold border uppercase ${getRoleTagStyle(
+                                  u.role
+                                )}`}
+                              >
+                                {ROLE_LABELS[u.role]}
+                              </span>
+                              {isSelf && (
+                                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-900 border border-amber-300">
+                                  YOU
+                                </span>
+                              )}
+                            </div>
+                            <p className="text-slate-500">{u.email}</p>
+                            {u.contact_number && (
+                              <p className="text-[11px] font-mono text-slate-500 tabular-nums">
+                                {u.contact_number}
+                              </p>
+                            )}
+                          </td>
+                          <td className="py-3 px-4">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <select
+                                aria-label={`Assign department for ${u.name}`}
+                                value={currentDept}
+                                disabled={isBusy}
+                                onChange={(e) =>
+                                  void handleRoleOrDepartmentChange(
+                                    u.id,
+                                    u.role,
+                                    e.target.value
+                                  )
+                                }
+                                className="px-2.5 py-1.5 text-xs font-bold bg-white border border-slate-300 rounded text-ustp-blue focus:outline-none focus:border-ustp-navy disabled:opacity-50"
+                              >
+                                {deptOptions.map((d) => (
+                                  <option key={d} value={d}>
+                                    {d}
+                                  </option>
+                                ))}
+                              </select>
+                              {u.academic_profile?.section && (
+                                <span className="px-2 py-0.5 rounded bg-slate-100 text-slate-600 border border-slate-200 font-mono text-[11px] font-semibold">
+                                  {u.academic_profile.section}
+                                </span>
+                              )}
+                            </div>
+                          </td>
+                          <td className="py-3 px-4 whitespace-nowrap">
+                            <select
+                              aria-label={`Assign role for ${u.name}`}
+                              value={u.role}
+                              disabled={isBusy || isSelf}
+                              title={
+                                isSelf
+                                  ? 'You cannot demote your own active IT Administrator account.'
+                                  : undefined
+                              }
+                              onChange={(e) =>
+                                void handleRoleOrDepartmentChange(
+                                  u.id,
+                                  e.target.value as UserRole,
+                                  currentDept
+                                )
+                              }
+                              className="px-2.5 py-1.5 text-xs font-bold bg-white border border-slate-300 rounded text-ustp-navy focus:outline-none focus:border-ustp-navy disabled:opacity-50 disabled:bg-slate-100"
+                            >
+                              <option value="student">Student</option>
+                              <option value="faculty">Faculty</option>
+                              <option value="dept_head">Dept Head</option>
+                              <option value="it_admin">IT Admin</option>
+                            </select>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </section>
-        ) : activeTab === 'prisms' ? (
-          /* TAB 3: PRISMS DATABASE SYNC CONSOLE (FR-10) */
+        ) : activeTab === 'roster-sync' ? (
+          /* ================================================================
+             SECTION 3: REGISTERED ACCOUNT & ROSTER SYNC CONSOLE
+             ================================================================ */
           <section className="space-y-5">
-            <div className="bg-white border border-slate-200 rounded-lg p-5">
-              <h2 className="text-sm font-extrabold text-ustp-text">
-                USTP PRISMS Roster &amp; Scoped Channel Synchronization
-              </h2>
-              <p className="text-xs text-slate-500 mt-0.5">
-                Automated midnight batch job runs every 24h. Trigger a manual sync below to provision semester channels and rosters immediately.
-              </p>
+            <div className="bg-white border border-slate-200 rounded-lg p-5 space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
+                <div>
+                  <h2 className="text-sm font-extrabold text-ustp-text flex items-center gap-2">
+                    <Database className="w-4 h-4 text-ustp-navy" />
+                    <span>Registered Account &amp; Roster Sync Console</span>
+                  </h2>
+                  <p className="text-xs text-slate-500 mt-1 leading-relaxed">
+                    Synchronizes actual approved ClariFy accounts from PostgreSQL into matching department and section Course Hubs (while direct USTP PRISMS database access is not yet connected).
+                  </p>
+                </div>
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded bg-amber-50 border border-amber-300 text-amber-900 text-[11px] font-bold shrink-0">
+                  <Users className="w-3.5 h-3.5" />
+                  <span className="font-mono tabular-nums">
+                    {verifiedAccountsCount} Live Registered Accounts
+                  </span>
+                </span>
+              </div>
+
+              {/* Live Registered Accounts by Department Breakdown */}
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5 pt-1">
+                {ADMIN_DEPARTMENT_TAGS.map((dept) => (
+                  <div
+                    key={dept}
+                    className="bg-slate-50 border border-slate-200 rounded-md px-3 py-2.5"
+                  >
+                    <p className="text-[11px] font-bold text-ustp-blue uppercase">
+                      {dept}
+                    </p>
+                    <p className="text-lg font-extrabold text-ustp-navy font-mono tabular-nums mt-0.5">
+                      {(departmentCounts[dept] || 0).toLocaleString()}
+                    </p>
+                    <p className="text-[10px] text-slate-500">
+                      approved accounts
+                    </p>
+                  </div>
+                ))}
+                <div className="bg-slate-50 border border-slate-200 rounded-md px-3 py-2.5 col-span-2 sm:col-span-1">
+                  <p className="text-[11px] font-bold text-slate-600 uppercase">
+                    Scoped Channels
+                  </p>
+                  <p className="text-lg font-extrabold text-ustp-navy font-mono tabular-nums mt-0.5">
+                    {(metrics?.active_channels_count ?? 0).toLocaleString()}
+                  </p>
+                  <p className="text-[10px] text-slate-500">
+                    {metrics?.course_hubs_count ?? 0} course hubs
+                  </p>
+                </div>
+              </div>
 
               <form
-                onSubmit={handleTriggerPrismsSync}
-                className="mt-4 flex flex-col sm:flex-row items-start sm:items-center gap-3"
+                onSubmit={handleTriggerRosterSync}
+                className="pt-2 border-t border-slate-200 flex flex-col sm:flex-row items-start sm:items-center gap-3"
               >
                 <div className="w-full sm:w-64">
                   <label htmlFor="semester-code-input" className="sr-only">
@@ -485,137 +1254,523 @@ export default function AdminConsolePage() {
                   />
                   <span>
                     {isSyncing
-                      ? 'Synchronizing PRISMS...'
-                      : 'Trigger Manual PRISMS Sync'}
+                      ? 'Reconciling Registered Accounts...'
+                      : 'Run Account & Roster Sync'}
                   </span>
                 </button>
               </form>
             </div>
 
-            {/* Sync History Log Table */}
+            {/* Synchronization History Logs with Search + Filter Tags */}
             <div className="bg-white border border-slate-200 rounded-lg overflow-hidden">
-              <div className="px-5 py-3.5 border-b border-slate-200">
+              <div className="px-5 py-3.5 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                 <h3 className="text-xs font-extrabold uppercase tracking-wider text-slate-600">
-                  PRISMS Synchronization History Logs
+                  Roster Synchronization History Logs
                 </h3>
+                <span className="text-xs font-mono font-bold tabular-nums text-slate-500">
+                  Showing {filteredSyncLogs.length} of{' '}
+                  {(metrics?.sync_logs || []).length} runs
+                </span>
               </div>
-              <div className="overflow-x-auto">
-                <table className="w-full text-left border-collapse text-xs font-mono tabular-nums">
-                  <thead>
-                    <tr className="bg-slate-50 border-b border-slate-200 text-slate-600 font-sans font-bold">
-                      <th className="py-3 px-4">Sync ID</th>
-                      <th className="py-3 px-4">Semester Code</th>
-                      <th className="py-3 px-4">Triggered By</th>
-                      <th className="py-3 px-4 text-right">Records Updated</th>
-                      <th className="py-3 px-4 text-right">Channels</th>
-                      <th className="py-3 px-4 text-right">Duration</th>
-                      <th className="py-3 px-4">Status</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-200">
-                    {(metrics?.sync_logs || []).map((log) => (
-                      <tr key={log.id} className="hover:bg-slate-50">
-                        <td className="py-3 px-4 font-bold text-ustp-navy">
-                          #{log.id}
-                        </td>
-                        <td className="py-3 px-4 font-bold">
-                          {log.semester_code}
-                        </td>
-                        <td className="py-3 px-4 font-sans">
-                          {log.triggered_by}
-                        </td>
-                        <td className="py-3 px-4 text-right font-bold text-ustp-navy">
-                          {log.total_updated.toLocaleString()}
-                        </td>
-                        <td className="py-3 px-4 text-right">
-                          {log.channels_provisioned}
-                        </td>
-                        <td className="py-3 px-4 text-right text-slate-500">
-                          {log.duration_ms}ms
-                        </td>
-                        <td className="py-3 px-4">
-                          <span className="px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 font-sans font-bold text-[11px]">
-                            {log.status.toUpperCase()}
-                          </span>
-                        </td>
-                      </tr>
+
+              <div className="px-5 py-3 bg-slate-50/80 border-b border-slate-200 space-y-2.5">
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5">
+                  <div className="relative flex-1">
+                    <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                    <input
+                      type="text"
+                      value={syncSearch}
+                      onChange={(e) => setSyncSearch(e.target.value)}
+                      placeholder="Search sync logs by ID, semester code, or admin name..."
+                      aria-label="Search synchronization logs"
+                      className="w-full pl-9 pr-8 py-2 text-xs bg-white border border-slate-300 rounded-md text-ustp-text placeholder:text-slate-400 focus:outline-none focus:border-ustp-navy"
+                    />
+                    {syncSearch && (
+                      <button
+                        type="button"
+                        onClick={() => setSyncSearch('')}
+                        aria-label="Clear sync log search"
+                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700 cursor-pointer"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
+                  {hasActiveSyncFilters && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSyncSearch('');
+                        setSyncTypeFilter('all');
+                        setSyncStatusFilter('all');
+                      }}
+                      className="inline-flex items-center justify-center gap-1 px-3 py-2 text-xs font-bold text-slate-600 bg-white border border-slate-300 rounded-md hover:bg-slate-100 cursor-pointer shrink-0"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5" />
+                      <span>Reset</span>
+                    </button>
+                  )}
+                </div>
+
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="text-[11px] font-bold uppercase tracking-wide text-slate-500 mr-1">
+                      Trigger:
+                    </span>
+                    {(
+                      [
+                        { key: 'all', label: 'All Runs' },
+                        { key: 'manual_admin', label: 'Manual Admin' },
+                        { key: 'scheduled_midnight', label: 'Scheduled' },
+                      ] as const
+                    ).map((item) => (
+                      <button
+                        key={item.key}
+                        type="button"
+                        onClick={() => setSyncTypeFilter(item.key)}
+                        className={`px-2.5 py-1 rounded text-[11px] font-bold border transition-colors cursor-pointer ${
+                          syncTypeFilter === item.key
+                            ? 'bg-ustp-navy text-ustp-gold border-ustp-navy'
+                            : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'
+                        }`}
+                      >
+                        {item.label}
+                      </button>
                     ))}
-                  </tbody>
-                </table>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="text-[11px] font-bold uppercase tracking-wide text-slate-500 mr-1">
+                      Status:
+                    </span>
+                    {(
+                      [
+                        { key: 'all', label: 'All' },
+                        { key: 'completed', label: 'Completed' },
+                        { key: 'partial_warning', label: 'Warning' },
+                        { key: 'failed', label: 'Failed' },
+                      ] as const
+                    ).map((item) => (
+                      <button
+                        key={item.key}
+                        type="button"
+                        onClick={() => setSyncStatusFilter(item.key)}
+                        className={`px-2.5 py-1 rounded text-[11px] font-bold border transition-colors cursor-pointer ${
+                          syncStatusFilter === item.key
+                            ? 'bg-ustp-blue text-white border-ustp-blue'
+                            : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'
+                        }`}
+                      >
+                        {item.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
               </div>
+
+              {filteredSyncLogs.length === 0 ? (
+                <EmptyState
+                  title={
+                    (metrics?.sync_logs || []).length === 0
+                      ? 'No Synchronization Runs Recorded Yet'
+                      : 'No Sync Logs Match Your Filters'
+                  }
+                  description={
+                    (metrics?.sync_logs || []).length === 0
+                      ? 'Run an Account & Roster Sync above to reconcile approved registered accounts with Course Hubs.'
+                      : 'Try adjusting your search query or trigger/status tags.'
+                  }
+                />
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse text-xs font-mono tabular-nums">
+                    <thead>
+                      <tr className="bg-slate-50 border-b border-slate-200 text-slate-600 font-sans font-bold">
+                        <th className="py-3 px-4">Sync ID</th>
+                        <th className="py-3 px-4">Semester</th>
+                        <th className="py-3 px-4">Triggered By</th>
+                        <th className="py-3 px-4">Type</th>
+                        <th className="py-3 px-4 text-right">
+                          Accounts Synced
+                        </th>
+                        <th className="py-3 px-4 text-right">Channels</th>
+                        <th className="py-3 px-4 text-right">Duration</th>
+                        <th className="py-3 px-4">Status</th>
+                        <th className="py-3 px-4">Executed At</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-200">
+                      {filteredSyncLogs.map((log) => (
+                        <tr key={log.id} className="hover:bg-slate-50">
+                          <td className="py-3 px-4 font-bold text-ustp-navy">
+                            #{log.id}
+                          </td>
+                          <td className="py-3 px-4 font-bold">
+                            {log.semester_code}
+                          </td>
+                          <td className="py-3 px-4 font-sans">
+                            {log.triggered_by}
+                          </td>
+                          <td className="py-3 px-4 font-sans">
+                            <span className="px-2 py-0.5 rounded bg-slate-100 text-slate-700 border border-slate-200 font-bold text-[10px] uppercase">
+                              {log.sync_type === 'manual_admin'
+                                ? 'Manual'
+                                : 'Scheduled'}
+                            </span>
+                          </td>
+                          <td className="py-3 px-4 text-right font-bold text-ustp-navy">
+                            {log.total_updated.toLocaleString()}
+                          </td>
+                          <td className="py-3 px-4 text-right">
+                            {log.channels_provisioned}
+                          </td>
+                          <td className="py-3 px-4 text-right text-slate-500">
+                            {log.duration_ms}ms
+                          </td>
+                          <td className="py-3 px-4">
+                            <span
+                              className={`px-2 py-0.5 rounded font-sans font-bold text-[11px] uppercase ${
+                                log.status === 'failed'
+                                  ? 'bg-red-100 text-red-800'
+                                  : log.status === 'partial_warning'
+                                  ? 'bg-amber-100 text-amber-800'
+                                  : 'bg-emerald-100 text-emerald-800'
+                              }`}
+                            >
+                              {log.status.replace('_', ' ')}
+                            </span>
+                          </td>
+                          <td className="py-3 px-4 text-slate-500 whitespace-nowrap">
+                            {log.executed_at
+                              ? new Date(log.executed_at).toLocaleString()
+                              : '—'}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
           </section>
         ) : (
-          /* TAB 4: SYSTEM METRICS & IMMUTABLE ANNOUNCEMENT AUDIT TRAIL (NFR-03_REV) */
+          /* ================================================================
+             SECTION 4: SYSTEM METRICS & IMMUTABLE AUDIT TRAIL (SEARCH + TAGS)
+             ================================================================ */
           <section className="space-y-5">
-            <div className="bg-white border border-slate-200 rounded-lg overflow-hidden">
-              <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between">
+            {/* Real PostgreSQL Platform Health Breakdown */}
+            <div className="bg-white border border-slate-200 rounded-lg p-5 space-y-3.5">
+              <div className="flex items-center justify-between gap-2">
                 <div>
                   <h2 className="text-sm font-extrabold text-ustp-text flex items-center gap-2">
                     <Activity className="w-4 h-4 text-ustp-navy" />
-                    <span>
-                      Immutable Announcement Audit Trail
-                    </span>
+                    <span>Live Platform Health Metrics</span>
+                  </h2>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Real-time metrics computed directly from ClariFy PostgreSQL tables.
+                  </p>
+                </div>
+                <span className="text-[11px] font-mono font-bold tabular-nums px-2.5 py-1 rounded bg-emerald-50 text-emerald-800 border border-emerald-200">
+                  API: {latencyInfo.primaryDisplay}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                <div className="bg-slate-50 border border-slate-200 rounded-md p-3.5">
+                  <p className="text-[11px] font-bold text-slate-500 uppercase">
+                    Verification Ratio
+                  </p>
+                  <p className="text-lg font-extrabold text-ustp-navy font-mono tabular-nums mt-0.5">
+                    {verificationRatePercent}%
+                  </p>
+                  <p className="text-[11px] text-slate-500 font-mono tabular-nums">
+                    {verifiedAccountsCount} approved of{' '}
+                    {totalRegisteredAccountsCount} registered
+                  </p>
+                </div>
+
+                <div className="bg-slate-50 border border-slate-200 rounded-md p-3.5">
+                  <p className="text-[11px] font-bold text-slate-500 uppercase">
+                    Overall Read Reach
+                  </p>
+                  <p className="text-lg font-extrabold text-ustp-navy font-mono tabular-nums mt-0.5">
+                    {(metrics?.overall_read_reach_percentage ?? 0).toFixed(1)}%
+                  </p>
+                  <p className="text-[11px] text-slate-500 font-mono tabular-nums">
+                    Across {metrics?.published_announcements_count ?? 0}{' '}
+                    published notices
+                  </p>
+                </div>
+
+                <div className="bg-slate-50 border border-slate-200 rounded-md p-3.5">
+                  <p className="text-[11px] font-bold text-slate-500 uppercase flex items-center gap-1">
+                    <AlertTriangle className="w-3 h-3 text-red-600" />
+                    <span>Urgent &amp; SMS Notices</span>
+                  </p>
+                  <p className="text-lg font-extrabold text-ustp-navy font-mono tabular-nums mt-0.5">
+                    {(metrics?.urgent_announcements_count ?? 0).toLocaleString()}
+                  </p>
+                  <p className="text-[11px] text-slate-500 font-mono tabular-nums">
+                    {metrics?.sms_fallback_dispatched_count ?? 0} with SMS
+                    fallback
+                  </p>
+                </div>
+
+                <div className="bg-slate-50 border border-slate-200 rounded-md p-3.5">
+                  <p className="text-[11px] font-bold text-slate-500 uppercase">
+                    Active Channels
+                  </p>
+                  <p className="text-lg font-extrabold text-ustp-navy font-mono tabular-nums mt-0.5">
+                    {(metrics?.active_channels_count ?? 0).toLocaleString()}
+                  </p>
+                  <p className="text-[11px] text-slate-500 font-mono tabular-nums">
+                    {metrics?.course_hubs_count ?? 0} top-level Course Hubs
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Searchable & Taggable Immutable Announcement Audit Trail */}
+            <div className="bg-white border border-slate-200 rounded-lg overflow-hidden">
+              <div className="px-5 py-4 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div>
+                  <h2 className="text-sm font-extrabold text-ustp-text flex items-center gap-2">
+                    <History className="w-4 h-4 text-ustp-navy" />
+                    <span>Immutable Announcement Audit Trail</span>
                   </h2>
                   <p className="text-xs text-slate-500 mt-0.5">
                     Append-only log recording every edit made to published announcements, including previous/new content and editor identity.
                   </p>
                 </div>
+                <span className="text-xs font-mono font-bold tabular-nums text-slate-500">
+                  Showing {filteredAudits.length} of{' '}
+                  {(metrics?.announcement_audits || []).length} loaded (
+                  {auditsTotal} total)
+                </span>
               </div>
 
-              <div className="overflow-x-auto">
-                <table className="w-full text-left border-collapse text-xs">
-                  <thead>
-                    <tr className="bg-slate-50 border-b border-slate-200 text-slate-600 font-bold">
-                      <th className="py-3 px-4">Audit ID</th>
-                      <th className="py-3 px-4">Previous Title &rarr; New Title</th>
-                      <th className="py-3 px-4">Content Revision Diff</th>
-                      <th className="py-3 px-4">Editor</th>
-                      <th className="py-3 px-4">Timestamp</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-200">
-                    {(metrics?.announcement_audits || []).map((audit) => (
-                      <tr key={audit.id} className="hover:bg-slate-50 align-top">
-                        <td className="py-3 px-4 font-mono font-bold text-ustp-navy tabular-nums">
-                          #{audit.id} (Post #{audit.announcement_id})
-                        </td>
-                        <td className="py-3 px-4 space-y-1">
-                          <p className="text-red-700 line-through">
-                            {audit.previous_title}
-                          </p>
-                          <p className="font-bold text-emerald-800">
-                            {audit.new_title}
-                          </p>
-                        </td>
-                        <td className="py-3 px-4 max-w-md space-y-1">
-                          <p className="text-slate-500 text-[11px] line-clamp-2">
-                            Prev: {audit.previous_content}
-                          </p>
-                          <p className="text-ustp-text font-medium text-[11px] line-clamp-2">
-                            New: {audit.new_content}
-                          </p>
-                        </td>
-                        <td className="py-3 px-4 whitespace-nowrap">
-                          <p className="font-bold text-ustp-text">
-                            {audit.editor_name}
-                          </p>
-                          <p className="text-slate-500 font-mono text-[11px] tabular-nums">
-                            ID: {audit.editor_id} ({audit.editor_role})
-                          </p>
-                        </td>
-                        <td className="py-3 px-4 font-mono text-slate-600 tabular-nums whitespace-nowrap">
-                          {new Date(audit.edited_at).toLocaleString()}
-                        </td>
-                      </tr>
+              {/* Search & Filter Tag Controls */}
+              <div className="px-5 py-3.5 bg-slate-50/80 border-b border-slate-200 space-y-3">
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5">
+                  <div className="relative flex-1">
+                    <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                    <input
+                      type="text"
+                      value={auditSearch}
+                      onChange={(e) => setAuditSearch(e.target.value)}
+                      placeholder="Search audits by audit ID, post ID, title revision, content diff, or editor name..."
+                      aria-label="Search announcement audit trail"
+                      className="w-full pl-9 pr-8 py-2 text-xs bg-white border border-slate-300 rounded-md text-ustp-text placeholder:text-slate-400 focus:outline-none focus:border-ustp-navy"
+                    />
+                    {auditSearch && (
+                      <button
+                        type="button"
+                        onClick={() => setAuditSearch('')}
+                        aria-label="Clear audit search"
+                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700 cursor-pointer"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
+
+                  {hasActiveAuditFilters && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAuditSearch('');
+                        setAuditEditorRoleFilter('all');
+                        setAuditChangeTypeFilter('all');
+                      }}
+                      className="inline-flex items-center justify-center gap-1 px-3 py-2 text-xs font-bold text-slate-600 bg-white border border-slate-300 rounded-md hover:bg-slate-100 cursor-pointer shrink-0"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5" />
+                      <span>Reset Filters</span>
+                    </button>
+                  )}
+                </div>
+
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                  {/* Editor Role Filter Tags */}
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="text-[11px] font-bold uppercase tracking-wide text-slate-500 mr-1">
+                      Editor Role:
+                    </span>
+                    {(
+                      [
+                        { key: 'all', label: 'All Editors' },
+                        { key: 'faculty', label: 'Faculty' },
+                        { key: 'dept_head', label: 'Dept Head' },
+                        { key: 'it_admin', label: 'IT Admin' },
+                      ] as const
+                    ).map((item) => (
+                      <button
+                        key={item.key}
+                        type="button"
+                        onClick={() => setAuditEditorRoleFilter(item.key)}
+                        className={`px-2.5 py-1 rounded text-[11px] font-bold border transition-colors cursor-pointer ${
+                          auditEditorRoleFilter === item.key
+                            ? 'bg-ustp-navy text-ustp-gold border-ustp-navy'
+                            : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'
+                        }`}
+                      >
+                        {item.label}
+                      </button>
                     ))}
-                  </tbody>
-                </table>
+                  </div>
+
+                  {/* Revision Change Type Filter Tags */}
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="text-[11px] font-bold uppercase tracking-wide text-slate-500 mr-1">
+                      Change Type:
+                    </span>
+                    {(
+                      [
+                        { key: 'all', label: 'All Changes' },
+                        { key: 'title_changed', label: 'Title Changed' },
+                        { key: 'content_changed', label: 'Content Changed' },
+                      ] as const
+                    ).map((item) => (
+                      <button
+                        key={item.key}
+                        type="button"
+                        onClick={() => setAuditChangeTypeFilter(item.key)}
+                        className={`px-2.5 py-1 rounded text-[11px] font-bold border transition-colors cursor-pointer ${
+                          auditChangeTypeFilter === item.key
+                            ? 'bg-ustp-blue text-white border-ustp-blue'
+                            : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'
+                        }`}
+                      >
+                        {item.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
               </div>
+
+              {filteredAudits.length === 0 ? (
+                <EmptyState
+                  title={
+                    (metrics?.announcement_audits || []).length === 0
+                      ? 'No Announcement Revisions Logged Yet'
+                      : 'No Audit Records Match Your Filters'
+                  }
+                  description={
+                    (metrics?.announcement_audits || []).length === 0
+                      ? 'When Faculty or Department Heads edit a published announcement, an immutable before/after audit record appears here.'
+                      : 'Try clearing your search input or switching the editor role and change type tags.'
+                  }
+                />
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse text-xs">
+                    <thead>
+                      <tr className="bg-slate-50 border-b border-slate-200 text-slate-600 font-bold">
+                        <th className="py-3 px-4">Audit / Post ID</th>
+                        <th className="py-3 px-4">
+                          Previous Title &rarr; New Title
+                        </th>
+                        <th className="py-3 px-4">Content Revision Diff</th>
+                        <th className="py-3 px-4">Editor</th>
+                        <th className="py-3 px-4">Timestamp</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-200">
+                      {filteredAudits.map((audit) => {
+                        const titleChanged =
+                          audit.previous_title.trim() !==
+                          audit.new_title.trim();
+                        const contentChanged =
+                          audit.previous_content.trim() !==
+                          audit.new_content.trim();
+
+                        return (
+                          <tr
+                            key={audit.id}
+                            className="hover:bg-slate-50 align-top"
+                          >
+                            <td className="py-3 px-4 font-mono font-bold text-ustp-navy tabular-nums whitespace-nowrap">
+                              <p>#{audit.id}</p>
+                              <p className="text-[11px] font-normal text-slate-500">
+                                Post #{audit.announcement_id}
+                              </p>
+                              <div className="flex flex-wrap gap-1 mt-1.5 font-sans">
+                                {titleChanged && (
+                                  <span className="px-1.5 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200 text-[10px] font-bold">
+                                    TITLE
+                                  </span>
+                                )}
+                                {contentChanged && (
+                                  <span className="px-1.5 py-0.5 rounded bg-sky-50 text-ustp-blue border border-sky-200 text-[10px] font-bold">
+                                    CONTENT
+                                  </span>
+                                )}
+                              </div>
+                            </td>
+                            <td className="py-3 px-4 space-y-1">
+                              {titleChanged ? (
+                                <>
+                                  <p className="text-red-700 line-through">
+                                    {audit.previous_title}
+                                  </p>
+                                  <p className="font-bold text-emerald-800">
+                                    {audit.new_title}
+                                  </p>
+                                </>
+                              ) : (
+                                <p className="font-bold text-ustp-text">
+                                  {audit.new_title}
+                                </p>
+                              )}
+                            </td>
+                            <td className="py-3 px-4 max-w-md space-y-1">
+                              <p className="text-slate-500 text-[11px] line-clamp-2">
+                                Prev: {audit.previous_content}
+                              </p>
+                              <p className="text-ustp-text font-medium text-[11px] line-clamp-2">
+                                New: {audit.new_content}
+                              </p>
+                            </td>
+                            <td className="py-3 px-4 whitespace-nowrap">
+                              <p className="font-bold text-ustp-text">
+                                {audit.editor_name}
+                              </p>
+                              <div className="flex items-center gap-1.5 mt-1">
+                                <span
+                                  className={`px-1.5 py-0.5 rounded text-[10px] font-bold border uppercase ${getRoleTagStyle(
+                                    audit.editor_role
+                                  )}`}
+                                >
+                                  {ROLE_LABELS[audit.editor_role] ||
+                                    audit.editor_role}
+                                </span>
+                                <span className="text-slate-500 font-mono text-[11px] tabular-nums">
+                                  ID #{audit.editor_id}
+                                </span>
+                              </div>
+                            </td>
+                            <td className="py-3 px-4 font-mono text-slate-600 tabular-nums whitespace-nowrap">
+                              {new Date(audit.edited_at).toLocaleString()}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
           </section>
         )}
       </div>
     </AppShell>
+  );
+}
+
+export default function AdminConsolePage() {
+  return (
+    <Suspense fallback={null}>
+      <AdminConsoleContent />
+    </Suspense>
   );
 }

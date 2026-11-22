@@ -20,6 +20,8 @@ export interface User {
   avatar_url?: string | null;
   role: UserRole;
   verification_status: VerificationStatus;
+  created_at?: string | null;
+  verified_at?: string | null;
   academic_profile?: AcademicProfile;
 }
 
@@ -183,13 +185,30 @@ export interface PrismsSyncLog {
   executed_at: string;
 }
 
+export interface AdminRoleBreakdown {
+  student: number;
+  faculty: number;
+  dept_head: number;
+  it_admin: number;
+}
+
 export interface AdminMetricsResponse {
   active_users_count: number;
+  total_registered_users_count?: number;
   verified_accounts_count: number;
   pending_verifications_count: number;
+  rejected_verifications_count?: number;
+  role_breakdown?: AdminRoleBreakdown;
+  department_breakdown?: Record<string, number>;
+  active_channels_count?: number;
+  course_hubs_count?: number;
+  published_announcements_count?: number;
+  urgent_announcements_count?: number;
   push_queue_latency_seconds: number;
+  api_latency_ms?: number;
   sms_fallback_dispatched_count: number;
   overall_read_reach_percentage: number;
+  announcement_audits_total?: number;
   sync_logs: PrismsSyncLog[];
   announcement_audits: AnnouncementAudit[];
 }

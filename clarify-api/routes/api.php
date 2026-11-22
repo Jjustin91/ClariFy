@@ -93,13 +93,17 @@ Route::prefix('v1')->group(function () {
         Route::post('/threads/{threadId}/convert-faq', [ThreadController::class, 'convertToFaq']);
         Route::get('/instructors', [InstructorController::class, 'index']);
 
-        // IT Admin Console & Mobile Push Tokens
-        Route::get('/admin/users/pending', [AccountController::class, 'pendingUsers']);
-        Route::patch('/admin/users/{userId}/verify', [AccountController::class, 'verifyUser']);
-        Route::get('/admin/users', [AccountController::class, 'index']);
-        Route::patch('/admin/users/{userId}/role', [AccountController::class, 'updateRole']);
-        Route::post('/admin/sync-prisms', [AccountController::class, 'syncPrisms']);
-        Route::get('/admin/metrics', [AccountController::class, 'metrics']);
+        // IT Admin Console (Strictly restricted to it_admin role)
+        Route::middleware('it.admin')->group(function () {
+            Route::get('/admin/users/pending', [AccountController::class, 'pendingUsers']);
+            Route::patch('/admin/users/{userId}/verify', [AccountController::class, 'verifyUser']);
+            Route::get('/admin/users', [AccountController::class, 'index']);
+            Route::patch('/admin/users/{userId}/role', [AccountController::class, 'updateRole']);
+            Route::post('/admin/sync-prisms', [AccountController::class, 'syncPrisms']);
+            Route::get('/admin/metrics', [AccountController::class, 'metrics']);
+        });
+
+        // Mobile Push Tokens
         Route::post('/devices/tokens', [DeviceTokenController::class, 'store']);
         Route::post('/devices/token', [DeviceTokenController::class, 'store']);
     });

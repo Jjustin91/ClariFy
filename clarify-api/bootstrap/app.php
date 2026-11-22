@@ -9,6 +9,7 @@ use Illuminate\Validation\ValidationException;
 use Symfony\Component\HttpKernel\Exception\AccessDeniedHttpException;
 use App\Http\Middleware\EnsureAccountVerified;
 use App\Http\Middleware\EnforceChannelScope;
+use App\Http\Middleware\EnsureItAdmin;
 
 return Application::configure(basePath: dirname(__DIR__))
     ->withRouting(
@@ -25,6 +26,7 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->alias([
             'verified.account' => EnsureAccountVerified::class,
             'channel.scope'    => EnforceChannelScope::class,
+            'it.admin'         => EnsureItAdmin::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions) {

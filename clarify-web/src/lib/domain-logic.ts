@@ -1,7 +1,9 @@
 import type {
   Announcement,
+  AnnouncementAudit,
   Channel,
   NewActivityBreakdown,
+  PrismsSyncLog,
   QaThread,
   ReadReach,
   RealtimeEvent,
@@ -1396,6 +1398,255 @@ export function reconcileFetchedChannelsWithStaleGuard(params: {
 
   return { channels: merged, isStale: true };
 }
+
+// ============================================================================
+// IT ADMIN CONSOLE: TAB ROUTING, SEARCH & FILTER TAGS, LIVE LATENCY FORMATTING
+// ============================================================================
+
+export type AdminSectionTab = 'verifications' | 'rbac' | 'roster-sync' | 'metrics';
+
+export const ADMIN_DEPARTMENT_TAGS = ['CITC', 'CEA', 'COT', 'CSM'] as const;
+
+export function parseAdminSectionTab(
+  raw: string | null | undefined
+): AdminSectionTab {
+  const normalized = (raw || '').trim().toLowerCase();
+  if (normalized === 'rbac') return 'rbac';
+  if (normalized === 'roster-sync' || normalized === 'prisms') return 'roster-sync';
+  if (normalized === 'metrics' || normalized === 'audits') return 'metrics';
+  return 'verifications';
+}
+
+export function getAdminSectionTitle(tab: AdminSectionTab): string {
+  switch (tab) {
+    case 'verifications':
+      return 'IT Admin — Account Verification Queue';
+    case 'rbac':
+      return 'IT Admin — RBAC Role Management';
+    case 'roster-sync':
+      return 'IT Admin — Account & Roster Sync Console';
+    case 'metrics':
+      return 'IT Admin — System Metrics & Audit Trail';
+  }
+}
+
+export type VerificationStatusFilter = 'pending' | 'rejected' | 'all';
+
+export function filterVerificationQueueUsers(
+  users: User[],
+  options: {
+    search?: string;
+    status?: VerificationStatusFilter;
+    role?: 'all' | 'student' | 'faculty';
+    department?: string;
+  } = {}
+): User[] {
+  const {
+    search = '',
+    status = 'pending',
+    role = 'all',
+    department = 'ALL',
+  } = options;
+  const query = search.trim().toLowerCase();
+  const deptFilter = department.trim().toUpperCase();
+
+  return users.filter((u) => {
+    if (status === 'pending' && u.verification_status !== 'pending') return false;
+    if (status === 'rejected' && u.verification_status !== 'rejected') return false;
+    if (
+      status === 'all' &&
+      u.verification_status !== 'pending' &&
+      u.verification_status !== 'rejected'
+    ) {
+      return false;
+    }
+
+    if (role !== 'all' && u.role !== role) return false;
+
+    const userDept = (u.academic_profile?.department || '').trim().toUpperCase();
+    if (deptFilter !== 'ALL' && userDept !== deptFilter) return false;
+
+    if (query) {
+      const haystack = [
+        u.name,
+        u.institutional_id,
+        u.email,
+        u.contact_number || '',
+        u.role,
+        u.academic_profile?.department || '',
+        u.academic_profile?.section || '',
+      ]
+        .join(' ')
+        .toLowerCase();
+      if (!haystack.includes(query)) return false;
+    }
+
+    return true;
+  });
+}
+
+export function filterRbacUsers(
+  users: User[],
+  options: {
+    search?: string;
+    role?: 'all' | UserRole;
+    department?: string;
+  } = {}
+): User[] {
+  const { search = '', role = 'all', department = 'ALL' } = options;
+  const query = search.trim().toLowerCase();
+  const deptFilter = department.trim().toUpperCase();
+
+  return users.filter((u) => {
+    if (role !== 'all' && u.role !== role) return false;
+
+    const userDept = (u.academic_profile?.department || '').trim().toUpperCase();
+    if (deptFilter !== 'ALL' && userDept !== deptFilter) return false;
+
+    if (query) {
+      const haystack = [
+        u.name,
+        u.institutional_id,
+        u.email,
+        u.contact_number || '',
+        u.role,
+        u.academic_profile?.department || '',
+        u.academic_profile?.section || '',
+      ]
+        .join(' ')
+        .toLowerCase();
+      if (!haystack.includes(query)) return false;
+    }
+
+    return true;
+  });
+}
+
+export function filterSyncLogs(
+  logs: PrismsSyncLog[],
+  options: {
+    search?: string;
+    syncType?: 'all' | 'manual_admin' | 'scheduled_midnight';
+    status?: 'all' | 'completed' | 'partial_warning' | 'failed';
+  } = {}
+): PrismsSyncLog[] {
+  const { search = '', syncType = 'all', status = 'all' } = options;
+  const query = search.trim().toLowerCase();
+
+  return logs.filter((log) => {
+    if (syncType !== 'all' && log.sync_type !== syncType) return false;
+    if (status !== 'all' && log.status !== status) return false;
+
+    if (query) {
+      const haystack = [
+        String(log.id),
+        `#${log.id}`,
+        log.semester_code,
+        log.triggered_by,
+        log.sync_type,
+        log.status,
+      ]
+        .join(' ')
+        .toLowerCase();
+      if (!haystack.includes(query)) return false;
+    }
+
+    return true;
+  });
+}
+
+export type AuditChangeTypeFilter = 'all' | 'title_changed' | 'content_changed';
+
+export function filterAnnouncementAudits(
+  audits: AnnouncementAudit[],
+  options: {
+    search?: string;
+    editorRole?: 'all' | UserRole;
+    changeType?: AuditChangeTypeFilter;
+  } = {}
+): AnnouncementAudit[] {
+  const { search = '', editorRole = 'all', changeType = 'all' } = options;
+  const query = search.trim().toLowerCase();
+
+  return audits.filter((audit) => {
+    if (editorRole !== 'all' && audit.editor_role !== editorRole) return false;
+
+    const titleChanged =
+      (audit.previous_title || '').trim() !== (audit.new_title || '').trim();
+    const contentChanged =
+      (audit.previous_content || '').trim() !== (audit.new_content || '').trim();
+
+    if (changeType === 'title_changed' && !titleChanged) return false;
+    if (changeType === 'content_changed' && !contentChanged) return false;
+
+    if (query) {
+      const haystack = [
+        String(audit.id),
+        `#${audit.id}`,
+        `post #${audit.announcement_id}`,
+        String(audit.announcement_id),
+        audit.previous_title || '',
+        audit.new_title || '',
+        audit.previous_content || '',
+        audit.new_content || '',
+        audit.editor_name || '',
+        audit.editor_role || '',
+      ]
+        .join(' ')
+        .toLowerCase();
+      if (!haystack.includes(query)) return false;
+    }
+
+    return true;
+  });
+}
+
+/**
+ * Formats measured backend/round-trip API latency against the <=2.0s SLA target.
+ * Never returns hardcoded mock values.
+ */
+export function formatMeasuredLatency(params: {
+  apiLatencyMs?: number | null;
+  clientRoundTripMs?: number | null;
+}): {
+  primaryDisplay: string;
+  secondaryMs: number | null;
+  seconds: number | null;
+  withinSla: boolean;
+} {
+  const rawMs =
+    typeof params.apiLatencyMs === 'number' &&
+    Number.isFinite(params.apiLatencyMs) &&
+    params.apiLatencyMs >= 0
+      ? params.apiLatencyMs
+      : typeof params.clientRoundTripMs === 'number' &&
+        Number.isFinite(params.clientRoundTripMs) &&
+        params.clientRoundTripMs >= 0
+      ? params.clientRoundTripMs
+      : null;
+
+  if (rawMs === null) {
+    return {
+      primaryDisplay: '—',
+      secondaryMs: null,
+      seconds: null,
+      withinSla: true,
+    };
+  }
+
+  const roundedMs = Math.max(1, Math.round(rawMs));
+  const seconds = Number((roundedMs / 1000).toFixed(2));
+  const primaryDisplay =
+    roundedMs < 1000 ? `${roundedMs}ms` : `${seconds.toFixed(2)}s`;
+
+  return {
+    primaryDisplay,
+    secondaryMs: roundedMs,
+    seconds,
+    withinSla: seconds <= 2.0,
+  };
+}
+
 
 
 

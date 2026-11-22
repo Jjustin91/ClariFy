@@ -878,9 +878,19 @@ export async function getInstructorsApi(params?: {
 
 export async function getPendingUsersApi(params?: {
   search?: string;
+  status?: 'pending' | 'rejected' | 'all';
+  role?: string;
+  department?: string;
+  per_page?: number;
 }): Promise<PaginatedResponse<User>> {
   const qs = new URLSearchParams();
   if (params?.search) qs.set('search', params.search);
+  if (params?.status) qs.set('status', params.status);
+  if (params?.role && params.role !== 'all') qs.set('role', params.role);
+  if (params?.department && params.department !== 'ALL') {
+    qs.set('department', params.department);
+  }
+  if (params?.per_page) qs.set('per_page', String(params.per_page));
   const queryString = qs.toString();
   return requestLaravel<PaginatedResponse<User>>(
     `/admin/users/pending${queryString ? `?${queryString}` : ''}`
@@ -902,9 +912,15 @@ export async function verifyUserAccountApi(
 
 export async function getAllUsersApi(params?: {
   search?: string;
+  role?: string;
+  department?: string;
 }): Promise<SingleResourceResponse<User[]>> {
   const qs = new URLSearchParams();
   if (params?.search) qs.set('search', params.search);
+  if (params?.role && params.role !== 'all') qs.set('role', params.role);
+  if (params?.department && params.department !== 'ALL') {
+    qs.set('department', params.department);
+  }
   const queryString = qs.toString();
   return requestLaravel<SingleResourceResponse<User[]>>(
     `/admin/users${queryString ? `?${queryString}` : ''}`

@@ -9,11 +9,17 @@ import {
   createRetryableChatFileStore,
   enforceFaqAnonymity,
   filterAndSortAnnouncements,
+  filterAnnouncementAudits,
   filterQaThreads,
+  filterRbacUsers,
+  filterSyncLogs,
+  filterVerificationQueueUsers,
   formatEnrolledRosterSummary,
   formatHubActivityBreakdownChips,
+  formatMeasuredLatency,
   formatSubjectHashtag,
   formatUnreadBadgeCount,
+  getAdminSectionTitle,
   getChannelFacultyLabel,
   getFieldValidationError,
   getQaThreadFilterCounts,
@@ -27,6 +33,7 @@ import {
   isValidUstpEmail,
   normalizePhilippineMobileNumber,
   normalizeUstpEmail,
+  parseAdminSectionTab,
   patchChannelsOnThreadEvent,
   reconcileFetchedChannelsWithStaleGuard,
   resolveHubUpdateDestination,
@@ -34,7 +41,14 @@ import {
   validateChatAttachmentFile,
   validateUstpEmail,
 } from './domain-logic';
-import type { Announcement, Channel, QaThread, User } from '../types/api';
+import type {
+  Announcement,
+  AnnouncementAudit,
+  Channel,
+  PrismsSyncLog,
+  QaThread,
+  User,
+} from '../types/api';
 
 test('getUnsentMessagePlaceholder returns null for active messages and appropriate sender/viewer label when unsent', () => {
   assert.equal(
@@ -1017,6 +1031,227 @@ test('Isolated Q&A unread_count badge formatting, all-hub subscription list, thr
   assert.equal(guardedFresh.isStale, false);
   assert.equal(guardedFresh.channels[0].unread_count, 2);
 });
+
+test('IT Admin Console tab parsing, search & tag filters (Sections 1, 2, 3, 4), and live latency formatting', () => {
+  // 1. Tab parsing & titles
+  assert.equal(parseAdminSectionTab(null), 'verifications');
+  assert.equal(parseAdminSectionTab('verifications'), 'verifications');
+  assert.equal(parseAdminSectionTab('rbac'), 'rbac');
+  assert.equal(parseAdminSectionTab('roster-sync'), 'roster-sync');
+  assert.equal(parseAdminSectionTab('prisms'), 'roster-sync');
+  assert.equal(parseAdminSectionTab('metrics'), 'metrics');
+  assert.equal(
+    getAdminSectionTitle('roster-sync'),
+    'IT Admin — Account & Roster Sync Console'
+  );
+
+  // 2. Section 1: Verification Queue (pending + rejected + role + department + search)
+  const queueSample: User[] = [
+    {
+      id: 1,
+      institutional_id: '2026100101',
+      name: 'Maria Clara Santos',
+      email: 'maria.santos@ustp.edu.ph',
+      contact_number: '+639171112222',
+      role: 'student',
+      verification_status: 'pending',
+      academic_profile: {
+        campus: 'CDO Campus',
+        college: 'CITC',
+        department: 'CITC',
+        program: 'BSIT',
+        year_level: 3,
+        section: 'IT3R2',
+        semester_code: '2026-1ST-SEM',
+      },
+    },
+    {
+      id: 2,
+      institutional_id: '2026200202',
+      name: 'Engr. Marco Reyes',
+      email: 'marco.reyes@ustp.edu.ph',
+      contact_number: '+639183334444',
+      role: 'faculty',
+      verification_status: 'rejected',
+      academic_profile: {
+        campus: 'CDO Campus',
+        college: 'CEA',
+        department: 'CEA',
+        program: null,
+        year_level: null,
+        section: 'CEA-FAC',
+        semester_code: '2026-1ST-SEM',
+      },
+    },
+    {
+      id: 3,
+      institutional_id: '2026300303',
+      name: 'Approved Student',
+      email: 'approved@ustp.edu.ph',
+      contact_number: null,
+      role: 'student',
+      verification_status: 'approved',
+      academic_profile: {
+        campus: 'CDO Campus',
+        college: 'CITC',
+        department: 'CITC',
+        program: 'BSIT',
+        year_level: 3,
+        section: 'IT3R1',
+        semester_code: '2026-1ST-SEM',
+      },
+    },
+  ];
+
+  assert.deepEqual(
+    filterVerificationQueueUsers(queueSample, { status: 'pending' }).map(
+      (u) => u.id
+    ),
+    [1]
+  );
+  assert.deepEqual(
+    filterVerificationQueueUsers(queueSample, { status: 'rejected' }).map(
+      (u) => u.id
+    ),
+    [2]
+  );
+  assert.deepEqual(
+    filterVerificationQueueUsers(queueSample, {
+      status: 'all',
+      department: 'CEA',
+      role: 'faculty',
+      search: '0918',
+    }).map((u) => u.id),
+    []
+  );
+  assert.deepEqual(
+    filterVerificationQueueUsers(queueSample, {
+      status: 'all',
+      department: 'CEA',
+      role: 'faculty',
+      search: '+63918',
+    }).map((u) => u.id),
+    [2]
+  );
+
+  // 3. Section 2: RBAC filtering by role, department, and search
+  const rbacSample: User[] = [
+    queueSample[2],
+    {
+      ...queueSample[1],
+      id: 4,
+      verification_status: 'approved',
+      role: 'dept_head',
+    },
+  ];
+  assert.deepEqual(
+    filterRbacUsers(rbacSample, { role: 'dept_head', department: 'CEA' }).map(
+      (u) => u.id
+    ),
+    [4]
+  );
+  assert.deepEqual(
+    filterRbacUsers(rbacSample, { search: 'it3r1' }).map((u) => u.id),
+    [3]
+  );
+
+  // 4. Section 3: Sync Logs filtering
+  const logsSample: PrismsSyncLog[] = [
+    {
+      id: 10,
+      semester_code: '2026-1ST-SEM',
+      triggered_by: 'ICTO Admin (90001)',
+      sync_type: 'manual_admin',
+      total_updated: 14,
+      channels_provisioned: 6,
+      status: 'completed',
+      duration_ms: 42,
+      executed_at: '2026-11-22T09:00:00.000Z',
+    },
+    {
+      id: 11,
+      semester_code: '2025-2ND-SEM',
+      triggered_by: 'System Cron',
+      sync_type: 'scheduled_midnight',
+      total_updated: 12,
+      channels_provisioned: 5,
+      status: 'failed',
+      duration_ms: 95,
+      executed_at: '2026-11-21T00:00:00.000Z',
+    },
+  ];
+  assert.deepEqual(
+    filterSyncLogs(logsSample, {
+      syncType: 'manual_admin',
+      status: 'completed',
+      search: '2026-1st',
+    }).map((l) => l.id),
+    [10]
+  );
+
+  // 5. Section 4: Audit Trail filtering by editor role, change type, and search
+  const auditsSample: AnnouncementAudit[] = [
+    {
+      id: 50,
+      announcement_id: 201,
+      previous_title: 'Old Midterm Schedule',
+      new_title: 'Updated Midterm Schedule',
+      previous_content: 'Same room 302',
+      new_content: 'Same room 302',
+      editor_id: 99,
+      editor_name: 'Prof. Jay Rojo',
+      editor_role: 'faculty',
+      edited_at: '2026-11-22T08:00:00.000Z',
+    },
+    {
+      id: 51,
+      announcement_id: 202,
+      previous_title: 'Campus Holiday Memo',
+      new_title: 'Campus Holiday Memo',
+      previous_content: 'Classes suspended Monday.',
+      new_content: 'Classes suspended Monday and Tuesday.',
+      editor_id: 105,
+      editor_name: 'Dr. Elena Cruz',
+      editor_role: 'dept_head',
+      edited_at: '2026-11-22T09:00:00.000Z',
+    },
+  ];
+
+  assert.deepEqual(
+    filterAnnouncementAudits(auditsSample, {
+      changeType: 'title_changed',
+      editorRole: 'faculty',
+    }).map((a) => a.id),
+    [50]
+  );
+  assert.deepEqual(
+    filterAnnouncementAudits(auditsSample, {
+      changeType: 'content_changed',
+      search: 'tuesday',
+    }).map((a) => a.id),
+    [51]
+  );
+
+  // 6. Live measured latency formatting (zero fake 0.84s fallback)
+  const missingLatency = formatMeasuredLatency({});
+  assert.equal(missingLatency.primaryDisplay, '—');
+  assert.equal(missingLatency.seconds, null);
+
+  const serverFast = formatMeasuredLatency({
+    apiLatencyMs: 38.4,
+    clientRoundTripMs: 240,
+  });
+  assert.equal(serverFast.primaryDisplay, '38ms');
+  assert.equal(serverFast.withinSla, true);
+
+  const clientFallbackSlow = formatMeasuredLatency({
+    apiLatencyMs: null,
+    clientRoundTripMs: 2450,
+  });
+  assert.equal(clientFallbackSlow.primaryDisplay, '2.45s');
+  assert.equal(clientFallbackSlow.withinSla, false);
+});
+
 
 
 

@@ -14,7 +14,10 @@ import {
 } from 'lucide-react';
 import { useClarify } from '../../context/ClarifyContext';
 import { logoutApi } from '../../lib/api-client';
-import { getTopLevelCourseHubs } from '../../lib/domain-logic';
+import {
+  type AdminSectionTab,
+  getTopLevelCourseHubs,
+} from '../../lib/domain-logic';
 import { AnnouncementFormModal } from '../modals/AnnouncementFormModal';
 import { ProfileSettingsModal } from '../modals/ProfileSettingsModal';
 import { ChannelRosterModal } from '../modals/ChannelRosterModal';
@@ -22,9 +25,11 @@ import { UrgentAnnouncementModal } from '../modals/UrgentAnnouncementModal';
 
 export function AppShell({
   title,
+  activeAdminTab,
   children,
 }: {
   title: string;
+  activeAdminTab?: AdminSectionTab;
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
@@ -38,6 +43,7 @@ export function AppShell({
     isDrawerOpen,
     setIsDrawerOpen,
     setIsSettingsModalOpen,
+    adminPendingCount,
     toasts,
     dismissToast,
     showToast,
@@ -144,13 +150,38 @@ export function AppShell({
   const courseHubs = getTopLevelCourseHubs(channels);
   const primaryChannelId = courseHubs[0]?.id || channels[0]?.id || 1;
   const isAdmin = user.role === 'it_admin';
+  const resolvedAdminTab: AdminSectionTab = activeAdminTab || 'verifications';
 
-  const navItems = isAdmin
+  const navItems: {
+    label: string;
+    href: string;
+    active: boolean;
+    badge?: number | null;
+  }[] = isAdmin
     ? [
         {
-          label: 'Admin Console',
-          href: '/admin',
-          active: pathname.startsWith('/admin'),
+          label: 'Account Verification Queue',
+          href: '/admin?tab=verifications',
+          active:
+            pathname.startsWith('/admin') && resolvedAdminTab === 'verifications',
+          badge: adminPendingCount,
+        },
+        {
+          label: 'RBAC Role Management',
+          href: '/admin?tab=rbac',
+          active: pathname.startsWith('/admin') && resolvedAdminTab === 'rbac',
+        },
+        {
+          label: 'Account & Roster Sync',
+          href: '/admin?tab=roster-sync',
+          active:
+            pathname.startsWith('/admin') && resolvedAdminTab === 'roster-sync',
+        },
+        {
+          label: 'System Metrics & Audit Trail',
+          href: '/admin?tab=metrics',
+          active:
+            pathname.startsWith('/admin') && resolvedAdminTab === 'metrics',
         },
       ]
     : [
@@ -338,13 +369,25 @@ export function AppShell({
                   key={item.href}
                   href={item.href}
                   onClick={handleNavClickOnMobile}
-                  className={`block w-full px-5 py-3.5 text-right text-sm font-bold transition-colors ${
+                  aria-current={item.active ? 'page' : undefined}
+                  className={`flex items-center justify-end gap-2 w-full px-5 py-3.5 text-right text-sm font-bold transition-colors ${
                     item.active
                       ? 'bg-ustp-orange-dark text-ustp-text font-extrabold'
                       : 'hover:bg-ustp-orange-dark/50 text-ustp-text'
                   }`}
                 >
-                  {item.label}
+                  <span className="leading-snug">{item.label}</span>
+                  {typeof item.badge === 'number' && (
+                    <span
+                      className={`inline-flex items-center justify-center min-w-[22px] h-5 px-1.5 rounded text-[11px] font-mono font-extrabold tabular-nums shrink-0 ${
+                        item.badge > 0
+                          ? 'bg-ustp-navy text-ustp-gold'
+                          : 'bg-ustp-navy/15 text-ustp-navy'
+                      }`}
+                    >
+                      {item.badge}
+                    </span>
+                  )}
                 </Link>
               ))}
             </nav>

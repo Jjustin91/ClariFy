@@ -20,6 +20,8 @@ class UserResource extends JsonResource
             'avatar_url' => $this->avatar_url,
             'role' => $this->role,
             'verification_status' => $this->verification_status,
+            'created_at' => $this->created_at?->toIso8601String(),
+            'verified_at' => $this->verified_at?->toIso8601String(),
             'academic_profile' => $profile ? [
                 'campus' => $profile->campus,
                 'college' => $profile->college,
