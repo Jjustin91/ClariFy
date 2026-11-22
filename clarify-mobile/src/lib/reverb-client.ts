@@ -66,13 +66,18 @@ function parseApiUrl(apiBaseUrl: string): { host: string; isHttps: boolean } {
     };
   }
 }
-
+const BUNDLED_REVERB_ENV: Record<string, string | undefined> = {
+  EXPO_PUBLIC_REVERB_APP_KEY: process.env.EXPO_PUBLIC_REVERB_APP_KEY,
+  EXPO_PUBLIC_REVERB_HOST: process.env.EXPO_PUBLIC_REVERB_HOST,
+  EXPO_PUBLIC_REVERB_PORT: process.env.EXPO_PUBLIC_REVERB_PORT,
+  EXPO_PUBLIC_REVERB_SCHEME: process.env.EXPO_PUBLIC_REVERB_SCHEME,
+};
 /**
  * Resolves Reverb WebSocket connection config from EXPO_PUBLIC_REVERB_* env vars
  * and API_BASE_URL. Enforces WSS on port 443 (no cleartext WS) for all non-local hosts.
  */
 export function resolveReverbConfig(
-  env: Record<string, string | undefined> = process.env,
+  env: Record<string, string | undefined> = BUNDLED_REVERB_ENV,
   apiBaseUrl: string = API_BASE_URL
 ): ResolvedReverbConfig | null {
   const normalizedApiBase = apiBaseUrl.replace(/\/+$/, '');
@@ -121,7 +126,7 @@ export function resolveReverbConfig(
  * plus a user-facing status message when EXPO_PUBLIC_REVERB_APP_KEY is blank on a non-local host.
  */
 export function getReverbConfigurationStatus(
-  env: Record<string, string | undefined> = process.env,
+  env: Record<string, string | undefined> = BUNDLED_REVERB_ENV,
   apiBaseUrl: string = API_BASE_URL
 ): ReverbConfigurationStatus {
   const config = resolveReverbConfig(env, apiBaseUrl);
