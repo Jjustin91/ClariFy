@@ -825,6 +825,7 @@ export async function sendChannelChatMessageApi(
     {
       method: 'POST',
       body,
+      ...(attachmentFile ? { timeoutMs: UPLOAD_REQUEST_TIMEOUT_MS } : {}),
     }
   );
 }

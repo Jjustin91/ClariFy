@@ -1460,3 +1460,136 @@ export function buildProfileUpdateFormData(params: {
   return formData;
 }
 
+/**
+ * Formats an audio duration in seconds as `M:SS` using safe non-negative integers.
+ */
+export function formatAudioDuration(
+  seconds: number | null | undefined
+): string {
+  if (typeof seconds !== 'number' || !Number.isFinite(seconds) || seconds <= 0) {
+    return '0:00';
+  }
+  const rounded = Math.floor(seconds);
+  const mins = Math.floor(rounded / 60);
+  const secs = rounded % 60;
+  return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
+}
+
+const VOICE_EXTENSION_TO_MIME: Record<string, string> = {
+  m4a: 'audio/mp4',
+  mp3: 'audio/mpeg',
+  wav: 'audio/wav',
+  ogg: 'audio/ogg',
+  webm: 'audio/webm',
+};
+
+/**
+ * Builds a validated NativeUploadFile descriptor for a recorded voice note
+ * so Laravel's `mimes:...,webm,ogg,wav,mp3,m4a` validation always succeeds.
+ */
+export function buildVoiceRecordingDescriptor(params: {
+  uri: string;
+  durationSec: number;
+  fileSize?: number | null;
+}): {
+  uri: string;
+  name: string;
+  type: string;
+  size: number;
+  durationSec: number;
+} {
+  const cleanUri = (params.uri || '').trim();
+  const pathWithoutQuery = cleanUri.split('?')[0] || '';
+  const rawExt = pathWithoutQuery.includes('.')
+    ? pathWithoutQuery.split('.').pop()!.toLowerCase()
+    : '';
+  const ext = Object.prototype.hasOwnProperty.call(
+    VOICE_EXTENSION_TO_MIME,
+    rawExt
+  )
+    ? rawExt
+    : 'm4a';
+  const mime = VOICE_EXTENSION_TO_MIME[ext] || 'audio/mp4';
+
+  const safeDuration =
+    typeof params.durationSec === 'number' &&
+    Number.isFinite(params.durationSec) &&
+    params.durationSec > 0
+      ? Math.max(1, Math.round(params.durationSec))
+      : 1;
+  const clockLabel = formatAudioDuration(safeDuration).replace(':', 'm');
+  const safeSize =
+    typeof params.fileSize === 'number' &&
+    Number.isFinite(params.fileSize) &&
+    params.fileSize > 0
+      ? Math.round(params.fileSize)
+      : Math.max(1024, safeDuration * 16000);
+
+  return {
+    uri: cleanUri,
+    name: `Voice_Note_${clockLabel}s.${ext}`,
+    type: mime,
+    size: safeSize,
+    durationSec: safeDuration,
+  };
+}
+
+const IMAGE_EXTENSION_TO_MIME: Record<string, string> = {
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  png: 'image/png',
+  webp: 'image/webp',
+  gif: 'image/gif',
+};
+
+/**
+ * Normalizes an ImagePicker asset into a Laravel-safe `{ uri, name, type, size }` descriptor.
+ */
+export function normalizePickedChatImage(params: {
+  uri: string;
+  fileName?: string | null;
+  mimeType?: string | null;
+  fileSize?: number | null;
+}): {
+  uri: string;
+  name: string;
+  type: string;
+  size: number;
+} {
+  const cleanUri = (params.uri || '').trim();
+  const rawName = (params.fileName || '').trim();
+  const uriBase = (cleanUri.split('?')[0] || '').split('/').pop() || '';
+  const candidateName = rawName || uriBase || `chat_photo_${Date.now()}.jpg`;
+  const rawExt = candidateName.includes('.')
+    ? candidateName.split('.').pop()!.toLowerCase()
+    : '';
+  const lowerMime = (params.mimeType || '').toLowerCase();
+
+  let ext = rawExt;
+  if (!Object.prototype.hasOwnProperty.call(IMAGE_EXTENSION_TO_MIME, ext)) {
+    if (lowerMime.includes('png')) ext = 'png';
+    else if (lowerMime.includes('webp')) ext = 'webp';
+    else if (lowerMime.includes('gif')) ext = 'gif';
+    else ext = 'jpg';
+  }
+
+  const baseWithoutExt = candidateName.includes('.')
+    ? candidateName.replace(/\.[^.]+$/, '')
+    : candidateName;
+  const safeBase = baseWithoutExt.replace(/[^\w\-. ()[\]]+/g, '_') || 'photo';
+  const name = `${safeBase}.${ext}`;
+  const type = IMAGE_EXTENSION_TO_MIME[ext] || 'image/jpeg';
+  const size =
+    typeof params.fileSize === 'number' &&
+    Number.isFinite(params.fileSize) &&
+    params.fileSize > 0
+      ? Math.round(params.fileSize)
+      : 1024;
+
+  return {
+    uri: cleanUri,
+    name,
+    type,
+    size,
+  };
+}

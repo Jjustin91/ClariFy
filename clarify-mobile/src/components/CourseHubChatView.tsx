@@ -1,5 +1,15 @@
 import { Feather } from '@expo/vector-icons';
+import {
+  RecordingPresets,
+  requestRecordingPermissionsAsync,
+  setAudioModeAsync,
+  useAudioRecorder,
+  useAudioRecorderState,
+} from 'expo-audio';
 import * as Clipboard from 'expo-clipboard';
+import * as DocumentPicker from 'expo-document-picker';
+import * as ImagePicker from 'expo-image-picker';
+import * as WebBrowser from 'expo-web-browser';
 import React, {
   useCallback,
   useEffect,
@@ -17,6 +27,7 @@ import {
   Keyboard,
   type KeyboardEvent,
   KeyboardAvoidingView,
+  Linking,
   Modal,
   Platform,
   Pressable,
@@ -42,7 +53,15 @@ import {
   isFacultyChatRole,
   toInvertedChatList,
 } from '../lib/chat-reducer';
-import { getUnsentMessagePlaceholder } from '../lib/domain-logic';
+import {
+  buildVoiceRecordingDescriptor,
+  formatAudioDuration,
+  formatFileSize,
+  getUnsentMessagePlaceholder,
+  type NativeUploadFile,
+  normalizePickedChatImage,
+  validateChatAttachmentFile,
+} from '../lib/domain-logic';
 import { computeDebouncedRefreshDelayMs } from '../lib/realtime-reducer';
 import {
   subscribeChannelReverb,
@@ -56,8 +75,23 @@ import {
   touchTarget,
   typography,
 } from '../theme';
-import type { ApiError, ChatMessage, ChatSeenByUser } from '../types/api';
+import type {
+  ApiError,
+  ChatAttachment,
+  ChatMessage,
+  ChatSeenByUser,
+} from '../types/api';
+import { ChatVoicePlayer } from './ChatVoicePlayer';
 import { EmptyState, ErrorBanner } from './StateViews';
+
+interface StagedChatMedia {
+  uri: string;
+  name: string;
+  type: string;
+  size: number;
+  kind: 'image' | 'document' | 'voice';
+  durationSec?: number;
+}
 
 const CHAT_PAGE_LIMIT = 50;
 
@@ -223,6 +257,17 @@ export function CourseHubChatView({
   );
 
   const [draft, setDraft] = useState('');
+  const [stagedMedia, setStagedMedia] = useState<StagedChatMedia | null>(null);
+  const [isAttachSheetOpen, setIsAttachSheetOpen] = useState(false);
+  const [isRecordingVoice, setIsRecordingVoice] = useState(false);
+  const [activeVoiceId, setActiveVoiceId] = useState<string | null>(null);
+  const [lightboxMedia, setLightboxMedia] = useState<{
+    url: string;
+    name: string;
+  } | null>(null);
+  const [brokenImageUrls, setBrokenImageUrls] = useState<
+    Record<string, boolean>
+  >({});
   const [actionMenuTarget, setActionMenuTarget] = useState<ChatMessage | null>(
     null
   );
@@ -230,6 +275,13 @@ export function CourseHubChatView({
   const [appActiveEpoch, setAppActiveEpoch] = useState(0);
   const [androidKeyboardOverlap, setAndroidKeyboardOverlap] = useState(0);
   const [iosKeyboardOffset, setIosKeyboardOffset] = useState(96);
+
+  const audioRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+  const recorderState = useAudioRecorderState(audioRecorder, 250);
+  const recordingActiveRef = useRef<boolean>(false);
+  const retryAttachmentByTempIdRef = useRef<Record<string, NativeUploadFile>>(
+    {}
+  );
 
   const rootRef = useRef<React.ComponentRef<typeof View> | null>(null);
   const keyboardTopYRef = useRef<number | null>(null);
@@ -418,13 +470,27 @@ export function CourseHubChatView({
     clearDebouncedSyncTimer();
     latestFetchInFlightRef.current = null;
     olderFetchInFlightRef.current = null;
+    retryAttachmentByTempIdRef.current = {};
+    if (recordingActiveRef.current) {
+      recordingActiveRef.current = false;
+      void audioRecorder
+        .stop()
+        .catch(() => undefined)
+        .finally(() => {
+          void setAudioModeAsync({
+            allowsRecording: false,
+            playsInSilentMode: true,
+          }).catch(() => undefined);
+          setIsRecordingVoice(false);
+        });
+    }
     dispatch({ type: 'RESET', channelId });
     if (channelId > 0) {
       void fetchLatestChat('initial');
     }
-  }, [channelId, clearDebouncedSyncTimer, fetchLatestChat]);
+  }, [channelId, clearDebouncedSyncTimer, fetchLatestChat, audioRecorder]);
 
-  // Pause background refetches when AppState leaves 'active'; run one catch-up fetch on return while focused
+  // Pause background refetches & stop active recording when AppState leaves 'active'; run one catch-up fetch on return while focused
   useEffect(() => {
     const sub = AppState.addEventListener(
       'change',
@@ -435,6 +501,20 @@ export function CourseHubChatView({
 
         if (!nextIsActive) {
           clearDebouncedSyncTimer();
+          setActiveVoiceId(null);
+          if (recordingActiveRef.current) {
+            recordingActiveRef.current = false;
+            void audioRecorder
+              .stop()
+              .catch(() => undefined)
+              .finally(() => {
+                void setAudioModeAsync({
+                  allowsRecording: false,
+                  playsInSilentMode: true,
+                }).catch(() => undefined);
+                setIsRecordingVoice(false);
+              });
+          }
           return;
         }
 
@@ -447,7 +527,27 @@ export function CourseHubChatView({
     return () => {
       sub.remove();
     };
-  }, [channelId, isFocused, clearDebouncedSyncTimer, fetchLatestChat]);
+  }, [
+    channelId,
+    isFocused,
+    clearDebouncedSyncTimer,
+    fetchLatestChat,
+    audioRecorder,
+  ]);
+
+  // Ensure any active recording is cleanly stopped on unmount
+  useEffect(() => {
+    return () => {
+      if (recordingActiveRef.current) {
+        recordingActiveRef.current = false;
+        void audioRecorder.stop().catch(() => undefined);
+        void setAudioModeAsync({
+          allowsRecording: false,
+          playsInSilentMode: true,
+        }).catch(() => undefined);
+      }
+    };
+  }, [audioRecorder]);
 
   // Subscribe to private `clarify.channel.{channelId}` ONLY while screen is focused and app is active
   useEffect(() => {
@@ -506,13 +606,291 @@ export function CourseHubChatView({
     scheduleDebouncedChatSync,
   ]);
 
-  const dispatchSendRequest = useCallback(
-    async (text: string, tempId: string) => {
+  const handleOpenExternalUrl = useCallback(
+    async (rawUrl: string) => {
+      const resolved = resolveApiAssetUrl(rawUrl);
+      if (!resolved) {
+        showToast('Unable to open this attachment.', 'error');
+        return;
+      }
+      if (resolved.startsWith('file://') || resolved.startsWith('content://')) {
+        showToast(
+          'Attachment is still uploading. Try opening once sent.',
+          'info'
+        );
+        return;
+      }
       try {
-        const res = await sendChannelChatMessageApi(channelId, text, tempId);
+        await WebBrowser.openBrowserAsync(resolved);
+      } catch {
+        try {
+          await Linking.openURL(resolved);
+        } catch {
+          showToast('Unable to open attachment on this device.', 'error');
+        }
+      }
+    },
+    [showToast]
+  );
+
+  const handlePickImage = useCallback(
+    async (source: 'library' | 'camera') => {
+      setIsAttachSheetOpen(false);
+      Keyboard.dismiss();
+
+      try {
+        if (source === 'camera') {
+          const perm = await ImagePicker.requestCameraPermissionsAsync();
+          if (!perm.granted) {
+            showToast(
+              'Camera permission is required to take a photo.',
+              'error'
+            );
+            return;
+          }
+        } else {
+          const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+          if (!perm.granted) {
+            showToast(
+              'Photo library permission is required to attach images.',
+              'error'
+            );
+            return;
+          }
+        }
+
+        const result =
+          source === 'camera'
+            ? await ImagePicker.launchCameraAsync({
+                mediaTypes: ['images'],
+                quality: 0.85,
+                allowsEditing: false,
+              })
+            : await ImagePicker.launchImageLibraryAsync({
+                mediaTypes: ['images'],
+                quality: 0.85,
+                allowsEditing: false,
+              });
+
+        if (result.canceled || !result.assets || result.assets.length === 0) {
+          return;
+        }
+
+        const asset = result.assets[0];
+        const normalized = normalizePickedChatImage({
+          uri: asset.uri,
+          fileName: asset.fileName,
+          mimeType: asset.mimeType,
+          fileSize: asset.fileSize,
+        });
+
+        const validation = validateChatAttachmentFile({
+          name: normalized.name,
+          size: normalized.size,
+          type: normalized.type,
+        });
+
+        if (!validation.valid) {
+          showToast(validation.error, 'error');
+          return;
+        }
+
+        setActiveVoiceId(null);
+        setStagedMedia({
+          ...normalized,
+          kind: validation.attachmentType,
+        });
+      } catch {
+        showToast('Could not select photo. Please try again.', 'error');
+      }
+    },
+    [showToast]
+  );
+
+  const handlePickDocument = useCallback(async () => {
+    setIsAttachSheetOpen(false);
+    Keyboard.dismiss();
+
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: '*/*',
+        copyToCacheDirectory: true,
+        multiple: false,
+      });
+
+      if (result.canceled || !result.assets || result.assets.length === 0) {
+        return;
+      }
+
+      const asset = result.assets[0];
+      const fileName = (asset.name || 'document.pdf').trim();
+      const mimeType = asset.mimeType || 'application/octet-stream';
+      const fileSize =
+        typeof asset.size === 'number' && asset.size > 0 ? asset.size : 1024;
+
+      const validation = validateChatAttachmentFile({
+        name: fileName,
+        size: fileSize,
+        type: mimeType,
+      });
+
+      if (!validation.valid) {
+        showToast(validation.error, 'error');
+        return;
+      }
+
+      setActiveVoiceId(null);
+      setStagedMedia({
+        uri: asset.uri,
+        name: fileName,
+        type: mimeType,
+        size: fileSize,
+        kind: validation.attachmentType,
+      });
+    } catch {
+      showToast('Could not select document. Please try again.', 'error');
+    }
+  }, [showToast]);
+
+  const handleStartVoiceRecording = useCallback(async () => {
+    if (recordingActiveRef.current) return;
+    Keyboard.dismiss();
+    setIsAttachSheetOpen(false);
+    setActiveVoiceId(null);
+
+    try {
+      const permission = await requestRecordingPermissionsAsync();
+      if (!permission.granted) {
+        showToast(
+          'Microphone permission is required to record voice notes.',
+          'error'
+        );
+        return;
+      }
+
+      await setAudioModeAsync({
+        allowsRecording: true,
+        playsInSilentMode: true,
+      });
+
+      await audioRecorder.prepareToRecordAsync();
+      audioRecorder.record();
+      recordingActiveRef.current = true;
+      setIsRecordingVoice(true);
+    } catch {
+      recordingActiveRef.current = false;
+      setIsRecordingVoice(false);
+      void setAudioModeAsync({
+        allowsRecording: false,
+        playsInSilentMode: true,
+      }).catch(() => undefined);
+      showToast(
+        'Could not start voice recording on this device. Please try again.',
+        'error'
+      );
+    }
+  }, [audioRecorder, showToast]);
+
+  const handleCancelVoiceRecording = useCallback(async () => {
+    if (!recordingActiveRef.current) {
+      setIsRecordingVoice(false);
+      return;
+    }
+    recordingActiveRef.current = false;
+    setIsRecordingVoice(false);
+    try {
+      await audioRecorder.stop();
+    } catch {
+      // Ignore recorder stop errors during cancel
+    } finally {
+      await setAudioModeAsync({
+        allowsRecording: false,
+        playsInSilentMode: true,
+      }).catch(() => undefined);
+    }
+  }, [audioRecorder]);
+
+  const handleStopVoiceRecording = useCallback(async () => {
+    if (!recordingActiveRef.current) {
+      setIsRecordingVoice(false);
+      return;
+    }
+
+    const preStopStatus = audioRecorder.getStatus();
+    const durationMillis =
+      recorderState.durationMillis || preStopStatus.durationMillis || 1000;
+    const durationSec = Math.max(1, Math.round(durationMillis / 1000));
+
+    recordingActiveRef.current = false;
+    setIsRecordingVoice(false);
+
+    try {
+      await audioRecorder.stop();
+      const postStopStatus = audioRecorder.getStatus();
+      const recordedUri = audioRecorder.uri || postStopStatus.url;
+      const recordedSize = postStopStatus.fileSize || preStopStatus.fileSize;
+
+      await setAudioModeAsync({
+        allowsRecording: false,
+        playsInSilentMode: true,
+      }).catch(() => undefined);
+
+      if (!recordedUri) {
+        showToast('No audio was captured. Please try recording again.', 'error');
+        return;
+      }
+
+      const descriptor = buildVoiceRecordingDescriptor({
+        uri: recordedUri,
+        durationSec,
+        fileSize: recordedSize,
+      });
+
+      const validation = validateChatAttachmentFile({
+        name: descriptor.name,
+        size: descriptor.size,
+        type: descriptor.type,
+      });
+
+      if (!validation.valid) {
+        showToast(validation.error, 'error');
+        return;
+      }
+
+      setStagedMedia({
+        uri: descriptor.uri,
+        name: descriptor.name,
+        type: descriptor.type,
+        size: descriptor.size,
+        kind: 'voice',
+        durationSec: descriptor.durationSec,
+      });
+    } catch {
+      await setAudioModeAsync({
+        allowsRecording: false,
+        playsInSilentMode: true,
+      }).catch(() => undefined);
+      showToast('Unable to save voice recording. Please try again.', 'error');
+    }
+  }, [audioRecorder, recorderState.durationMillis, showToast]);
+
+  const dispatchSendRequest = useCallback(
+    async (
+      text: string,
+      tempId: string,
+      attachmentFile?: NativeUploadFile | null
+    ) => {
+      try {
+        const res = await sendChannelChatMessageApi(
+          channelId,
+          text,
+          tempId,
+          attachmentFile
+        );
         if (activeChannelRef.current !== channelId) {
           return;
         }
+        delete retryAttachmentByTempIdRef.current[tempId];
         if (res?.data) {
           dispatch({
             type: 'SEND_SUCCESS',
@@ -525,10 +903,14 @@ export function CourseHubChatView({
           return;
         }
         const apiErr = err as ApiError;
+        const firstFieldErr = apiErr?.errors
+          ? Object.values(apiErr.errors).flat()[0]
+          : undefined;
         dispatch({
           type: 'SEND_FAILED',
           tempId,
           errorMessage:
+            firstFieldErr ||
             apiErr?.message ||
             'Unable to send message. Tap Retry to try again.',
         });
@@ -539,11 +921,37 @@ export function CourseHubChatView({
 
   const handleSend = useCallback(() => {
     const trimmed = draft.trim();
-    if (!trimmed || !user || channelId <= 0) {
+    if ((!trimmed && !stagedMedia) || !user || channelId <= 0 || isRecordingVoice) {
       return;
     }
 
     const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const mediaToSend = stagedMedia;
+    const uploadDescriptor: NativeUploadFile | null = mediaToSend
+      ? {
+          uri: mediaToSend.uri,
+          name: mediaToSend.name,
+          type: mediaToSend.type,
+        }
+      : null;
+
+    if (uploadDescriptor) {
+      retryAttachmentByTempIdRef.current[tempId] = uploadDescriptor;
+    }
+
+    const optimisticAttachment: ChatAttachment | null = mediaToSend
+      ? {
+          url: mediaToSend.uri,
+          name: mediaToSend.name,
+          type: mediaToSend.kind,
+          mime: mediaToSend.type,
+          size: mediaToSend.size,
+          ...(mediaToSend.durationSec
+            ? { duration_sec: mediaToSend.durationSec }
+            : {}),
+        }
+      : null;
+
     const optimistic: ChatMessage = {
       id: tempId,
       temp_id: tempId,
@@ -551,7 +959,7 @@ export function CourseHubChatView({
       sender_id: user.id,
       is_unsent: false,
       content: trimmed,
-      attachment: null,
+      attachment: optimisticAttachment,
       created_at: new Date().toISOString(),
       status: 'sending',
       author: {
@@ -562,20 +970,38 @@ export function CourseHubChatView({
       },
     };
 
+    if (activeVoiceId === 'staged-preview') {
+      setActiveVoiceId(null);
+    }
     setDraft('');
+    setStagedMedia(null);
     dispatch({ type: 'OPTIMISTIC_ADD', message: optimistic });
-    void dispatchSendRequest(trimmed, tempId);
-  }, [draft, user, channelId, dispatchSendRequest]);
+    void dispatchSendRequest(trimmed, tempId, uploadDescriptor);
+  }, [
+    draft,
+    stagedMedia,
+    user,
+    channelId,
+    isRecordingVoice,
+    activeVoiceId,
+    dispatchSendRequest,
+  ]);
 
   const handleRetryFailed = useCallback(
     (msg: ChatMessage) => {
       const tempId = msg.temp_id || String(msg.id);
-      if (!tempId || !msg.content.trim()) return;
+      const attachmentFile = retryAttachmentByTempIdRef.current[tempId] ?? null;
+      if (!tempId || (!msg.content.trim() && !attachmentFile)) return;
       dispatch({ type: 'RETRY_START', tempId });
-      void dispatchSendRequest(msg.content, tempId);
+      void dispatchSendRequest(msg.content, tempId, attachmentFile);
     },
     [dispatchSendRequest]
   );
+
+  const handleDismissFailed = useCallback((tempId: string) => {
+    delete retryAttachmentByTempIdRef.current[tempId];
+    dispatch({ type: 'DISMISS_FAILED', tempId });
+  }, []);
 
   const handleCopyActionMessage = useCallback(async () => {
     if (!actionMenuTarget) return;
@@ -728,32 +1154,123 @@ export function CourseHubChatView({
                     </Text>
                   )}
 
-                  {item.attachment && (
-                    <View
-                      style={[styles.attachmentChip, styles.attachmentChipOwn]}
-                    >
-                      <Feather
-                        name={
-                          item.attachment.type === 'image'
-                            ? 'image'
-                            : item.attachment.type === 'voice'
-                              ? 'mic'
-                              : 'paperclip'
+                  {item.attachment && (() => {
+                    const att = item.attachment;
+                    const resolvedUrl = resolveApiAssetUrl(att.url);
+                    const isBroken = Boolean(
+                      resolvedUrl && brokenImageUrls[resolvedUrl]
+                    );
+
+                    if (att.type === 'image' && resolvedUrl && !isBroken) {
+                      return (
+                        <Pressable
+                          onPress={() =>
+                            setLightboxMedia({
+                              url: resolvedUrl,
+                              name: att.name || 'Chat Image',
+                            })
+                          }
+                          onLongPress={
+                            capabilities.canOpenMenu && !isUnsending
+                              ? () => {
+                                  Keyboard.dismiss();
+                                  setActionMenuTarget(item);
+                                }
+                              : undefined
+                          }
+                          delayLongPress={280}
+                          accessibilityRole="button"
+                          accessibilityLabel={`View image ${att.name}`}
+                          style={({ pressed }) => [
+                            styles.imageAttachmentWrap,
+                            styles.imageAttachmentOwn,
+                            pressed && styles.pressed,
+                          ]}
+                        >
+                          <Image
+                            source={{ uri: resolvedUrl }}
+                            resizeMode="cover"
+                            onError={() =>
+                              setBrokenImageUrls((prev) => ({
+                                ...prev,
+                                [resolvedUrl]: true,
+                              }))
+                            }
+                            style={styles.chatImageThumb}
+                          />
+                        </Pressable>
+                      );
+                    }
+
+                    if (att.type === 'voice' && resolvedUrl) {
+                      return (
+                        <ChatVoicePlayer
+                          playerId={`msg-${String(item.id)}`}
+                          uri={resolvedUrl}
+                          name={att.name}
+                          durationHintSec={att.duration_sec}
+                          variant="own"
+                          activeVoiceId={activeVoiceId}
+                          onActivate={setActiveVoiceId}
+                          onOpenExternal={handleOpenExternalUrl}
+                        />
+                      );
+                    }
+
+                    const sizeLabel = att.size ? formatFileSize(att.size) : '';
+                    return (
+                      <Pressable
+                        onPress={() =>
+                          resolvedUrl
+                            ? void handleOpenExternalUrl(resolvedUrl)
+                            : undefined
                         }
-                        size={14}
-                        color={colors.ustpGold}
-                      />
-                      <Text
-                        numberOfLines={1}
-                        style={[
-                          styles.attachmentName,
-                          styles.attachmentNameOwn,
+                        onLongPress={
+                          capabilities.canOpenMenu && !isUnsending
+                            ? () => {
+                                Keyboard.dismiss();
+                                setActionMenuTarget(item);
+                              }
+                            : undefined
+                        }
+                        delayLongPress={280}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Open attachment ${att.name}`}
+                        style={({ pressed }) => [
+                          styles.docAttachmentCard,
+                          styles.docAttachmentCardOwn,
+                          pressed && styles.pressed,
                         ]}
                       >
-                        {item.attachment.name}
-                      </Text>
-                    </View>
-                  )}
+                        <View style={styles.docIconWrapOwn}>
+                          <Feather
+                            name={att.type === 'image' ? 'image' : 'file-text'}
+                            size={16}
+                            color={colors.ustpGold}
+                          />
+                        </View>
+                        <View style={styles.docMetaCol}>
+                          <Text
+                            numberOfLines={1}
+                            style={[
+                              styles.attachmentName,
+                              styles.attachmentNameOwn,
+                            ]}
+                          >
+                            {att.name}
+                          </Text>
+                          <Text style={styles.docMetaSubOwn}>
+                            {sizeLabel ? `${sizeLabel} · Tap to open` : 'Tap to open'}
+                          </Text>
+                        </View>
+                        <Feather
+                          name="download"
+                          size={15}
+                          color={colors.ustpGold}
+                        />
+                      </Pressable>
+                    );
+                  })()}
                 </>
               )}
 
@@ -781,9 +1298,7 @@ export function CourseHubChatView({
                       <Text style={styles.failedRetryText}>Retry</Text>
                     </Pressable>
                     <Pressable
-                      onPress={() =>
-                        dispatch({ type: 'DISMISS_FAILED', tempId: tempKey })
-                      }
+                      onPress={() => handleDismissFailed(tempKey)}
                       accessibilityRole="button"
                       accessibilityLabel="Dismiss failed message"
                       style={({ pressed }) => [
@@ -894,35 +1409,125 @@ export function CourseHubChatView({
                         </Text>
                       )}
 
-                      {item.attachment && (
-                        <View
-                          style={[
-                            styles.attachmentChip,
-                            styles.attachmentChipOther,
-                          ]}
-                        >
-                          <Feather
-                            name={
-                              item.attachment.type === 'image'
-                                ? 'image'
-                                : item.attachment.type === 'voice'
-                                  ? 'mic'
-                                  : 'paperclip'
+                      {item.attachment && (() => {
+                        const att = item.attachment;
+                        const resolvedUrl = resolveApiAssetUrl(att.url);
+                        const isBroken = Boolean(
+                          resolvedUrl && brokenImageUrls[resolvedUrl]
+                        );
+
+                        if (att.type === 'image' && resolvedUrl && !isBroken) {
+                          return (
+                            <Pressable
+                              onPress={() =>
+                                setLightboxMedia({
+                                  url: resolvedUrl,
+                                  name: att.name || 'Chat Image',
+                                })
+                              }
+                              onLongPress={
+                                capabilities.canOpenMenu
+                                  ? () => {
+                                      Keyboard.dismiss();
+                                      setActionMenuTarget(item);
+                                    }
+                                  : undefined
+                              }
+                              delayLongPress={280}
+                              accessibilityRole="button"
+                              accessibilityLabel={`View image ${att.name}`}
+                              style={({ pressed }) => [
+                                styles.imageAttachmentWrap,
+                                styles.imageAttachmentOther,
+                                pressed && styles.pressed,
+                              ]}
+                            >
+                              <Image
+                                source={{ uri: resolvedUrl }}
+                                resizeMode="cover"
+                                onError={() =>
+                                  setBrokenImageUrls((prev) => ({
+                                    ...prev,
+                                    [resolvedUrl]: true,
+                                  }))
+                                }
+                                style={styles.chatImageThumb}
+                              />
+                            </Pressable>
+                          );
+                        }
+
+                        if (att.type === 'voice' && resolvedUrl) {
+                          return (
+                            <ChatVoicePlayer
+                              playerId={`msg-${String(item.id)}`}
+                              uri={resolvedUrl}
+                              name={att.name}
+                              durationHintSec={att.duration_sec}
+                              variant="other"
+                              activeVoiceId={activeVoiceId}
+                              onActivate={setActiveVoiceId}
+                              onOpenExternal={handleOpenExternalUrl}
+                            />
+                          );
+                        }
+
+                        const sizeLabel = att.size ? formatFileSize(att.size) : '';
+                        return (
+                          <Pressable
+                            onPress={() =>
+                              resolvedUrl
+                                ? void handleOpenExternalUrl(resolvedUrl)
+                                : undefined
                             }
-                            size={14}
-                            color={colors.ustpNavy}
-                          />
-                          <Text
-                            numberOfLines={1}
-                            style={[
-                              styles.attachmentName,
-                              styles.attachmentNameOther,
+                            onLongPress={
+                              capabilities.canOpenMenu
+                                ? () => {
+                                    Keyboard.dismiss();
+                                    setActionMenuTarget(item);
+                                  }
+                                : undefined
+                            }
+                            delayLongPress={280}
+                            accessibilityRole="button"
+                            accessibilityLabel={`Open attachment ${att.name}`}
+                            style={({ pressed }) => [
+                              styles.docAttachmentCard,
+                              styles.docAttachmentCardOther,
+                              pressed && styles.pressed,
                             ]}
                           >
-                            {item.attachment.name}
-                          </Text>
-                        </View>
-                      )}
+                            <View style={styles.docIconWrapOther}>
+                              <Feather
+                                name={att.type === 'image' ? 'image' : 'file-text'}
+                                size={16}
+                                color={colors.ustpNavy}
+                              />
+                            </View>
+                            <View style={styles.docMetaCol}>
+                              <Text
+                                numberOfLines={1}
+                                style={[
+                                  styles.attachmentName,
+                                  styles.attachmentNameOther,
+                                ]}
+                              >
+                                {att.name}
+                              </Text>
+                              <Text style={styles.docMetaSubOther}>
+                                {sizeLabel
+                                  ? `${sizeLabel} · Tap to open`
+                                  : 'Tap to open'}
+                              </Text>
+                            </View>
+                            <Feather
+                              name="download"
+                              size={15}
+                              color={colors.ustpNavy}
+                            />
+                          </Pressable>
+                        );
+                      })()}
                     </>
                   )}
                 </Pressable>
@@ -949,7 +1554,16 @@ export function CourseHubChatView({
         </View>
       );
     },
-    [user, state.failedErrorByTempId, state.unsendingIds, handleRetryFailed]
+    [
+      user,
+      state.failedErrorByTempId,
+      state.unsendingIds,
+      brokenImageUrls,
+      activeVoiceId,
+      handleRetryFailed,
+      handleDismissFailed,
+      handleOpenExternalUrl,
+    ]
   );
 
   // In an inverted FlatList, ListFooterComponent renders at the visual TOP (older history)
@@ -993,7 +1607,14 @@ export function CourseHubChatView({
   };
 
   const canSubmit =
-    draft.trim().length > 0 && !state.isLoading && state.error?.status !== 403;
+    (draft.trim().length > 0 || stagedMedia !== null) &&
+    !isRecordingVoice &&
+    !state.isLoading &&
+    state.error?.status !== 403;
+
+  const recordingClockLabel = formatAudioDuration(
+    Math.floor((recorderState.durationMillis || 0) / 1000)
+  );
 
   const actionMenuCapabilities = actionMenuTarget
     ? getChatMessageActionCapabilities(actionMenuTarget, user)
@@ -1060,44 +1681,181 @@ export function CourseHubChatView({
         </View>
       )}
 
-      {/* Message Composer Bar (hidden only on 403 forbidden channel) */}
-      {state.error?.status !== 403 && (
-        <View
-          style={[
-            styles.composerBar,
-            { paddingBottom: composerBottomPadding },
-          ]}
-        >
-          <TextInput
-            value={draft}
-            onChangeText={setDraft}
-            placeholder={`Message ${channelTitle}...`}
-            placeholderTextColor={colors.placeholder}
-            multiline
-            maxLength={2000}
-            accessibilityLabel={`Message ${channelTitle}`}
-            style={styles.composerInput}
-          />
+      {/* Staged Attachment Preview Strip (above composer) */}
+      {state.error?.status !== 403 && stagedMedia && !isRecordingVoice && (
+        <View style={styles.stagedBar}>
+          {stagedMedia.kind === 'image' ? (
+            <View style={styles.stagedRow}>
+              <Image
+                source={{ uri: stagedMedia.uri }}
+                resizeMode="cover"
+                style={styles.stagedImageThumb}
+              />
+              <View style={styles.stagedMetaCol}>
+                <Text numberOfLines={1} style={styles.stagedTitle}>
+                  {stagedMedia.name}
+                </Text>
+                <Text style={styles.stagedSubtitle}>
+                  Image · {formatFileSize(stagedMedia.size) || 'Ready to send'}
+                </Text>
+              </View>
+            </View>
+          ) : stagedMedia.kind === 'voice' ? (
+            <ChatVoicePlayer
+              playerId="staged-preview"
+              uri={stagedMedia.uri}
+              name={stagedMedia.name}
+              durationHintSec={stagedMedia.durationSec}
+              variant="preview"
+              activeVoiceId={activeVoiceId}
+              onActivate={setActiveVoiceId}
+            />
+          ) : (
+            <View style={styles.stagedRow}>
+              <View style={styles.stagedDocIcon}>
+                <Feather name="file-text" size={18} color={colors.ustpNavy} />
+              </View>
+              <View style={styles.stagedMetaCol}>
+                <Text numberOfLines={1} style={styles.stagedTitle}>
+                  {stagedMedia.name}
+                </Text>
+                <Text style={styles.stagedSubtitle}>
+                  Document · {formatFileSize(stagedMedia.size) || 'Ready to send'}
+                </Text>
+              </View>
+            </View>
+          )}
+
           <Pressable
-            onPress={handleSend}
-            disabled={!canSubmit}
+            onPress={() => {
+              if (activeVoiceId === 'staged-preview') {
+                setActiveVoiceId(null);
+              }
+              setStagedMedia(null);
+            }}
             accessibilityRole="button"
-            accessibilityLabel="Send chat message"
-            accessibilityState={{ disabled: !canSubmit }}
+            accessibilityLabel="Remove staged attachment"
             style={({ pressed }) => [
-              styles.sendButton,
-              !canSubmit && styles.sendButtonDisabled,
-              pressed && canSubmit && styles.pressed,
+              styles.stagedRemoveBtn,
+              pressed && styles.pressed,
             ]}
           >
-            <Feather
-              name="send"
-              size={18}
-              color={canSubmit ? colors.ustpGold : colors.placeholder}
-            />
+            <Feather name="x" size={18} color={colors.mutedSlate} />
           </Pressable>
         </View>
       )}
+
+      {/* Message Composer Bar OR Live Voice Recording Bar (hidden only on 403 forbidden channel) */}
+      {state.error?.status !== 403 &&
+        (isRecordingVoice ? (
+          <View
+            style={[
+              styles.recordingBar,
+              { paddingBottom: composerBottomPadding },
+            ]}
+          >
+            <Pressable
+              onPress={() => void handleCancelVoiceRecording()}
+              accessibilityRole="button"
+              accessibilityLabel="Cancel voice recording"
+              style={({ pressed }) => [
+                styles.recordingCancelBtn,
+                pressed && styles.pressed,
+              ]}
+            >
+              <Feather name="trash-2" size={18} color={colors.dangerBorder} />
+            </Pressable>
+
+            <View style={styles.recordingCenter}>
+              <View style={styles.recordingPulseDot} />
+              <Text style={styles.recordingStatusText}>Recording</Text>
+              <Text style={styles.recordingTimerText}>
+                {recordingClockLabel}
+              </Text>
+            </View>
+
+            <Pressable
+              onPress={() => void handleStopVoiceRecording()}
+              accessibilityRole="button"
+              accessibilityLabel="Stop recording and preview voice note"
+              style={({ pressed }) => [
+                styles.recordingStopBtn,
+                pressed && styles.pressed,
+              ]}
+            >
+              <Feather name="square" size={16} color={colors.ustpGold} />
+              <Text style={styles.recordingStopText}>Stop</Text>
+            </Pressable>
+          </View>
+        ) : (
+          <View
+            style={[
+              styles.composerBar,
+              { paddingBottom: composerBottomPadding },
+            ]}
+          >
+            <Pressable
+              onPress={() => {
+                Keyboard.dismiss();
+                setIsAttachSheetOpen(true);
+              }}
+              accessibilityRole="button"
+              accessibilityLabel="Attach image or document"
+              style={({ pressed }) => [
+                styles.composerIconBtn,
+                pressed && styles.pressed,
+              ]}
+            >
+              <Feather name="plus" size={20} color={colors.ustpNavy} />
+            </Pressable>
+
+            <TextInput
+              value={draft}
+              onChangeText={setDraft}
+              placeholder={
+                stagedMedia
+                  ? 'Add an optional caption...'
+                  : `Message ${channelTitle}...`
+              }
+              placeholderTextColor={colors.placeholder}
+              multiline
+              maxLength={2000}
+              accessibilityLabel={`Message ${channelTitle}`}
+              style={styles.composerInput}
+            />
+
+            <Pressable
+              onPress={() => void handleStartVoiceRecording()}
+              accessibilityRole="button"
+              accessibilityLabel="Record voice note"
+              style={({ pressed }) => [
+                styles.composerIconBtn,
+                pressed && styles.pressed,
+              ]}
+            >
+              <Feather name="mic" size={19} color={colors.ustpNavy} />
+            </Pressable>
+
+            <Pressable
+              onPress={handleSend}
+              disabled={!canSubmit}
+              accessibilityRole="button"
+              accessibilityLabel="Send chat message"
+              accessibilityState={{ disabled: !canSubmit }}
+              style={({ pressed }) => [
+                styles.sendButton,
+                !canSubmit && styles.sendButtonDisabled,
+                pressed && canSubmit && styles.pressed,
+              ]}
+            >
+              <Feather
+                name="send"
+                size={18}
+                color={canSubmit ? colors.ustpGold : colors.placeholder}
+              />
+            </Pressable>
+          </View>
+        ))}
     </View>
   );
 
@@ -1238,8 +1996,8 @@ export function CourseHubChatView({
           <View accessibilityViewIsModal style={styles.modalCard}>
             <Text style={styles.modalTitle}>Unsend Message?</Text>
             <Text style={styles.modalBody}>
-              This removes your message text and replaces it with an unsent
-              placeholder for everyone in {channelTitle}.
+              This removes your message text and any attached media and replaces
+              it with an unsent placeholder for everyone in {channelTitle}.
             </Text>
             <View style={styles.modalActions}>
               <Pressable
@@ -1266,6 +2024,161 @@ export function CourseHubChatView({
               </Pressable>
             </View>
           </View>
+        </View>
+      </Modal>
+
+      {/* Plus (+) Media Attach Bottom Sheet */}
+      <Modal
+        visible={isAttachSheetOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setIsAttachSheetOpen(false)}
+      >
+        <View style={styles.actionSheetBackdrop}>
+          <Pressable
+            style={StyleSheet.absoluteFill}
+            onPress={() => setIsAttachSheetOpen(false)}
+            accessibilityRole="button"
+            accessibilityLabel="Close attach menu"
+          />
+          <View
+            accessibilityViewIsModal
+            style={[
+              styles.actionSheetCard,
+              { marginBottom: Math.max(insets.bottom, spacing.md) },
+            ]}
+          >
+            <View style={styles.actionSheetButtons}>
+              <View style={styles.attachSheetHeader}>
+                <Text style={styles.attachSheetTitle}>Attach to Message</Text>
+                <Text style={styles.attachSheetSubtitle}>
+                  Images, PDF, Office docs, TXT/CSV/ZIP, or audio up to 10 MB
+                </Text>
+              </View>
+
+              <Pressable
+                onPress={() => void handlePickImage('library')}
+                accessibilityRole="button"
+                accessibilityLabel="Choose photo from library"
+                style={({ pressed }) => [
+                  styles.actionSheetRow,
+                  styles.actionSheetRowBorder,
+                  pressed && styles.actionSheetRowPressed,
+                ]}
+              >
+                <Feather name="image" size={18} color={colors.ustpNavy} />
+                <Text style={styles.actionSheetRowText}>Photo Library</Text>
+              </Pressable>
+
+              <Pressable
+                onPress={() => void handlePickImage('camera')}
+                accessibilityRole="button"
+                accessibilityLabel="Take photo with camera"
+                style={({ pressed }) => [
+                  styles.actionSheetRow,
+                  styles.actionSheetRowBorder,
+                  pressed && styles.actionSheetRowPressed,
+                ]}
+              >
+                <Feather name="camera" size={18} color={colors.ustpNavy} />
+                <Text style={styles.actionSheetRowText}>Take Photo</Text>
+              </Pressable>
+
+              <Pressable
+                onPress={() => void handlePickDocument()}
+                accessibilityRole="button"
+                accessibilityLabel="Attach document or audio file"
+                style={({ pressed }) => [
+                  styles.actionSheetRow,
+                  styles.actionSheetRowBorder,
+                  pressed && styles.actionSheetRowPressed,
+                ]}
+              >
+                <Feather name="file-text" size={18} color={colors.ustpNavy} />
+                <Text style={styles.actionSheetRowText}>
+                  Document / Audio File
+                </Text>
+              </Pressable>
+            </View>
+
+            <Pressable
+              onPress={() => setIsAttachSheetOpen(false)}
+              accessibilityRole="button"
+              accessibilityLabel="Cancel attach menu"
+              style={({ pressed }) => [
+                styles.actionSheetCancelBtn,
+                pressed && styles.pressed,
+              ]}
+            >
+              <Text style={styles.actionSheetCancelText}>Cancel</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Full-Screen Chat Image Lightbox Modal */}
+      <Modal
+        visible={Boolean(lightboxMedia)}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setLightboxMedia(null)}
+      >
+        <View style={styles.lightboxBackdrop}>
+          <View
+            style={[
+              styles.lightboxHeader,
+              { paddingTop: Math.max(insets.top, spacing.lg) },
+            ]}
+          >
+            <Text numberOfLines={1} style={styles.lightboxTitle}>
+              {lightboxMedia?.name || 'Image Attachment'}
+            </Text>
+            <Pressable
+              onPress={() => setLightboxMedia(null)}
+              accessibilityRole="button"
+              accessibilityLabel="Close image preview"
+              style={({ pressed }) => [
+                styles.lightboxCloseBtn,
+                pressed && styles.pressed,
+              ]}
+            >
+              <Feather name="x" size={22} color={colors.white} />
+            </Pressable>
+          </View>
+
+          <View style={styles.lightboxImageStage}>
+            {lightboxMedia?.url ? (
+              <Image
+                source={{ uri: lightboxMedia.url }}
+                resizeMode="contain"
+                style={styles.lightboxImage}
+              />
+            ) : null}
+          </View>
+
+          {lightboxMedia?.url &&
+            !lightboxMedia.url.startsWith('file://') &&
+            !lightboxMedia.url.startsWith('content://') && (
+              <View
+                style={[
+                  styles.lightboxFooter,
+                  { paddingBottom: Math.max(insets.bottom, spacing.lg) },
+                ]}
+              >
+                <Pressable
+                  onPress={() => void handleOpenExternalUrl(lightboxMedia.url)}
+                  accessibilityRole="button"
+                  accessibilityLabel="Open or download full image"
+                  style={({ pressed }) => [
+                    styles.lightboxOpenBtn,
+                    pressed && styles.pressed,
+                  ]}
+                >
+                  <Feather name="download" size={16} color={colors.ustpNavy} />
+                  <Text style={styles.lightboxOpenText}>Open / Download</Text>
+                </Pressable>
+              </View>
+            )}
         </View>
       </Modal>
     </View>
@@ -1555,33 +2468,88 @@ const styles = StyleSheet.create({
     fontStyle: 'italic',
     color: colors.mutedSlate,
   },
-  attachmentChip: {
+  imageAttachmentWrap: {
+    borderRadius: radii.md,
+    overflow: 'hidden',
+    borderWidth: 1,
+    marginTop: 2,
+  },
+  imageAttachmentOwn: {
+    borderColor: colors.ustpNavyBorder,
+    backgroundColor: colors.ustpNavySurface,
+  },
+  imageAttachmentOther: {
+    borderColor: colors.border,
+    backgroundColor: colors.surfaceSubtle,
+  },
+  chatImageThumb: {
+    width: 210,
+    height: 160,
+    backgroundColor: colors.surfaceMuted,
+  },
+  docAttachmentCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing.xs,
+    gap: spacing.sm,
+    minHeight: touchTarget.minHeight,
+    minWidth: 200,
     paddingHorizontal: spacing.sm,
-    paddingVertical: spacing.xs,
-    borderRadius: radii.sm,
+    paddingVertical: spacing.xs + 2,
+    borderRadius: radii.md,
     borderWidth: 1,
+    marginTop: 2,
   },
-  attachmentChipOwn: {
+  docAttachmentCardOwn: {
     backgroundColor: colors.ustpNavySurface,
     borderColor: colors.ustpNavyBorder,
   },
-  attachmentChipOther: {
+  docAttachmentCardOther: {
     backgroundColor: colors.surfaceSubtle,
     borderColor: colors.border,
   },
-  attachmentName: {
+  docIconWrapOwn: {
+    width: 32,
+    height: 32,
+    borderRadius: radii.sm,
+    backgroundColor: colors.ustpNavyDark,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  docIconWrapOther: {
+    width: 32,
+    height: 32,
+    borderRadius: radii.sm,
+    backgroundColor: colors.white,
+    borderWidth: 1,
+    borderColor: colors.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  docMetaCol: {
     flex: 1,
+    gap: 1,
+  },
+  attachmentName: {
     fontSize: typography.sizes.xs,
-    fontWeight: '700',
+    fontWeight: '800',
   },
   attachmentNameOwn: {
     color: colors.white,
   },
   attachmentNameOther: {
     color: colors.ustpNavy,
+  },
+  docMetaSubOwn: {
+    fontSize: typography.sizes.xxs,
+    color: colors.ustpNavyMutedText,
+    ...typography.tabularNums,
+  },
+  docMetaSubOther: {
+    fontSize: typography.sizes.xxs,
+    color: colors.mutedSlate,
+    ...typography.tabularNums,
   },
   failedActionsBox: {
     marginTop: spacing.xs,
@@ -1672,16 +2640,152 @@ const styles = StyleSheet.create({
     color: colors.mutedSlate,
   },
 
+  /* Staged Media Preview Bar */
+  stagedBar: {
+    backgroundColor: colors.ustpCream,
+    borderTopWidth: 1,
+    borderColor: colors.border,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  stagedRow: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    backgroundColor: colors.white,
+    borderWidth: 1,
+    borderColor: colors.borderStrong,
+    borderRadius: radii.md,
+    padding: spacing.xs + 2,
+  },
+  stagedImageThumb: {
+    width: 44,
+    height: 44,
+    borderRadius: radii.sm,
+    backgroundColor: colors.surfaceMuted,
+  },
+  stagedDocIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: radii.sm,
+    backgroundColor: colors.surfaceSubtle,
+    borderWidth: 1,
+    borderColor: colors.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  stagedMetaCol: {
+    flex: 1,
+    gap: 2,
+  },
+  stagedTitle: {
+    fontSize: typography.sizes.xs,
+    fontWeight: '800',
+    color: colors.ustpNavy,
+  },
+  stagedSubtitle: {
+    fontSize: typography.sizes.xxs,
+    color: colors.mutedSlate,
+    ...typography.tabularNums,
+  },
+  stagedRemoveBtn: {
+    minWidth: touchTarget.minWidth,
+    minHeight: touchTarget.minHeight,
+    borderRadius: radii.md,
+    borderWidth: 1,
+    borderColor: colors.borderStrong,
+    backgroundColor: colors.white,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  /* Live Voice Recording Bar */
+  recordingBar: {
+    backgroundColor: colors.dangerBg,
+    borderTopWidth: 1,
+    borderColor: colors.urgentCardBorder,
+    paddingHorizontal: spacing.md,
+    paddingTop: spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+  },
+  recordingCancelBtn: {
+    minWidth: touchTarget.minWidth,
+    minHeight: touchTarget.minHeight,
+    borderRadius: radii.md,
+    backgroundColor: colors.white,
+    borderWidth: 1,
+    borderColor: colors.urgentCardBorder,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  recordingCenter: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.sm,
+  },
+  recordingPulseDot: {
+    width: 10,
+    height: 10,
+    borderRadius: radii.pill,
+    backgroundColor: colors.dangerBorder,
+  },
+  recordingStatusText: {
+    fontSize: typography.sizes.sm,
+    fontWeight: '800',
+    color: colors.dangerTitle,
+  },
+  recordingTimerText: {
+    fontSize: typography.sizes.body,
+    fontWeight: '900',
+    color: colors.dangerTitle,
+    ...typography.tabularNums,
+  },
+  recordingStopBtn: {
+    minWidth: 84,
+    minHeight: touchTarget.minHeight,
+    paddingHorizontal: spacing.md,
+    borderRadius: radii.md,
+    backgroundColor: colors.ustpNavy,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.xs,
+  },
+  recordingStopText: {
+    fontSize: typography.sizes.sm,
+    fontWeight: '800',
+    color: colors.ustpGold,
+  },
+
   /* Composer Bar */
   composerBar: {
     backgroundColor: colors.white,
     borderTopWidth: 1,
     borderColor: colors.border,
-    paddingHorizontal: spacing.md,
+    paddingHorizontal: spacing.sm + 2,
     paddingTop: spacing.sm,
     flexDirection: 'row',
     alignItems: 'flex-end',
-    gap: spacing.sm,
+    gap: spacing.xs + 2,
+  },
+  composerIconBtn: {
+    minWidth: touchTarget.minWidth,
+    minHeight: touchTarget.minHeight,
+    borderRadius: radii.md,
+    backgroundColor: colors.surfaceSubtle,
+    borderWidth: 1,
+    borderColor: colors.borderStrong,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   composerInput: {
     flex: 1,
@@ -1709,6 +2813,77 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surfaceMuted,
     borderWidth: 1,
     borderColor: colors.border,
+  },
+
+  /* Attach Sheet & Lightbox */
+  attachSheetHeader: {
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+    gap: 2,
+  },
+  attachSheetTitle: {
+    fontSize: typography.sizes.body,
+    fontWeight: '800',
+    color: colors.ustpNavy,
+  },
+  attachSheetSubtitle: {
+    fontSize: typography.sizes.xs,
+    color: colors.mutedSlate,
+  },
+  lightboxBackdrop: {
+    flex: 1,
+    backgroundColor: colors.ustpText,
+    justifyContent: 'space-between',
+  },
+  lightboxHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: spacing.lg,
+    paddingBottom: spacing.sm,
+    gap: spacing.md,
+  },
+  lightboxTitle: {
+    flex: 1,
+    fontSize: typography.sizes.sm,
+    fontWeight: '700',
+    color: colors.white,
+  },
+  lightboxCloseBtn: {
+    minWidth: touchTarget.minWidth,
+    minHeight: touchTarget.minHeight,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  lightboxImageStage: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing.md,
+  },
+  lightboxImage: {
+    width: '100%',
+    height: '100%',
+  },
+  lightboxFooter: {
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.md,
+    alignItems: 'center',
+  },
+  lightboxOpenBtn: {
+    minHeight: touchTarget.minHeight,
+    paddingHorizontal: spacing.xl,
+    borderRadius: radii.md,
+    backgroundColor: colors.ustpGold,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.xs,
+  },
+  lightboxOpenText: {
+    fontSize: typography.sizes.sm,
+    fontWeight: '800',
+    color: colors.ustpNavy,
   },
 
   /* Skeleton Loading */

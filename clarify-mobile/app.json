@@ -48,6 +48,12 @@
         }
       ],
       [
+        "expo-audio",
+        {
+          "microphonePermission": "ClariFy accesses your microphone so you can record voice notes in Course Hub chat."
+        }
+      ],
+      [
         "expo-notifications",
         {
           "color": "#fcb315",

@@ -4,13 +4,19 @@ import test from 'node:test';
 import { getApiOrigin, resolveApiAssetUrl } from './api-client.ts';
 import {
   buildAnnouncementFormData,
+  buildChatMessageFormData,
   buildProfileUpdateFormData,
+  buildVoiceRecordingDescriptor,
   canManageAnnouncement,
+  formatAudioDuration,
   formatFileSize,
   MAX_ANNOUNCEMENT_ATTACHMENT_BYTES,
+  MAX_CHAT_ATTACHMENT_BYTES,
   MAX_PROFILE_AVATAR_BYTES,
+  normalizePickedChatImage,
   parseAnnouncementAttachment,
   validateAnnouncementAttachmentFile,
+  validateChatAttachmentFile,
   validateProfileAvatarFile,
 } from './domain-logic.ts';
 import type { Announcement, Channel, User } from '../types/api.ts';
@@ -316,3 +322,127 @@ test('formatFileSize formats bytes cleanly', () => {
   assert.equal(formatFileSize(2.5 * 1024 * 1024), '2.5 MB');
   assert.equal(formatFileSize(0), '');
 });
+
+test('formatAudioDuration formats seconds safely into M:SS', () => {
+  assert.equal(formatAudioDuration(0), '0:00');
+  assert.equal(formatAudioDuration(7), '0:07');
+  assert.equal(formatAudioDuration(65.9), '1:05');
+  assert.equal(formatAudioDuration(-5), '0:00');
+  assert.equal(formatAudioDuration(Number.NaN), '0:00');
+  assert.equal(formatAudioDuration(null), '0:00');
+});
+
+test('buildVoiceRecordingDescriptor normalizes m4a/wav/extensionless URIs for Laravel validation', () => {
+  const m4a = buildVoiceRecordingDescriptor({
+    uri: 'file:///cache/Audio/rec-123.m4a',
+    durationSec: 12,
+    fileSize: 48_000,
+  });
+  assert.equal(m4a.name, 'Voice_Note_0m12s.m4a');
+  assert.equal(m4a.type, 'audio/mp4');
+  assert.equal(m4a.size, 48_000);
+  assert.equal(m4a.durationSec, 12);
+
+  const fallback = buildVoiceRecordingDescriptor({
+    uri: 'file:///cache/Audio/recording_temp',
+    durationSec: 65,
+  });
+  assert.equal(fallback.name, 'Voice_Note_1m05s.m4a');
+  assert.equal(fallback.type, 'audio/mp4');
+  assert.ok(fallback.size >= 1024);
+
+  const wav = buildVoiceRecordingDescriptor({
+    uri: 'file:///cache/Audio/clip.wav?v=1',
+    durationSec: 3,
+    fileSize: 12_000,
+  });
+  assert.equal(wav.name, 'Voice_Note_0m03s.wav');
+  assert.equal(wav.type, 'audio/wav');
+});
+
+test('normalizePickedChatImage ensures valid image extensions and MIME types', () => {
+  const png = normalizePickedChatImage({
+    uri: 'file:///cache/image_123',
+    fileName: null,
+    mimeType: 'image/png',
+    fileSize: 120_000,
+  });
+  assert.ok(png.name.endsWith('.png'));
+  assert.equal(png.type, 'image/png');
+  assert.equal(png.size, 120_000);
+
+  const jpg = normalizePickedChatImage({
+    uri: 'file:///cache/camera/IMG_001.heic',
+    fileName: 'IMG_001.heic',
+    mimeType: 'image/jpeg',
+    fileSize: 85_000,
+  });
+  assert.equal(jpg.name, 'IMG_001.jpg');
+  assert.equal(jpg.type, 'image/jpeg');
+});
+
+test('validateChatAttachmentFile classifies image, document, and voice while blocking scripts and >10 MB files', () => {
+  assert.deepEqual(
+    validateChatAttachmentFile({
+      name: 'whiteboard.jpg',
+      size: 250_000,
+      type: 'image/jpeg',
+    }),
+    { valid: true, attachmentType: 'image' }
+  );
+
+  assert.deepEqual(
+    validateChatAttachmentFile({
+      name: 'Voice_Note_0m09s.m4a',
+      size: 90_000,
+      type: 'audio/mp4',
+    }),
+    { valid: true, attachmentType: 'voice' }
+  );
+
+  assert.deepEqual(
+    validateChatAttachmentFile({
+      name: 'Lab4_Submission.pdf',
+      size: 1_500_000,
+      type: 'application/pdf',
+    }),
+    { valid: true, attachmentType: 'document' }
+  );
+
+  const tooLarge = validateChatAttachmentFile({
+    name: 'slides.pptx',
+    size: MAX_CHAT_ATTACHMENT_BYTES + 1,
+    type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  });
+  assert.equal(tooLarge.valid, false);
+
+  const forbidden = validateChatAttachmentFile({
+    name: 'payload.php',
+    size: 1024,
+    type: 'application/x-php',
+  });
+  assert.equal(forbidden.valid, false);
+});
+
+test('buildChatMessageFormData serializes optional caption, temp_id, and attachment file cleanly', () => {
+  const voiceOnly = buildChatMessageFormData({
+    content: '',
+    tempId: 'temp-voice-1',
+    attachment: new Blob(['audio-bytes'], { type: 'audio/mp4' }),
+    attachmentFileName: 'Voice_Note_0m05s.m4a',
+  });
+  assert.equal(voiceOnly.get('content'), '');
+  assert.equal(voiceOnly.get('temp_id'), 'temp-voice-1');
+  assert.ok(voiceOnly.get('attachment') !== null);
+
+  const captionedDoc = buildChatMessageFormData({
+    content: 'Here is our group report.',
+    tempId: 'temp-doc-2',
+    attachment: new Blob(['pdf-bytes'], { type: 'application/pdf' }),
+    attachmentFileName: 'Group5_Report.pdf',
+  });
+  assert.equal(captionedDoc.get('content'), 'Here is our group report.');
+  assert.equal(captionedDoc.get('temp_id'), 'temp-doc-2');
+  assert.ok(captionedDoc.get('attachment') !== null);
+});
+
