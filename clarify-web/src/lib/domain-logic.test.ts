@@ -8,6 +8,7 @@ import {
   canStudentModifyOwnInquiry,
   createRetryableChatFileStore,
   enforceFaqAnonymity,
+  extractRetryAfterSeconds,
   filterAndSortAnnouncements,
   filterAnnouncementAudits,
   filterQaThreads,
@@ -17,6 +18,7 @@ import {
   formatEnrolledRosterSummary,
   formatHubActivityBreakdownChips,
   formatMeasuredLatency,
+  formatOtpCooldownLabel,
   formatSubjectHashtag,
   formatUnreadBadgeCount,
   getAdminSectionTitle,
@@ -37,8 +39,10 @@ import {
   patchChannelsOnThreadEvent,
   reconcileFetchedChannelsWithStaleGuard,
   resolveHubUpdateDestination,
+  sanitizeOtpInput,
   USTP_EMAIL_ERROR_MESSAGE,
   validateChatAttachmentFile,
+  validatePasswordResetFields,
   validateUstpEmail,
 } from './domain-logic';
 import type {
@@ -1250,6 +1254,52 @@ test('IT Admin Console tab parsing, search & tag filters (Sections 1, 2, 3, 4), 
   });
   assert.equal(clientFallbackSlow.primaryDisplay, '2.45s');
   assert.equal(clientFallbackSlow.withinSla, false);
+});
+
+test('Forgot Password SMS OTP helpers: sanitizeOtpInput, step validation, retry-after extraction, and cooldown labels', () => {
+  // 1. OTP input sanitization strips non-digits and caps at 6 digits
+  assert.equal(sanitizeOtpInput('12 3-4a5678'), '123456');
+  assert.equal(sanitizeOtpInput('abc'), '');
+  assert.equal(sanitizeOtpInput('00912'), '00912');
+
+  // 2. Step 1 validation
+  assert.ok(validatePasswordResetFields('request', { institutionalId: '   ' }).institutional_id);
+  assert.deepEqual(validatePasswordResetFields('request', { institutionalId: '2026123456' }), {});
+
+  // 3. Step 2 validation
+  assert.ok(
+    validatePasswordResetFields('verify', { institutionalId: '2026123456', otp: '12345' }).otp
+  );
+  assert.deepEqual(
+    validatePasswordResetFields('verify', { institutionalId: '2026123456', otp: '098765' }),
+    {}
+  );
+
+  // 4. Step 3 validation
+  const shortPw = validatePasswordResetFields('reset', {
+    password: 'short',
+    passwordConfirmation: 'different',
+  });
+  assert.ok(shortPw.password);
+  assert.ok(shortPw.password_confirmation);
+
+  assert.deepEqual(
+    validatePasswordResetFields('reset', {
+      password: 'NewPassword123',
+      passwordConfirmation: 'NewPassword123',
+    }),
+    {}
+  );
+
+  // 5. Retry-After extraction and cooldown label formatting
+  assert.equal(extractRetryAfterSeconds({ retry_after: 42 }), 42);
+  assert.equal(
+    extractRetryAfterSeconds({ message: 'Please wait 37 seconds before retrying.' }),
+    37
+  );
+  assert.equal(extractRetryAfterSeconds(null, 60), 60);
+  assert.equal(formatOtpCooldownLabel(45), 'Resend code in 45s');
+  assert.equal(formatOtpCooldownLabel(0), 'Resend Code');
 });
 
 

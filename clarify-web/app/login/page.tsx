@@ -232,18 +232,12 @@ export default function LoginPage() {
             </div>
 
             <div className="flex items-center justify-end">
-              <button
-                type="button"
-                onClick={() =>
-                  showToast(
-                    'Password recovery link dispatched via USTP ICTO Registrar portal.',
-                    'info'
-                  )
-                }
-                className="text-xs font-bold text-ustp-navy hover:underline cursor-pointer"
+              <Link
+                href="/forgot-password"
+                className="text-xs font-bold text-ustp-navy hover:underline focus-visible:outline-2 focus-visible:outline-ustp-navy rounded px-1 py-0.5"
               >
-                Forgot Password?
-              </button>
+                Forgot password?
+              </Link>
             </div>
 
             <div className="pt-1 flex justify-center">

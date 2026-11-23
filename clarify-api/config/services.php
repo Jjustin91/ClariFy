@@ -18,7 +18,7 @@ return [
 
         // Semaphore (PH SMS gateway) configuration
         'api_key' => env('SMS_API_KEY', ''),
-        'sender_name' => env('SMS_SENDER_NAME', 'USTPClariFy'),
+        'sender_name' => env('SMS_SENDER_NAME', ''),
         'semaphore_url' => env('SMS_SEMAPHORE_URL', 'https://api.semaphore.co/api/v4/messages'),
 
         // Twilio SMS configuration

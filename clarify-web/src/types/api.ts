@@ -297,9 +297,25 @@ export interface PersistenceStatus {
   revision: number;
 }
 
+export interface PasswordOtpRequestResponse {
+  message: string;
+  resend_cooldown_seconds?: number;
+}
+
+export interface PasswordOtpVerifyResponse {
+  message: string;
+  reset_token: string;
+  expires_in_seconds?: number;
+}
+
+export interface PasswordResetResponse {
+  message: string;
+}
+
 export interface LaravelValidationError {
   status: number;
   message: string;
+  retry_after?: number;
   errors?: Record<string, string[]>;
   data?: unknown;
 }

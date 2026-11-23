@@ -6,6 +6,9 @@ import type {
   Instructor,
   LaravelValidationError,
   PaginatedResponse,
+  PasswordOtpRequestResponse,
+  PasswordOtpVerifyResponse,
+  PasswordResetResponse,
   PersistenceStatus,
   PrismsSyncLog,
   QaThread,
@@ -142,7 +145,12 @@ async function requestLaravel<T>(
     cache: 'no-store',
   });
 
-  if (response.status === 401) {
+  const isPublicAuthEndpoint =
+    endpoint.startsWith('/auth/login') ||
+    endpoint.startsWith('/auth/register') ||
+    endpoint.startsWith('/auth/password/');
+
+  if (response.status === 401 && !isPublicAuthEndpoint) {
     clearStoredSession();
     const err: LaravelValidationError = {
       status: 401,
@@ -210,15 +218,26 @@ async function requestLaravel<T>(
   }
 
   if (!response.ok) {
+    const retryAfterHeader = response.headers.get('Retry-After');
+    const parsedRetryAfter =
+      typeof json.retry_after === 'number'
+        ? json.retry_after
+        : retryAfterHeader && /^\d+$/.test(retryAfterHeader.trim())
+        ? Number(retryAfterHeader.trim())
+        : undefined;
+
     const err: LaravelValidationError & {
       verification_status?: VerificationStatus;
     } = {
       status: response.status,
       verification_status: json.verification_status,
+      retry_after: parsedRetryAfter,
       message:
         json.message ||
         (response.status === 403
           ? 'Access Denied: You do not have permission for this action.'
+          : response.status === 429 && parsedRetryAfter
+          ? `Too many attempts. Please try again in ${parsedRetryAfter} seconds.`
           : 'An unexpected server error occurred.'),
       errors: json.errors,
       data: json.data,
@@ -231,6 +250,7 @@ async function requestLaravel<T>(
     method !== 'GET' &&
     method !== 'HEAD' &&
     !endpoint.endsWith('/seen') &&
+    !endpoint.startsWith('/auth/') &&
     typeof window !== 'undefined'
   ) {
     let parsedBody: Record<string, unknown> | undefined;
@@ -341,6 +361,51 @@ export async function updateProfileApi(
     setStoredUser(res.data);
   }
   return res;
+}
+
+export async function requestPasswordOtpApi(
+  institutional_id: string
+): Promise<PasswordOtpRequestResponse> {
+  return requestLaravel<PasswordOtpRequestResponse>(
+    '/auth/password/request-otp',
+    {
+      method: 'POST',
+      body: JSON.stringify({ institutional_id: institutional_id.trim() }),
+    }
+  );
+}
+
+export async function verifyPasswordOtpApi(payload: {
+  institutional_id: string;
+  otp: string;
+}): Promise<PasswordOtpVerifyResponse> {
+  return requestLaravel<PasswordOtpVerifyResponse>(
+    '/auth/password/verify-otp',
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        institutional_id: payload.institutional_id.trim(),
+        otp: payload.otp.trim(),
+      }),
+    }
+  );
+}
+
+export async function resetPasswordApi(payload: {
+  institutional_id: string;
+  reset_token: string;
+  password: string;
+  password_confirmation: string;
+}): Promise<PasswordResetResponse> {
+  return requestLaravel<PasswordResetResponse>('/auth/password/reset', {
+    method: 'POST',
+    body: JSON.stringify({
+      institutional_id: payload.institutional_id.trim(),
+      reset_token: payload.reset_token,
+      password: payload.password,
+      password_confirmation: payload.password_confirmation,
+    }),
+  });
 }
 
 // ============================================================================

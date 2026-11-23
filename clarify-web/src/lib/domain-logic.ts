@@ -1647,6 +1647,113 @@ export function formatMeasuredLatency(params: {
   };
 }
 
+// ============================================================================
+// FORGOT PASSWORD VIA SMS OTP HELPERS
+// ============================================================================
+
+export type PasswordResetStep = 'request' | 'verify' | 'reset' | 'done';
+
+/**
+ * Strips all non-digit characters and limits OTP input to 6 digits.
+ */
+export function sanitizeOtpInput(raw: string): string {
+  return raw.replace(/\D+/g, '').slice(0, 6);
+}
+
+/**
+ * Extracts a positive retry-after duration in seconds from a Laravel 429 error payload
+ * or falls back to parsing "in N seconds" from the error message.
+ */
+export function extractRetryAfterSeconds(
+  err: { retry_after?: number; message?: string } | null | undefined,
+  fallbackSeconds = 0
+): number {
+  if (
+    typeof err?.retry_after === 'number' &&
+    Number.isFinite(err.retry_after) &&
+    err.retry_after > 0
+  ) {
+    return Math.ceil(err.retry_after);
+  }
+
+  if (typeof err?.message === 'string') {
+    const match = err.message.match(/(?:in|wait)\s+(\d+)\s+second/i);
+    if (match) {
+      const parsed = Number(match[1]);
+      if (Number.isFinite(parsed) && parsed > 0) {
+        return Math.ceil(parsed);
+      }
+    }
+  }
+
+  return Math.max(0, Math.ceil(fallbackSeconds));
+}
+
+/**
+ * Validates client-side fields for each step of the SMS OTP password reset flow.
+ */
+export function validatePasswordResetFields(
+  step: Exclude<PasswordResetStep, 'done'>,
+  fields: {
+    institutionalId?: string;
+    otp?: string;
+    password?: string;
+    passwordConfirmation?: string;
+  }
+): Record<string, string[]> {
+  const errors: Record<string, string[]> = {};
+
+  if (step === 'request') {
+    const trimmedId = (fields.institutionalId || '').trim();
+    if (!trimmedId) {
+      errors.institutional_id = ['Please enter your Institutional ID Number.'];
+    } else if (trimmedId.length > 64) {
+      errors.institutional_id = ['Institutional ID must be 64 characters or fewer.'];
+    }
+    return errors;
+  }
+
+  if (step === 'verify') {
+    const trimmedId = (fields.institutionalId || '').trim();
+    const cleanedOtp = sanitizeOtpInput(fields.otp || '');
+    if (!trimmedId) {
+      errors.institutional_id = ['Institutional ID is required.'];
+    }
+    if (!/^\d{6}$/.test(cleanedOtp)) {
+      errors.otp = ['Please enter the 6-digit verification code sent via SMS.'];
+    }
+    return errors;
+  }
+
+  // step === 'reset'
+  const password = fields.password || '';
+  const confirm = fields.passwordConfirmation || '';
+  if (password.length < 8) {
+    errors.password = ['Password must be at least 8 characters long.'];
+  } else if (password.length > 255) {
+    errors.password = ['Password must be 255 characters or fewer.'];
+  }
+
+  if (!confirm) {
+    errors.password_confirmation = ['Please confirm your new password.'];
+  } else if (password !== confirm) {
+    errors.password_confirmation = ['Password confirmation does not match.'];
+  }
+
+  return errors;
+}
+
+/**
+ * Formats the resend OTP button label with tabular seconds countdown.
+ */
+export function formatOtpCooldownLabel(seconds: number): string {
+  const remaining = Math.max(0, Math.ceil(seconds));
+  if (remaining <= 0) {
+    return 'Resend Code';
+  }
+  return `Resend code in ${remaining}s`;
+}
+
 
 
 

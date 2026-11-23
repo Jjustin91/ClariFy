@@ -2,6 +2,7 @@
 
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Api\V1\AuthController;
+use App\Http\Controllers\Api\V1\PasswordResetController;
 use App\Http\Controllers\Api\V1\ProfileController;
 use App\Http\Controllers\Api\V1\ChannelController;
 use App\Http\Controllers\Api\V1\ChannelChatController;
@@ -37,6 +38,9 @@ Route::prefix('v1')->group(function () {
     // Public Auth Routes
     Route::post('/auth/login', [AuthController::class, 'login']);
     Route::post('/auth/register', [AuthController::class, 'register']);
+    Route::post('/auth/password/request-otp', [PasswordResetController::class, 'requestOtp']);
+    Route::post('/auth/password/verify-otp', [PasswordResetController::class, 'verifyOtp']);
+    Route::post('/auth/password/reset', [PasswordResetController::class, 'reset']);
 
     // Authenticated & Registrar-Verified Routes
     Route::middleware(['auth:sanctum', 'verified.account'])->group(function () {

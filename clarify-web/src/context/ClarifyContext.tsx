@@ -791,7 +791,9 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!isAuthReady) return;
     const isPublicAuthPage =
-      pathname === '/login' || pathname === '/register';
+      pathname === '/login' ||
+      pathname === '/register' ||
+      pathname === '/forgot-password';
 
     if (!isAuthenticated && !isPublicAuthPage) {
       router.replace('/login');

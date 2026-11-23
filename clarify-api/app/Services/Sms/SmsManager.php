@@ -15,7 +15,7 @@ class SmsManager
         return match ($driver) {
             'semaphore' => new SemaphoreSmsProvider(
                 (string) config('services.sms.api_key', ''),
-                (string) config('services.sms.sender_name', 'USTPClariFy'),
+                (string) config('services.sms.sender_name', ''),
                 (string) config('services.sms.semaphore_url', 'https://api.semaphore.co/api/v4/messages')
             ),
             'twilio' => new TwilioSmsProvider(
