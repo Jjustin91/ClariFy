@@ -21,11 +21,11 @@ class TriggerSmsFallbackBatch implements ShouldQueue
     public int $tries = 3;
     public int $timeout = 30;
     public array $backoff = [2, 5, 15];
-    public bool $afterCommit = true;
 
     public function __construct(public Announcement $announcement)
     {
         $this->onQueue('sms-fallback');
+        $this->afterCommit();
     }
 
     /**

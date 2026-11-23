@@ -3,7 +3,11 @@
 namespace Tests\Feature;
 
 use App\Http\Controllers\Api\V1\PasswordResetController;
+use App\Jobs\DispatchUrgentPushAlerts;
 use App\Jobs\SendPasswordResetOtpSms;
+use App\Jobs\TriggerSmsFallbackBatch;
+use App\Models\Announcement;
+use App\Models\Channel;
 use App\Models\User;
 use App\Services\Sms\LogSmsProvider;
 use App\Services\Sms\SmsProviderInterface;
@@ -333,6 +337,74 @@ class PasswordResetOtpTest extends TestCase
             $serialized = $msg . ' ' . json_encode($context);
             return ! str_contains($serialized, '654321')
                 && ! str_contains($serialized, '9171234567');
+        });
+    }
+
+    public function test_queued_jobs_instantiate_and_dispatch_with_after_commit_without_trait_conflicts(): void
+    {
+        Queue::fake();
+
+        $faculty = $this->createUser([
+            'institutional_id' => '109901',
+            'email' => 'faculty.jobs@ustp.edu.ph',
+            'role' => 'faculty',
+        ]);
+
+        $channel = Channel::create([
+            'course_code' => 'IT314',
+            'name' => 'IT314 Software Engineering',
+            'channel_type' => 'course_hub',
+            'scope_college' => 'CITC',
+            'scope_department' => 'CITC',
+            'scope_section' => 'IT3R2',
+            'created_by' => $faculty->id,
+        ]);
+
+        $announcement = Announcement::create([
+            'channel_id' => $channel->id,
+            'publisher_id' => $faculty->id,
+            'title' => 'Urgent Campus Notice',
+            'content' => 'Queue trait compatibility check.',
+            'is_urgent' => true,
+            'trigger_sms_fallback' => true,
+            'status' => 'published',
+            'published_at' => now(),
+        ]);
+
+        $otpJob = new SendPasswordResetOtpSms($faculty->id, '+639171234567', '123456');
+        $this->assertSame('high-priority-push', $otpJob->queue);
+        $this->assertTrue($otpJob->afterCommit);
+        $this->assertSame(3, $otpJob->tries);
+        $this->assertSame(20, $otpJob->timeout);
+        $this->assertSame([2, 5, 15], $otpJob->backoff);
+
+        $smsBatchJob = new TriggerSmsFallbackBatch($announcement);
+        $this->assertSame('sms-fallback', $smsBatchJob->queue);
+        $this->assertTrue($smsBatchJob->afterCommit);
+
+        $pushJob = new DispatchUrgentPushAlerts($announcement);
+        $this->assertSame('high-priority-push', $pushJob->queue);
+        $this->assertTrue($pushJob->afterCommit);
+
+        SendPasswordResetOtpSms::dispatch($faculty->id, '+639171234567', '123456');
+        TriggerSmsFallbackBatch::dispatch($announcement);
+        DispatchUrgentPushAlerts::dispatch($announcement);
+
+        Queue::assertPushedOn('high-priority-push', SendPasswordResetOtpSms::class, function (SendPasswordResetOtpSms $job) use ($faculty) {
+            return $job->userId === $faculty->id
+                && $job->recipient === '+639171234567'
+                && $job->otp === '123456'
+                && $job->afterCommit === true;
+        });
+
+        Queue::assertPushedOn('sms-fallback', TriggerSmsFallbackBatch::class, function (TriggerSmsFallbackBatch $job) use ($announcement) {
+            return $job->announcement->id === $announcement->id
+                && $job->afterCommit === true;
+        });
+
+        Queue::assertPushedOn('high-priority-push', DispatchUrgentPushAlerts::class, function (DispatchUrgentPushAlerts $job) use ($announcement) {
+            return $job->announcement->id === $announcement->id
+                && $job->afterCommit === true;
         });
     }
 }

@@ -20,7 +20,6 @@ class SendPasswordResetOtpSms implements ShouldQueue
     public int $tries = 3;
     public int $timeout = 20;
     public array $backoff = [2, 5, 15];
-    public bool $afterCommit = true;
 
     public function __construct(
         public int $userId,
@@ -29,6 +28,7 @@ class SendPasswordResetOtpSms implements ShouldQueue
     ) {
         // Use existing high-priority queue already listed by the VPS worker
         $this->onQueue('high-priority-push');
+        $this->afterCommit();
     }
 
     /**
