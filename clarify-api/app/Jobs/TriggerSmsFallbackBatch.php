@@ -4,7 +4,6 @@ namespace App\Jobs;
 
 use App\Models\Announcement;
 use App\Services\Sms\SmsManager;
-use App\Services\Sms\SmsProviderInterface;
 use App\Support\PhoneNormalizer;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -58,7 +57,7 @@ class TriggerSmsFallbackBatch implements ShouldQueue
      * Broadcasts low-bandwidth SMS alerts in chunks of 100 using decrypted RA 10173 contact_number (NFR-02, NFR-05).
      * Never logs phone numbers or API keys.
      */
-    public function handle(?SmsProviderInterface $provider = null): void
+    public function handle(): void
     {
         $channel = $this->announcement->relationLoaded('channel')
             ? $this->announcement->channel
@@ -68,7 +67,7 @@ class TriggerSmsFallbackBatch implements ShouldQueue
             return;
         }
 
-        $smsProvider = $provider ?? SmsManager::resolve();
+        $smsProvider = SmsManager::resolve();
         $publisherId = (int) ($this->announcement->publisher_id ?? 0);
         $message = self::formatSmsMessage($this->announcement);
 

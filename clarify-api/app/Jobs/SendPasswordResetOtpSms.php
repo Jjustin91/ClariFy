@@ -3,7 +3,6 @@
 namespace App\Jobs;
 
 use App\Services\Sms\SmsManager;
-use App\Services\Sms\SmsProviderInterface;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -43,9 +42,9 @@ class SendPasswordResetOtpSms implements ShouldQueue
      * Dispatches a single-recipient OTP SMS via the configured SmsProviderInterface.
      * Never logs the OTP code, recipient phone number, message body, or SMS API key.
      */
-    public function handle(?SmsProviderInterface $provider = null): void
+    public function handle(): void
     {
-        $smsProvider = $provider ?? SmsManager::resolve();
+        $smsProvider = SmsManager::resolve();
         $message = self::formatOtpMessage($this->otp);
         $driver = (string) config('services.sms.driver', 'log');
 

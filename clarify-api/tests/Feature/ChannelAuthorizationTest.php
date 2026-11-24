@@ -1336,7 +1336,12 @@ class ChannelAuthorizationTest extends TestCase
             }
         };
 
-        $job->handle($partialProvider);
+        \App\Services\Sms\SmsManager::fake($partialProvider);
+        try {
+            $job->handle();
+        } finally {
+            \App\Services\Sms\SmsManager::fake(null);
+        }
         $this->assertSame([100, 2], $partialCallBatchSizes);
         \Illuminate\Support\Facades\Log::shouldHaveReceived('info')
             ->withArgs(function (string $message, array $context) use ($ann): bool {
@@ -1356,9 +1361,14 @@ class ChannelAuthorizationTest extends TestCase
             }
         };
 
-        $this->expectException(\RuntimeException::class);
-        $this->expectExceptionMessage('Gateway completely unreachable.');
-        $job->handle($allFailingProvider);
+        \App\Services\Sms\SmsManager::fake($allFailingProvider);
+        try {
+            $this->expectException(\RuntimeException::class);
+            $this->expectExceptionMessage('Gateway completely unreachable.');
+            $job->handle();
+        } finally {
+            \App\Services\Sms\SmsManager::fake(null);
+        }
     }
 
     public function test_channel_index_activity_breakdown_sub_channel_and_private_qa_exclusion(): void

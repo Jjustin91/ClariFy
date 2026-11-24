@@ -10,8 +10,10 @@ use App\Models\Announcement;
 use App\Models\Channel;
 use App\Models\User;
 use App\Services\Sms\LogSmsProvider;
+use App\Services\Sms\SmsManager;
 use App\Services\Sms\SmsProviderInterface;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Log;
@@ -316,8 +318,13 @@ class PasswordResetOtpTest extends TestCase
             }
         };
 
-        $job = new SendPasswordResetOtpSms(42, '+639171234567', '654321');
-        $job->handle($fakeProvider);
+        SmsManager::fake($fakeProvider);
+        try {
+            $job = new SendPasswordResetOtpSms(42, '+639171234567', '654321');
+            $job->handle();
+        } finally {
+            SmsManager::fake(null);
+        }
 
         $this->assertSame(['+639171234567'], $capturedRecipients);
         $this->assertSame(
@@ -338,6 +345,30 @@ class PasswordResetOtpTest extends TestCase
             return ! str_contains($serialized, '654321')
                 && ! str_contains($serialized, '9171234567');
         });
+    }
+
+    public function test_send_password_reset_otp_sms_dispatches_synchronously_with_log_driver_without_binding_error(): void
+    {
+        config(['services.sms.driver' => 'log']);
+        SmsManager::fake(null);
+        Log::spy();
+
+        // Dispatch synchronously through Laravel's Bus/SyncQueue container resolution path
+        // (same BoundMethod::call path as a queue worker), using beforeCommit() so the
+        // RefreshDatabase outer transaction does not defer execution until rollback.
+        Bus::dispatchSync(
+            (new SendPasswordResetOtpSms(42, '+639171234567', '654321'))->beforeCommit()
+        );
+
+        Log::shouldHaveReceived('info')
+            ->withArgs(function (string $message, array $context): bool {
+                return $message === 'Password reset OTP SMS dispatch completed.'
+                    && ($context['user_id'] ?? null) === 42
+                    && ($context['driver'] ?? null) === 'log'
+                    && ($context['sent'] ?? null) === 1
+                    && ($context['failed'] ?? null) === 0;
+            })
+            ->once();
     }
 
     public function test_queued_jobs_instantiate_and_dispatch_with_after_commit_without_trait_conflicts(): void
