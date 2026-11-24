@@ -217,7 +217,7 @@ export default function MobileForgotPasswordScreen() {
     setOtpCode(cleanCode);
     if (cleanCode.length !== 6) {
       setFieldErrors({
-        code: ['Please enter the 6-digit verification code sent to your phone.'],
+        otp: ['Please enter the 6-digit verification code sent to your phone.'],
       });
       return;
     }
@@ -322,7 +322,9 @@ export default function MobileForgotPasswordScreen() {
   };
 
   const idError = getFieldValidationError(fieldErrors, 'institutional_id');
-  const codeError = getFieldValidationError(fieldErrors, 'code');
+  const codeError = 
+    getFieldValidationError(fieldErrors, 'otp') ??
+    getFieldValidationError(fieldErrors, 'code');
   const passwordError = getFieldValidationError(fieldErrors, 'password');
   const confirmPasswordError = getFieldValidationError(
     fieldErrors,
@@ -585,6 +587,7 @@ export default function MobileForgotPasswordScreen() {
                       value={otpCode}
                       onChangeText={(val) => {
                         setOtpCode(sanitizeOtpInput(val));
+                        clearFieldError('otp');
                         clearFieldError('code');
                       }}
                       placeholder="000000"

@@ -376,7 +376,7 @@ export async function verifyPasswordOtpApi(
     skipAuth: true,
     body: JSON.stringify({
       institutional_id: institutional_id.trim(),
-      code: code.trim(),
+      otp: code.trim(),
     }),
   });
 }
