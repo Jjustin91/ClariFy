@@ -17,6 +17,7 @@ export default function DrawerGroupLayout() {
         <AuthenticatedServicesBridge />
         <Stack screenOptions={{ headerShown: false, animation: 'none' }}>
           <Stack.Screen name="index" />
+          <Stack.Screen name="admin" />
           <Stack.Screen name="announcements" />
           <Stack.Screen name="instructors" />
           <Stack.Screen name="channels/[channelId]" />

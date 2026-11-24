@@ -1,4 +1,4 @@
-import { useRouter } from 'expo-router';
+import { Redirect, useRouter } from 'expo-router';
 import React, { useCallback, useState } from 'react';
 import {
   Pressable,
@@ -9,7 +9,6 @@ import {
   View,
 } from 'react-native';
 
-import { AdminConsoleView } from '@/components/AdminConsoleView';
 import { AnnouncementCard } from '@/components/AnnouncementCard';
 import { AnnouncementFormModal } from '@/components/AnnouncementFormModal';
 import { MobileAppShell } from '@/components/MobileAppShell';
@@ -72,11 +71,7 @@ export default function MobileDashboardScreen() {
   }
 
   if (isAdmin) {
-    return (
-      <MobileAppShell title="IT Admin Console">
-        <AdminConsoleView />
-      </MobileAppShell>
-    );
+    return <Redirect href="/admin?tab=verifications" />;
   }
 
   const updatedHubs = joinedCourseHubs.filter((ch) => ch.has_updates === true);

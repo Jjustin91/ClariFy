@@ -1,19 +1,30 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { getApiOrigin, resolveApiAssetUrl } from './api-client.ts';
 import {
+  getApiOrigin,
+  getPendingUsersApi,
+  resolveApiAssetUrl,
+} from './api-client.ts';
+import {
+  ADMIN_DEPARTMENT_TAGS,
   buildAnnouncementFormData,
   buildChatMessageFormData,
   buildProfileUpdateFormData,
   buildVoiceRecordingDescriptor,
   canManageAnnouncement,
+  computeAdminMetricsSnapshot,
   extractRetryAfterSeconds,
   filterAnnouncementAudits,
+  filterRbacUsers,
+  filterSyncLogs,
+  filterVerificationQueueUsers,
   formatAudioDuration,
   formatFileSize,
+  formatMeasuredLatency,
   formatOtpCooldownLabel,
   getAdminSectionTitle,
+  getRbacDepartmentOptions,
   MAX_ANNOUNCEMENT_ATTACHMENT_BYTES,
   MAX_CHAT_ATTACHMENT_BYTES,
   MAX_PROFILE_AVATAR_BYTES,
@@ -27,9 +38,11 @@ import {
   validateProfileAvatarFile,
 } from './domain-logic.ts';
 import type {
+  AdminMetricsResponse,
   Announcement,
   AnnouncementAudit,
   Channel,
+  PrismsSyncLog,
   User,
 } from '../types/api.ts';
 
@@ -491,12 +504,479 @@ test('password reset OTP helpers sanitize 6-digit input, extract retry_after, va
   assert.equal(formatOtpCooldownLabel(29.1), 'Resend code in 30s');
 });
 
-test('filterAnnouncementAudits filters by search query, editorRole, changeType, and combined criteria', () => {
+test('parseAdminSectionTab and getAdminSectionTitle match clarify-web tabs, aliases, and titles', () => {
+  assert.equal(parseAdminSectionTab('verifications'), 'verifications');
+  assert.equal(parseAdminSectionTab('  RBAC '), 'rbac');
+  assert.equal(parseAdminSectionTab('roster-sync'), 'roster-sync');
   assert.equal(parseAdminSectionTab('prisms'), 'roster-sync');
-  assert.equal(parseAdminSectionTab('metrics'), 'audits');
+  assert.equal(parseAdminSectionTab('metrics'), 'metrics');
+  assert.equal(parseAdminSectionTab('audits'), 'metrics');
   assert.equal(parseAdminSectionTab('unknown'), 'verifications');
-  assert.equal(getAdminSectionTitle('audits'), 'System Metrics & Audit Trail');
+  assert.equal(parseAdminSectionTab(''), 'verifications');
+  assert.equal(parseAdminSectionTab(null), 'verifications');
+  assert.equal(parseAdminSectionTab(undefined), 'verifications');
 
+  assert.equal(
+    getAdminSectionTitle('verifications'),
+    'IT Admin — Account Verification Queue'
+  );
+  assert.equal(
+    getAdminSectionTitle('rbac'),
+    'IT Admin — RBAC Role Management'
+  );
+  assert.equal(
+    getAdminSectionTitle('roster-sync'),
+    'IT Admin — Account & Roster Sync Console'
+  );
+  assert.equal(
+    getAdminSectionTitle('metrics'),
+    'IT Admin — System Metrics & Audit Trail'
+  );
+});
+
+test('filterVerificationQueueUsers filters by status, role, department, and search across name/ID/email/mobile/section', () => {
+  const queue: User[] = [
+    {
+      id: 101,
+      institutional_id: '2024300111',
+      name: 'Denji Hayakawa',
+      email: 'denji@ustp.edu.ph',
+      contact_number: '+639171112222',
+      role: 'student',
+      verification_status: 'pending',
+      academic_profile: {
+        campus: 'CDO',
+        college: 'CITC',
+        department: 'CITC',
+        program: 'BSIT',
+        year_level: 3,
+        section: 'IT3R2',
+        semester_code: '2026-1ST-SEM',
+      },
+    },
+    {
+      id: 102,
+      institutional_id: 'FAC-2024-09',
+      name: 'Prof. Reze Ivanova',
+      email: 'reze@ustp.edu.ph',
+      contact_number: '+639189998888',
+      role: 'faculty',
+      verification_status: 'pending',
+      academic_profile: {
+        campus: 'CDO',
+        college: 'CEA',
+        department: 'CEA',
+        program: null,
+        year_level: null,
+        section: 'CE2A',
+        semester_code: '2026-1ST-SEM',
+      },
+    },
+    {
+      id: 103,
+      institutional_id: '2024300222',
+      name: 'Power Fiend',
+      email: 'power@ustp.edu.ph',
+      contact_number: '+639193334444',
+      role: 'student',
+      verification_status: 'rejected',
+      academic_profile: {
+        campus: 'CDO',
+        college: 'CSM',
+        department: 'CSM',
+        program: 'BSCS',
+        year_level: 2,
+        section: 'CS2R1',
+        semester_code: '2026-1ST-SEM',
+      },
+    },
+    {
+      id: 104,
+      institutional_id: '2024300333',
+      name: 'Already Approved Student',
+      email: 'approved@ustp.edu.ph',
+      role: 'student',
+      verification_status: 'approved',
+      academic_profile: {
+        campus: 'CDO',
+        college: 'CITC',
+        department: 'CITC',
+        program: 'BSIT',
+        year_level: 3,
+        section: 'IT3R2',
+        semester_code: '2026-1ST-SEM',
+      },
+    },
+  ];
+
+  // Default status='pending'
+  assert.deepEqual(
+    filterVerificationQueueUsers(queue).map((u) => u.id),
+    [101, 102]
+  );
+
+  // Rejected archive only
+  assert.deepEqual(
+    filterVerificationQueueUsers(queue, { status: 'rejected' }).map((u) => u.id),
+    [103]
+  );
+
+  // All Queue includes pending + rejected, never approved
+  assert.deepEqual(
+    filterVerificationQueueUsers(queue, { status: 'all' }).map((u) => u.id),
+    [101, 102, 103]
+  );
+
+  // Role filter
+  assert.deepEqual(
+    filterVerificationQueueUsers(queue, {
+      status: 'all',
+      role: 'faculty',
+    }).map((u) => u.id),
+    [102]
+  );
+
+  // Department filter
+  assert.deepEqual(
+    filterVerificationQueueUsers(queue, {
+      status: 'all',
+      department: 'csm',
+    }).map((u) => u.id),
+    [103]
+  );
+
+  // Search by mobile number and section
+  assert.deepEqual(
+    filterVerificationQueueUsers(queue, {
+      status: 'all',
+      search: '9189998888',
+    }).map((u) => u.id),
+    [102]
+  );
+  assert.deepEqual(
+    filterVerificationQueueUsers(queue, {
+      status: 'all',
+      search: 'it3r2',
+    }).map((u) => u.id),
+    [101]
+  );
+});
+
+test('filterRbacUsers and getRbacDepartmentOptions match clarify-web RBAC directory filtering and options', () => {
+  const users: User[] = [
+    {
+      id: 1,
+      institutional_id: 'ADM-001',
+      name: 'ICTO System Admin',
+      email: 'icto@ustp.edu.ph',
+      contact_number: '+639170000001',
+      role: 'it_admin',
+      verification_status: 'approved',
+      academic_profile: {
+        campus: 'CDO',
+        college: 'CITC',
+        department: 'ICTO',
+        program: null,
+        year_level: null,
+        section: null,
+        semester_code: '2026-1ST-SEM',
+      },
+    },
+    {
+      id: 2,
+      institutional_id: 'DH-002',
+      name: 'Dr. Makima Reyes',
+      email: 'makima@ustp.edu.ph',
+      contact_number: '+639170000002',
+      role: 'dept_head',
+      verification_status: 'approved',
+      academic_profile: {
+        campus: 'CDO',
+        college: 'CITC',
+        department: 'CITC',
+        program: null,
+        year_level: null,
+        section: null,
+        semester_code: '2026-1ST-SEM',
+      },
+    },
+    {
+      id: 3,
+      institutional_id: '2023300555',
+      name: 'Asa Mitaka',
+      email: 'asa@ustp.edu.ph',
+      contact_number: '+639170000003',
+      role: 'student',
+      verification_status: 'approved',
+      academic_profile: {
+        campus: 'CDO',
+        college: 'COT',
+        department: 'COT',
+        program: 'BSET',
+        year_level: 3,
+        section: 'ET3R1',
+        semester_code: '2026-1ST-SEM',
+      },
+    },
+  ];
+
+  assert.equal(filterRbacUsers(users).length, 3);
+  assert.deepEqual(
+    filterRbacUsers(users, { role: 'dept_head' }).map((u) => u.id),
+    [2]
+  );
+  assert.deepEqual(
+    filterRbacUsers(users, { department: 'COT' }).map((u) => u.id),
+    [3]
+  );
+  assert.deepEqual(
+    filterRbacUsers(users, { search: 'ET3R1' }).map((u) => u.id),
+    [3]
+  );
+  assert.deepEqual(
+    filterRbacUsers(users, { search: '9170000001' }).map((u) => u.id),
+    [1]
+  );
+
+  assert.deepEqual(getRbacDepartmentOptions('CITC'), [...ADMIN_DEPARTMENT_TAGS]);
+  assert.deepEqual(getRbacDepartmentOptions('icto'), [
+    ...ADMIN_DEPARTMENT_TAGS,
+    'ICTO',
+  ]);
+});
+
+test('filterSyncLogs filters by syncType, status, and search over #id, semester_code, and triggered_by', () => {
+  const logs: PrismsSyncLog[] = [
+    {
+      id: 14,
+      semester_code: '2026-1ST-SEM',
+      triggered_by: 'ICTO Admin (ADM-001)',
+      sync_type: 'manual_admin',
+      total_updated: 48,
+      channels_provisioned: 6,
+      status: 'completed',
+      duration_ms: 185,
+      executed_at: '2026-11-24T08:00:00Z',
+    },
+    {
+      id: 13,
+      semester_code: '2025-2ND-SEM',
+      triggered_by: 'System Scheduler',
+      sync_type: 'scheduled_midnight',
+      total_updated: 45,
+      channels_provisioned: 5,
+      status: 'partial_warning',
+      duration_ms: 240,
+      executed_at: '2026-11-23T00:00:00Z',
+    },
+    {
+      id: 12,
+      semester_code: '2025-2ND-SEM',
+      triggered_by: 'System Scheduler',
+      sync_type: 'scheduled_midnight',
+      total_updated: 0,
+      channels_provisioned: 0,
+      status: 'failed',
+      duration_ms: 52,
+      executed_at: '2026-11-22T00:00:00Z',
+    },
+  ];
+
+  assert.equal(filterSyncLogs(logs).length, 3);
+  assert.deepEqual(
+    filterSyncLogs(logs, { syncType: 'manual_admin' }).map((l) => l.id),
+    [14]
+  );
+  assert.deepEqual(
+    filterSyncLogs(logs, { status: 'partial_warning' }).map((l) => l.id),
+    [13]
+  );
+  assert.deepEqual(
+    filterSyncLogs(logs, { status: 'failed' }).map((l) => l.id),
+    [12]
+  );
+  assert.deepEqual(
+    filterSyncLogs(logs, { search: '#14' }).map((l) => l.id),
+    [14]
+  );
+  assert.deepEqual(
+    filterSyncLogs(logs, {
+      syncType: 'scheduled_midnight',
+      search: '2025-2nd-sem',
+      status: 'completed',
+    }),
+    []
+  );
+});
+
+test('formatMeasuredLatency and computeAdminMetricsSnapshot compute web-matching KPI/health values and render "—" when fields are missing', () => {
+  // 1. Completely missing snapshot renders "—" with zero fake numbers
+  const emptySnap = computeAdminMetricsSnapshot({});
+  assert.equal(emptySnap.kpi.pendingDisplay, '—');
+  assert.equal(emptySnap.kpi.pendingSubline, '—');
+  assert.equal(emptySnap.kpi.isPendingWarning, false);
+  assert.equal(emptySnap.kpi.registeredDisplay, '—');
+  assert.equal(emptySnap.kpi.registeredSubline, '—');
+  assert.equal(emptySnap.kpi.latencyDisplay, '—');
+  assert.equal(emptySnap.kpi.latencySubline, '—');
+  assert.equal(emptySnap.kpi.auditsDisplay, '—');
+  assert.equal(emptySnap.kpi.auditsSubline, '—');
+  assert.equal(emptySnap.rosterSummary.departmentDisplayByTag.CITC, '—');
+  assert.equal(emptySnap.rosterSummary.scopedChannelsDisplay, '—');
+  assert.equal(emptySnap.rosterSummary.courseHubsSubline, '—');
+  assert.equal(emptySnap.health.verificationRatioDisplay, '—');
+  assert.equal(emptySnap.health.overallReadReachDisplay, '—');
+  assert.equal(emptySnap.health.urgentNoticesDisplay, '—');
+  assert.equal(emptySnap.health.activeChannelsDisplay, '—');
+
+  // 2. Full AdminMetricsResponse matches clarify-web formulas & SLA check
+  const fullMetrics: AdminMetricsResponse = {
+    active_users_count: 40,
+    total_registered_users_count: 45,
+    verified_accounts_count: 40,
+    pending_verifications_count: 3,
+    rejected_verifications_count: 2,
+    role_breakdown: {
+      student: 34,
+      faculty: 4,
+      dept_head: 1,
+      it_admin: 1,
+    },
+    department_breakdown: {
+      CITC: 25,
+      CEA: 8,
+      COT: 4,
+      CSM: 3,
+    },
+    active_channels_count: 9,
+    course_hubs_count: 6,
+    published_announcements_count: 18,
+    urgent_announcements_count: 4,
+    push_queue_latency_seconds: 0.12,
+    api_latency_ms: 184,
+    sms_fallback_dispatched_count: 2,
+    overall_read_reach_percentage: 87.5,
+    announcement_audits_total: 11,
+    sync_logs: [],
+    announcement_audits: [],
+  };
+
+  const fullSnap = computeAdminMetricsSnapshot({
+    metrics: fullMetrics,
+    clientRoundTripMs: 310,
+  });
+  assert.equal(fullSnap.kpi.pendingDisplay, '3');
+  assert.equal(fullSnap.kpi.pendingSubline, '2 rejected in archive');
+  assert.equal(fullSnap.kpi.isPendingWarning, true);
+  assert.equal(fullSnap.kpi.registeredDisplay, '40');
+  assert.equal(
+    fullSnap.kpi.registeredSubline,
+    '45 total • 34 students, 5 faculty'
+  );
+  assert.equal(fullSnap.kpi.latencyDisplay, '184ms');
+  assert.equal(fullSnap.kpi.latencySubline, '4 urgent alerts sent');
+  assert.equal(fullSnap.kpi.isLatencySlaMet, true);
+  assert.equal(fullSnap.kpi.auditsDisplay, '11');
+  assert.equal(fullSnap.kpi.auditsSubline, '18 published notices');
+  assert.equal(fullSnap.rosterSummary.departmentDisplayByTag.CITC, '25');
+  assert.equal(fullSnap.rosterSummary.scopedChannelsDisplay, '9');
+  assert.equal(fullSnap.rosterSummary.courseHubsSubline, '6 course hubs');
+  assert.equal(fullSnap.health.verificationRatioDisplay, '89%');
+  assert.equal(
+    fullSnap.health.verificationRatioSubline,
+    '40 approved of 45 registered'
+  );
+  assert.equal(fullSnap.health.overallReadReachDisplay, '87.5%');
+  assert.equal(fullSnap.health.urgentNoticesDisplay, '4');
+  assert.equal(fullSnap.health.urgentNoticesSubline, '2 with SMS fallback');
+  assert.equal(fullSnap.health.activeChannelsDisplay, '9');
+  assert.equal(
+    fullSnap.health.activeChannelsSubline,
+    '6 top-level Course Hubs'
+  );
+
+  // 3. Fallback to queueUsers / allUsers / clientRoundTripMs & SLA breach (>2.0s)
+  const slowLatency = formatMeasuredLatency({
+    apiLatencyMs: null,
+    clientRoundTripMs: 2450,
+  });
+  assert.equal(slowLatency.primaryDisplay, '2.45s');
+  assert.equal(slowLatency.withinSla, false);
+
+  const fallbackSnap = computeAdminMetricsSnapshot({
+    metrics: null,
+    queueUsers: [
+      { ...makeUser('student', 1), verification_status: 'pending' },
+      { ...makeUser('faculty', 2), verification_status: 'rejected' },
+    ],
+    allUsers: [
+      {
+        ...makeUser('student', 3),
+        academic_profile: {
+          campus: 'CDO',
+          college: 'CITC',
+          department: 'CITC',
+          program: 'BSIT',
+          year_level: 3,
+          section: 'IT3R2',
+          semester_code: '2026-1ST-SEM',
+        },
+      },
+      {
+        ...makeUser('dept_head', 4),
+        academic_profile: {
+          campus: 'CDO',
+          college: 'CEA',
+          department: 'CEA',
+          program: null,
+          year_level: null,
+          section: null,
+          semester_code: '2026-1ST-SEM',
+        },
+      },
+    ],
+    clientRoundTripMs: 2450,
+  });
+  assert.equal(fallbackSnap.kpi.pendingDisplay, '1');
+  assert.equal(fallbackSnap.kpi.pendingSubline, '1 rejected in archive');
+  assert.equal(fallbackSnap.kpi.registeredDisplay, '2');
+  assert.equal(
+    fallbackSnap.kpi.registeredSubline,
+    '4 total • 1 students, 1 faculty'
+  );
+  assert.equal(fallbackSnap.kpi.latencyDisplay, '2.45s');
+  assert.equal(fallbackSnap.kpi.isLatencySlaMet, false);
+  assert.equal(fallbackSnap.rosterSummary.departmentDisplayByTag.CITC, '1');
+  assert.equal(fallbackSnap.rosterSummary.departmentDisplayByTag.CEA, '1');
+  assert.equal(fallbackSnap.rosterSummary.scopedChannelsDisplay, '—');
+});
+
+test('getPendingUsersApi serializes status=all and per_page=100 query params', async () => {
+  const originalFetch = globalThis.fetch;
+  let requestedUrl = '';
+
+  try {
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      requestedUrl = String(input);
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => null } as unknown as Headers,
+        json: async () => ({
+          data: [],
+          meta: { current_page: 1, last_page: 1, per_page: 100, total: 0 },
+        }),
+      } as Response;
+    }) as typeof fetch;
+
+    await getPendingUsersApi({ status: 'all', per_page: 100 });
+    assert.match(requestedUrl, /\/admin\/users\/pending\?status=all&per_page=100$/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('filterAnnouncementAudits filters by search query, editorRole, changeType, and combined criteria', () => {
   const audits: AnnouncementAudit[] = [
     {
       id: 1,
@@ -549,19 +1029,23 @@ test('filterAnnouncementAudits filters by search query, editorRole, changeType, 
     [2]
   );
 
-  // Filter by changeType
+  // Filter by changeType (matching clarify-web's title_changed / content_changed)
   assert.deepEqual(
-    filterAnnouncementAudits(audits, { changeType: 'title' }).map((a) => a.id),
+    filterAnnouncementAudits(audits, { changeType: 'title_changed' }).map(
+      (a) => a.id
+    ),
     [1, 3]
   );
   assert.deepEqual(
-    filterAnnouncementAudits(audits, { changeType: 'content' }).map((a) => a.id),
+    filterAnnouncementAudits(audits, { changeType: 'content_changed' }).map(
+      (a) => a.id
+    ),
     [2, 3]
   );
 
-  // Filter by search (post ID, editor name, content text)
+  // Filter by search (post ID, #id, editor name, content text)
   assert.deepEqual(
-    filterAnnouncementAudits(audits, { search: '102' }).map((a) => a.id),
+    filterAnnouncementAudits(audits, { search: 'post #102' }).map((a) => a.id),
     [2]
   );
   assert.deepEqual(
@@ -573,7 +1057,7 @@ test('filterAnnouncementAudits filters by search query, editorRole, changeType, 
   assert.deepEqual(
     filterAnnouncementAudits(audits, {
       editorRole: 'it_admin',
-      changeType: 'title',
+      changeType: 'title_changed',
       search: 'maintenance',
     }).map((a) => a.id),
     [3]
@@ -581,7 +1065,7 @@ test('filterAnnouncementAudits filters by search query, editorRole, changeType, 
   assert.equal(
     filterAnnouncementAudits(audits, {
       editorRole: 'faculty',
-      changeType: 'content',
+      changeType: 'content_changed',
     }).length,
     0
   );

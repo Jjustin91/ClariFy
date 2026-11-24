@@ -22,6 +22,8 @@ export interface User {
   avatar_url?: string | null;
   role: UserRole;
   verification_status: VerificationStatus;
+  created_at?: string | null;
+  verified_at?: string | null;
   academic_profile?: AcademicProfile;
 }
 

@@ -19,6 +19,7 @@ import { useAuth } from '../context/AuthContext';
 import { useChannels } from '../context/ChannelsContext';
 import { useOptionalRealtime } from '../context/RealtimeContext';
 import { resolveApiAssetUrl } from '../lib/api-client';
+import type { AdminSectionTab } from '../lib/domain-logic';
 import { formatAdminPendingBadgeLabel } from '../lib/realtime-reducer';
 import {
   colors,
@@ -39,6 +40,7 @@ interface NavDestination {
   label: string;
   href: string;
   active: boolean;
+  adminTab?: AdminSectionTab;
   badge?: number | null;
 }
 
@@ -50,9 +52,11 @@ interface NavDestination {
  */
 export function MobileAppShell({
   title,
+  activeAdminTab,
   children,
 }: {
   title: string;
+  activeAdminTab?: AdminSectionTab;
   children: React.ReactNode;
 }) {
   const insets = useSafeAreaInsets();
@@ -145,6 +149,8 @@ export function MobileAppShell({
 
   const isDashboardActive =
     pathname === '/' || pathname === '/index' || pathname === '/(drawer)';
+  const isAdminRoute = pathname.includes('/admin') || isDashboardActive;
+  const resolvedAdminTab: AdminSectionTab = activeAdminTab || 'verifications';
   const isAnnouncementsActive = pathname.includes('/announcements');
   const isInstructorsActive = pathname.includes('/instructors');
   const isChannelsActive = pathname.includes('/channels');
@@ -152,11 +158,33 @@ export function MobileAppShell({
   const navItems: NavDestination[] = isAdmin
     ? [
         {
-          key: 'dashboard',
-          label: 'IT Admin Console',
-          href: '/',
-          active: isDashboardActive,
+          key: 'admin-verifications',
+          label: 'Account Verification Queue',
+          href: '/admin?tab=verifications',
+          adminTab: 'verifications',
+          active: isAdminRoute && resolvedAdminTab === 'verifications',
           badge: realtime?.adminPendingCount ?? null,
+        },
+        {
+          key: 'admin-rbac',
+          label: 'RBAC Role Management',
+          href: '/admin?tab=rbac',
+          adminTab: 'rbac',
+          active: isAdminRoute && resolvedAdminTab === 'rbac',
+        },
+        {
+          key: 'admin-roster-sync',
+          label: 'Account & Roster Sync',
+          href: '/admin?tab=roster-sync',
+          adminTab: 'roster-sync',
+          active: isAdminRoute && resolvedAdminTab === 'roster-sync',
+        },
+        {
+          key: 'admin-metrics',
+          label: 'System Metrics & Audit Trail',
+          href: '/admin?tab=metrics',
+          adminTab: 'metrics',
+          active: isAdminRoute && resolvedAdminTab === 'metrics',
         },
       ]
     : [
@@ -210,6 +238,14 @@ export function MobileAppShell({
   const handleNavigate = (item: NavDestination) => {
     setIsSidebarOpen(false);
     if (item.active) return;
+    if (item.adminTab) {
+      if (pathname.includes('/admin')) {
+        router.setParams({ tab: item.adminTab });
+      } else {
+        router.replace(item.href as never);
+      }
+      return;
+    }
     router.push(item.href as never);
   };
 
@@ -236,7 +272,17 @@ export function MobileAppShell({
       >
         <View style={styles.topBarLeft}>
           <Pressable
-            onPress={() => router.push('/' as never)}
+            onPress={() => {
+              if (isAdmin) {
+                if (pathname.includes('/admin')) {
+                  router.setParams({ tab: 'verifications' });
+                } else {
+                  router.replace('/admin?tab=verifications' as never);
+                }
+                return;
+              }
+              router.push('/' as never);
+            }}
             accessibilityRole="button"
             accessibilityLabel="ClariFy Home"
             style={({ pressed }) => [
@@ -376,7 +422,13 @@ export function MobileAppShell({
               {/* Vertical Navigation Stack */}
               <View style={styles.navStack}>
                 {navItems.map((item) => {
-                  const badgeLabel = formatAdminPendingBadgeLabel(item.badge);
+                  const positiveBadgeLabel = formatAdminPendingBadgeLabel(
+                    item.badge
+                  );
+                  const isZeroBadge =
+                    typeof item.badge === 'number' && item.badge === 0;
+                  const badgeLabel =
+                    positiveBadgeLabel ?? (isZeroBadge ? '0' : null);
                   return (
                     <Pressable
                       key={item.key}
@@ -399,13 +451,17 @@ export function MobileAppShell({
                           <View
                             style={[
                               styles.navBadgePill,
-                              item.active && styles.navBadgePillActive,
+                              isZeroBadge
+                                ? styles.navBadgePillZero
+                                : item.active && styles.navBadgePillActive,
                             ]}
                           >
                             <Text
                               style={[
                                 styles.navBadgeText,
-                                item.active && styles.navBadgeTextActive,
+                                isZeroBadge
+                                  ? styles.navBadgeTextZero
+                                  : item.active && styles.navBadgeTextActive,
                               ]}
                             >
                               {badgeLabel}
@@ -759,7 +815,7 @@ const styles = StyleSheet.create({
     minWidth: 24,
     height: 22,
     paddingHorizontal: spacing.xs + 2,
-    borderRadius: radii.pill,
+    borderRadius: radii.sm,
     backgroundColor: colors.ustpNavy,
     alignItems: 'center',
     justifyContent: 'center',
@@ -767,14 +823,22 @@ const styles = StyleSheet.create({
   navBadgePillActive: {
     backgroundColor: colors.ustpGold,
   },
+  navBadgePillZero: {
+    backgroundColor: colors.ustpGoldSoft,
+    borderWidth: 1,
+    borderColor: colors.ustpOrangeDivider,
+  },
   navBadgeText: {
     fontSize: typography.sizes.xxs,
     fontWeight: '900',
     color: colors.ustpGold,
-    fontFamily: typography.fontFamilyMono,
+    fontFamily: typography.fontFamilySans,
     ...typography.tabularNums,
   },
   navBadgeTextActive: {
+    color: colors.ustpNavy,
+  },
+  navBadgeTextZero: {
     color: colors.ustpNavy,
   },
   navItemText: {
