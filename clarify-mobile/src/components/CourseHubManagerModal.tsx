@@ -1165,9 +1165,7 @@ export function CourseHubManagerModal({
                             <React.Fragment key={String(ch.id)}>
                               <Text style={styles.spacePreviewDot}>·</Text>
                               <Text style={styles.spacePreviewMono}>
-                                {ch.id === hub.id
-                                  ? '# general'
-                                  : formatSubChannelDisplayName(ch)}
+                                {formatSubChannelDisplayName(ch)}
                               </Text>
                             </React.Fragment>
                           ))}

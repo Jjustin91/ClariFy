@@ -153,9 +153,9 @@ export function formatCourseHubName(hub: Channel | undefined): string {
  * Formats a sub-channel name in Discord style (lowercase hyphenated with leading '# ').
  */
 export function formatSubChannelDisplayName(channel: Channel | undefined): string {
-  if (!channel) return '# general';
+  if (!channel) return '';
   const raw = channel.name.replace(/^#\s*/, '').trim();
-  return `# ${raw}`;
+  return raw ? `# ${raw}` : '';
 }
 
 /**

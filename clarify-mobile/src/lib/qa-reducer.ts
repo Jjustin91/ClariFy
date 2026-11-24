@@ -170,13 +170,13 @@ export function courseQaReducer(
 }
 
 /**
- * Resolves the unique list of chat channels for a Course Hub without ever creating
- * a duplicate synthetic "# general" pill alongside a real "# general" sub-channel.
+ * Resolves the unique list of real chat sub-channels for a Course Hub without
+ * ever creating a synthetic "# general" entry or falling back to the parent hub.
  *
  * Parity with clarify-web/app/channels/[channelId]/page.tsx:
- * - When a Course Hub has sub-channels (e.g. #general, #media), chat channels are
+ * - When a Course Hub has real sub-channels (e.g. #general, #media), chat channels are
  *   strictly those real sub-channels (defaulting to #general if present, else the first).
- * - Only when a Course Hub has zero sub-channels does chat fall back to the parent hub.
+ * - When a Course Hub has zero real sub-channels, returns `{ chatChannels: [], defaultChatChannel: undefined }`.
  */
 export function resolveHubChatChannels(
   activeHub: Channel | undefined,
@@ -189,11 +189,12 @@ export function resolveHubChatChannels(
     return { chatChannels: [], defaultChatChannel: undefined };
   }
 
+  const hubId = Number(activeHub.id);
   const seenIds = new Set<number>();
   const uniqueSubs: Channel[] = [];
   for (const sub of subChannels) {
     const id = Number(sub.id);
-    if (!Number.isFinite(id) || id <= 0 || seenIds.has(id)) {
+    if (!Number.isFinite(id) || id <= 0 || id === hubId || seenIds.has(id)) {
       continue;
     }
     seenIds.add(id);
@@ -211,8 +212,65 @@ export function resolveHubChatChannels(
   }
 
   return {
-    chatChannels: [activeHub],
-    defaultChatChannel: activeHub,
+    chatChannels: [],
+    defaultChatChannel: undefined,
+  };
+}
+
+/**
+ * Resolves the active chat sub-channel for a Course Hub, sanitizing stale or invalid
+ * IDs (including a stale ID equal to `activeHub.id` or a deleted sub-channel) by
+ * resetting to `defaultChatChannel` or `undefined` when no sub-channels exist.
+ */
+export function resolveActiveChatChannelId(
+  activeHub: Channel | undefined,
+  subChannels: Channel[],
+  candidateChatChannelId?: number | null
+): {
+  chatChannels: Channel[];
+  defaultChatChannel: Channel | undefined;
+  activeChatChannel: Channel | undefined;
+  activeChatChannelId: number | undefined;
+} {
+  const { chatChannels, defaultChatChannel } = resolveHubChatChannels(
+    activeHub,
+    subChannels
+  );
+
+  if (!activeHub || chatChannels.length === 0) {
+    return {
+      chatChannels,
+      defaultChatChannel: undefined,
+      activeChatChannel: undefined,
+      activeChatChannelId: undefined,
+    };
+  }
+
+  const hubId = Number(activeHub.id);
+  if (
+    typeof candidateChatChannelId === 'number' &&
+    Number.isFinite(candidateChatChannelId) &&
+    candidateChatChannelId > 0 &&
+    candidateChatChannelId !== hubId
+  ) {
+    const matched = chatChannels.find(
+      (c) => Number(c.id) === candidateChatChannelId
+    );
+    if (matched) {
+      return {
+        chatChannels,
+        defaultChatChannel,
+        activeChatChannel: matched,
+        activeChatChannelId: matched.id,
+      };
+    }
+  }
+
+  return {
+    chatChannels,
+    defaultChatChannel,
+    activeChatChannel: defaultChatChannel,
+    activeChatChannelId: defaultChatChannel?.id,
   };
 }
 

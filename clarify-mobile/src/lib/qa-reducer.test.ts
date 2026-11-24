@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import type { Channel, QaThread } from '../types/api.ts';
+import { formatSubChannelDisplayName } from './domain-logic.ts';
 import {
   courseQaReducer,
   createInitialCourseQaState,
@@ -9,6 +10,7 @@ import {
   formatCourseHubSubmitName,
   normalizeSubChannelSlug,
   removePendingRequestFromChannel,
+  resolveActiveChatChannelId,
   resolveHubChatChannels,
   sanitizeThreadForPrivacy,
 } from './qa-reducer.ts';
@@ -133,7 +135,7 @@ test('courseQaReducer loads, deduplicates, sorts newest-first, upserts realtime 
   );
 });
 
-test('resolveHubChatChannels prevents duplicate #general pills when sub-channels include #general', () => {
+test('resolveHubChatChannels and resolveActiveChatChannelId never fall back to hub.id or a synthetic # general', () => {
   const hub = makeChannel({ id: 10, name: 'IT314 Software Engineering' });
   const subGeneral = makeChannel({
     id: 11,
@@ -148,20 +150,69 @@ test('resolveHubChatChannels prevents duplicate #general pills when sub-channels
     parent_hub_id: 10,
   });
 
-  const resolved = resolveHubChatChannels(hub, [subGeneral, subMedia, subGeneral]);
-  assert.deepEqual(
-    resolved.chatChannels.map((c) => c.id),
-    [11, 12]
-  );
-  assert.equal(resolved.defaultChatChannel?.id, 11);
+  // 1. Zero sub-channels returns empty list and undefined default (never hub.id)
+  const empty = resolveHubChatChannels(hub, []);
+  assert.deepEqual(empty.chatChannels, []);
+  assert.equal(empty.defaultChatChannel, undefined);
 
-  // Only falls back to parent hub when zero sub-channels exist
-  const fallback = resolveHubChatChannels(hub, []);
+  // Even if parent hub is erroneously included in subChannels, it is filtered out
+  const hubOnly = resolveHubChatChannels(hub, [hub]);
+  assert.deepEqual(hubOnly.chatChannels, []);
+  assert.equal(hubOnly.defaultChatChannel, undefined);
+
+  // 2. Single real #general sub-channel resolves cleanly
+  const singleGeneral = resolveHubChatChannels(hub, [subGeneral]);
   assert.deepEqual(
-    fallback.chatChannels.map((c) => c.id),
-    [10]
+    singleGeneral.chatChannels.map((c) => c.id),
+    [11]
   );
-  assert.equal(fallback.defaultChatChannel?.id, 10);
+  assert.equal(singleGeneral.defaultChatChannel?.id, 11);
+
+  // 3. #general plus #media deduplicates and defaults to #general
+  const generalPlusMedia = resolveHubChatChannels(hub, [
+    subMedia,
+    subGeneral,
+    subGeneral,
+  ]);
+  assert.deepEqual(
+    generalPlusMedia.chatChannels.map((c) => c.id),
+    [12, 11]
+  );
+  assert.equal(generalPlusMedia.defaultChatChannel?.id, 11);
+
+  // Explicit selection of #media is preserved
+  const selectedMedia = resolveActiveChatChannelId(
+    hub,
+    [subGeneral, subMedia],
+    12
+  );
+  assert.equal(selectedMedia.activeChatChannel?.id, 12);
+  assert.equal(selectedMedia.activeChatChannelId, 12);
+
+  // 4. Stale activeChatChannelId equal to hub.id resets to first real sub-channel (#general or first) or undefined
+  const staleHubWithSubs = resolveActiveChatChannelId(
+    hub,
+    [subMedia, subGeneral],
+    hub.id
+  );
+  assert.equal(staleHubWithSubs.activeChatChannel?.id, 11);
+  assert.equal(staleHubWithSubs.activeChatChannelId, 11);
+
+  const staleHubWithMediaOnly = resolveActiveChatChannelId(
+    hub,
+    [subMedia],
+    hub.id
+  );
+  assert.equal(staleHubWithMediaOnly.activeChatChannel?.id, 12);
+  assert.equal(staleHubWithMediaOnly.activeChatChannelId, 12);
+
+  const staleHubWithZeroSubs = resolveActiveChatChannelId(hub, [], hub.id);
+  assert.equal(staleHubWithZeroSubs.activeChatChannel, undefined);
+  assert.equal(staleHubWithZeroSubs.activeChatChannelId, undefined);
+
+  // Undefined sub-channel formatting never invents "# general"
+  assert.equal(formatSubChannelDisplayName(undefined), '');
+  assert.equal(formatSubChannelDisplayName(subGeneral), '# general');
 });
 
 test('extractPublishedFaqs returns only pinned FAQs with strict Anonymous Student masking', () => {

@@ -324,52 +324,16 @@ export function ScopedChannelsDrawer({
               <Text style={styles.subSectionLabel}>CHANNELS</Text>
 
               {subChannels.length === 0 ? (
-                <Pressable
-                  onPress={() => {
-                    if (onSelectSubChannel) {
-                      onSelectSubChannel(hub.id, hub.id);
-                    } else {
-                      onSelectHub(hub.id);
-                    }
-                    onClose();
-                  }}
-                  accessibilityRole="button"
-                  accessibilityLabel={`Open general chat for ${formatCourseHubName(hub)}`}
-                  accessibilityState={{
-                    selected:
-                      isCurrentHub &&
-                      activeTab === 'chat' &&
-                      activeChatChannelId === hub.id,
-                  }}
-                  style={({ pressed }) => [
-                    styles.subChannelRow,
-                    isCurrentHub &&
-                      activeTab === 'chat' &&
-                      activeChatChannelId === hub.id &&
-                      styles.subChannelRowActive,
-                    pressed && styles.pressed,
-                  ]}
-                >
-                  <Feather name="hash" size={14} color={colors.ustpGold} />
-                  <Text
-                    numberOfLines={1}
-                    style={[
-                      styles.subChannelText,
-                      isCurrentHub &&
-                        activeTab === 'chat' &&
-                        activeChatChannelId === hub.id &&
-                        styles.subChannelTextActive,
-                    ]}
-                  >
-                    general
-                  </Text>
-                </Pressable>
+                <Text style={styles.emptySubChannelsText}>
+                  No chat channels yet
+                </Text>
               ) : (
                 subChannels.map((sub) => {
                   const cleanName = sub.name.replace(/^#\s*/, '').trim();
                   const isSubActive =
                     isCurrentHub &&
                     activeTab === 'chat' &&
+                    typeof activeChatChannelId === 'number' &&
                     activeChatChannelId === sub.id;
                   const isConfirmingDelete = confirmDeleteSubId === sub.id;
                   const isDeletingThis = deletingSubId === sub.id;
@@ -958,13 +922,13 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: colors.ustpNavyMutedText,
   },
-  subChannelRow: {
-    minHeight: 44,
-    borderRadius: radii.md,
+  emptySubChannelsText: {
     paddingHorizontal: spacing.sm,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.xs + 2,
+    paddingVertical: spacing.xs + 2,
+    fontSize: typography.sizes.xxs,
+    lineHeight: typography.lineHeights.xxs,
+    fontStyle: 'italic',
+    color: colors.ustpNavyMutedText,
   },
   subChannelRowActive: {
     backgroundColor: colors.ustpNavyDark,

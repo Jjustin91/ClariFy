@@ -386,7 +386,7 @@ test('password reset OTP API helpers send snake_case JSON without Bearer auth an
     assert.deepEqual(requests[0].body, { institutional_id: '2023300001' });
     assert.deepEqual(requests[1].body, {
       institutional_id: '2023300001',
-      code: '482910',
+      otp: '482910',
     });
     assert.deepEqual(requests[2].body, {
       institutional_id: '2023300001',

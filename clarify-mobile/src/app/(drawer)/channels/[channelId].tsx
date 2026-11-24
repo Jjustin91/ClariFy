@@ -58,7 +58,7 @@ import {
   courseQaReducer,
   createInitialCourseQaState,
   extractPublishedFaqs,
-  resolveHubChatChannels,
+  resolveActiveChatChannelId,
   sanitizeThreadForPrivacy,
 } from '@/lib/qa-reducer';
 import { computeDebouncedRefreshDelayMs } from '@/lib/realtime-reducer';
@@ -252,31 +252,29 @@ export default function MobileChannelHubScreen() {
     [channels, effectiveHubId]
   );
 
-  // Deduplicated chat channels: prevents duplicate "# general" alongside real #general sub-channel
-  const { chatChannels, defaultChatChannel } = useMemo(
-    () => resolveHubChatChannels(activeChannel, subChannels),
-    [activeChannel, subChannels]
+  // Real chat sub-channels only (never falls back to hub.id or a synthetic "# general")
+  const { activeChatChannel, activeChatChannelId } = useMemo(
+    () =>
+      resolveActiveChatChannelId(
+        activeChannel,
+        subChannels,
+        selectedSubChannelId ?? resolution.requestedSubChannel?.id
+      ),
+    [
+      activeChannel,
+      subChannels,
+      selectedSubChannelId,
+      resolution.requestedSubChannel,
+    ]
   );
 
-  const effectiveChatChannel = useMemo<Channel | undefined>(() => {
-    if (!activeChannel) return undefined;
-    if (selectedSubChannelId) {
-      const found = chatChannels.find((c) => c.id === selectedSubChannelId);
-      if (found) return found;
-    }
-    if (resolution.requestedSubChannel) {
-      return resolution.requestedSubChannel;
-    }
-    return defaultChatChannel ?? activeChannel;
-  }, [
-    activeChannel,
-    selectedSubChannelId,
-    chatChannels,
-    resolution.requestedSubChannel,
-    defaultChatChannel,
-  ]);
-
-  const effectiveChatChannelId = effectiveChatChannel?.id ?? 0;
+  // Reset stale selectedSubChannelId (e.g., equal to hub.id or a removed sub-channel)
+  if (
+    selectedSubChannelId !== null &&
+    selectedSubChannelId !== activeChatChannelId
+  ) {
+    setSelectedSubChannelId(activeChatChannelId ?? null);
+  }
 
   // Class FAQs thread fetcher (de-duplicated, AppState-aware)
   const clearFaqSyncTimer = useCallback(() => {
@@ -485,10 +483,17 @@ export default function MobileChannelHubScreen() {
     useCallback(() => {
       setIsScreenFocused(true);
 
+      const seenTargetChannelId =
+        activeSpace === 'chat' &&
+        typeof activeChatChannelId === 'number' &&
+        activeChatChannelId > 0
+          ? activeChatChannelId
+          : effectiveHubId;
+
       if (
         !resolution.isInvalidChannel &&
         effectiveHubId > 0 &&
-        effectiveChatChannelId > 0 &&
+        seenTargetChannelId > 0 &&
         user &&
         user.role !== 'it_admin'
       ) {
@@ -496,10 +501,10 @@ export default function MobileChannelHubScreen() {
         // On-demand roster fetch so Course Admins see live pending-request badge counts
         void refreshChannelRoster(effectiveHubId);
 
-        const focusSeenKey = `${user.id}:${effectiveChatChannelId}`;
+        const focusSeenKey = `${user.id}:${seenTargetChannelId}`;
         if (seenKeyRef.current !== focusSeenKey) {
           seenKeyRef.current = focusSeenKey;
-          void markChannelSeenApi(effectiveChatChannelId)
+          void markChannelSeenApi(seenTargetChannelId)
             .then((previousSeenAt) => {
               setSeenBaselineByHub((prev) =>
                 effectiveHubId in prev
@@ -552,7 +557,8 @@ export default function MobileChannelHubScreen() {
     }, [
       resolution.isInvalidChannel,
       effectiveHubId,
-      effectiveChatChannelId,
+      activeSpace,
+      activeChatChannelId,
       user,
       setActiveChannelId,
       applyChannelsPatch,
@@ -632,6 +638,9 @@ export default function MobileChannelHubScreen() {
 
   const handleSelectSubChannel = useCallback(
     (hubId: number, subChannelId: number) => {
+      if (subChannelId <= 0 || subChannelId === hubId) {
+        return;
+      }
       setSelectedSubChannelId(subChannelId);
       setActiveSpace('chat');
       if (hubId !== effectiveHubId) {
@@ -662,13 +671,13 @@ export default function MobileChannelHubScreen() {
       if (
         hubId === effectiveHubId &&
         activeSpace === 'chat' &&
-        effectiveChatChannelId === deletedSubId
+        activeChatChannelId === deletedSubId
       ) {
         setSelectedSubChannelId(null);
         setActiveSpace('noticeboard');
       }
     },
-    [effectiveHubId, activeSpace, effectiveChatChannelId]
+    [effectiveHubId, activeSpace, activeChatChannelId]
   );
 
   const handleRefreshAll = useCallback(() => {
@@ -767,24 +776,22 @@ export default function MobileChannelHubScreen() {
   const activeSpaceDisplayLabel = useMemo(() => {
     if (activeSpace === 'qa') return 'Isolated Q&A Threads';
     if (activeSpace === 'chat') {
-      if (effectiveChatChannel && effectiveChatChannel.id !== effectiveHubId) {
-        return formatSubChannelDisplayName(effectiveChatChannel);
-      }
-      return '# general';
+      return activeChatChannel
+        ? formatSubChannelDisplayName(activeChatChannel)
+        : 'No chat channels yet';
     }
     return 'Noticeboard Feed';
-  }, [activeSpace, effectiveChatChannel, effectiveHubId]);
+  }, [activeSpace, activeChatChannel]);
 
   const activeSpaceShortLabel = useMemo(() => {
     if (activeSpace === 'qa') return 'Q&A';
     if (activeSpace === 'chat') {
-      if (effectiveChatChannel && effectiveChatChannel.id !== effectiveHubId) {
-        return formatSubChannelDisplayName(effectiveChatChannel);
-      }
-      return '# general';
+      return activeChatChannel
+        ? formatSubChannelDisplayName(activeChatChannel)
+        : 'Chat';
     }
     return 'Noticeboard';
-  }, [activeSpace, effectiveChatChannel, effectiveHubId]);
+  }, [activeSpace, activeChatChannel]);
 
   const shellTitle = resolution.isInvalidChannel
     ? 'Course Hub Not Found'
@@ -1103,20 +1110,50 @@ export default function MobileChannelHubScreen() {
           onThreadsSynced={handleQaThreadsSynced}
           onOpenClassFaqs={handleOpenClassFaqs}
         />
-      ) : activeSpace === 'chat' &&
-        effectiveChatChannel &&
-        effectiveChatChannelId > 0 ? (
-        <View style={styles.chatTabContainer}>
-          <CourseHubChatView
-            channelId={effectiveChatChannelId}
-            channelTitle={
-              effectiveChatChannel.id === activeChannel?.id
-                ? formatCourseHubName(activeChannel)
-                : formatSubChannelDisplayName(effectiveChatChannel)
-            }
-            isFocused={isScreenFocused && activeSpace === 'chat'}
-          />
-        </View>
+      ) : activeSpace === 'chat' ? (
+        isLoadingChannels ? (
+          <View style={styles.chatStateWrap}>
+            <SkeletonCards count={3} />
+          </View>
+        ) : channelsError ? (
+          <View style={styles.chatStateWrap}>
+            <ErrorBanner
+              error={channelsError}
+              onRetry={() => void refreshChannels()}
+            />
+          </View>
+        ) : activeChatChannel &&
+          typeof activeChatChannelId === 'number' &&
+          activeChatChannelId > 0 ? (
+          <View style={styles.chatTabContainer}>
+            <CourseHubChatView
+              channelId={activeChatChannelId}
+              channelTitle={formatSubChannelDisplayName(activeChatChannel)}
+              isFocused={isScreenFocused && activeSpace === 'chat'}
+            />
+          </View>
+        ) : (
+          <View style={styles.chatStateWrap}>
+            <EmptyState
+              title="No chat channels yet"
+              description={
+                isCourseAdmin
+                  ? `Create a chat channel inside ${
+                      activeChannel
+                        ? formatCourseHubName(activeChannel)
+                        : 'this Course Hub'
+                    } to start messaging with your class.`
+                  : 'No chat channels have been created for this Course Hub yet.'
+              }
+              actionLabel={isCourseAdmin ? 'Add Channel' : undefined}
+              onAction={
+                isCourseAdmin && effectiveHubId > 0
+                  ? () => openManagerModal('create_channel', effectiveHubId)
+                  : undefined
+              }
+            />
+          </View>
+        )
       ) : (
         <FlatList
           data={
@@ -1151,7 +1188,7 @@ export default function MobileChannelHubScreen() {
         channels={channels}
         activeChannel={activeChannel}
         activeTab={activeSpace}
-        activeChatChannelId={effectiveChatChannelId}
+        activeChatChannelId={activeChatChannelId}
         isLoading={isLoadingChannels}
         error={channelsError}
         onRetry={() => void refreshChannels()}
@@ -1423,6 +1460,11 @@ const styles = StyleSheet.create({
   },
   chatTabContainer: {
     flex: 1,
+  },
+  chatStateWrap: {
+    flex: 1,
+    padding: spacing.lg,
+    justifyContent: 'center',
   },
   listContent: {
     padding: spacing.lg,
