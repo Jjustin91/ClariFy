@@ -95,15 +95,15 @@ export default function LoginPage() {
           </p>
 
           <div className="mt-5 mb-5 flex justify-center">
-            <div className="bg-white p-3.5 rounded-lg border border-slate-300 inline-flex items-center justify-center">
+            <div className="bg-white w-56 h-56 sm:w-64 sm:h-64 rounded-lg border border-slate-300 overflow-hidden inline-flex items-center justify-center">
               <Image
-                src="/assets/aistudio/image_82c2a523.png"
+                src="/assets/clarify-mobile-qr.png"
                 alt="ClariFy Mobile App QR Code"
-                width={224}
-                height={224}
+                width={256}
+                height={256}
                 priority
                 unoptimized
-                className="w-48 h-48 sm:w-56 sm:h-56 object-contain"
+                className="w-full h-full object-cover"
               />
             </div>
           </div>
