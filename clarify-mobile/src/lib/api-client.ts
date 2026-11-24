@@ -6,6 +6,9 @@ import type {
   ChatMessage,
   Instructor,
   PaginatedResponse,
+  PasswordOtpRequestResponse,
+  PasswordOtpVerifyResponse,
+  PasswordResetResponse,
   PersistenceStatus,
   PrismsSyncLog,
   QaThread,
@@ -200,6 +203,14 @@ export function mapHttpErrorToApiError(params: {
     let retryAfter = retryAfterHeader
       ? parseRetryAfterSeconds(retryAfterHeader)
       : null;
+    if (
+      !retryAfter &&
+      typeof json?.retry_after === 'number' &&
+      Number.isFinite(json.retry_after) &&
+      json.retry_after > 0
+    ) {
+      retryAfter = Math.ceil(json.retry_after);
+    }
     if (!retryAfter && serverMessage) {
       const match = serverMessage.match(/(\d+)\s*seconds?/i);
       if (match && match[1]) {
@@ -305,7 +316,7 @@ export async function apiClient<T>(
       endpoint,
     });
 
-    if (response.status === 401 && endpoint !== '/auth/login') {
+    if (response.status === 401 && !skipAuth && endpoint !== '/auth/login') {
       await clearSecureToken();
       notifySessionExpired(apiError.message);
     }
@@ -340,6 +351,50 @@ export async function registerApi(payload: {
       ...rest,
       ...(trimmedContact ? { contact_number: trimmedContact } : {}),
       password_confirmation: payload.password_confirmation || payload.password,
+    }),
+  });
+}
+
+export async function requestPasswordOtpApi(
+  institutional_id: string
+): Promise<PasswordOtpRequestResponse> {
+  return apiClient<PasswordOtpRequestResponse>('/auth/password/request-otp', {
+    method: 'POST',
+    skipAuth: true,
+    body: JSON.stringify({
+      institutional_id: institutional_id.trim(),
+    }),
+  });
+}
+
+export async function verifyPasswordOtpApi(
+  institutional_id: string,
+  code: string
+): Promise<PasswordOtpVerifyResponse> {
+  return apiClient<PasswordOtpVerifyResponse>('/auth/password/verify-otp', {
+    method: 'POST',
+    skipAuth: true,
+    body: JSON.stringify({
+      institutional_id: institutional_id.trim(),
+      code: code.trim(),
+    }),
+  });
+}
+
+export async function resetPasswordApi(payload: {
+  institutional_id: string;
+  reset_token: string;
+  password: string;
+  password_confirmation: string;
+}): Promise<PasswordResetResponse> {
+  return apiClient<PasswordResetResponse>('/auth/password/reset', {
+    method: 'POST',
+    skipAuth: true,
+    body: JSON.stringify({
+      institutional_id: payload.institutional_id.trim(),
+      reset_token: payload.reset_token,
+      password: payload.password,
+      password_confirmation: payload.password_confirmation,
     }),
   });
 }

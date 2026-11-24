@@ -19,6 +19,7 @@ import { useAuth } from '../context/AuthContext';
 import { useChannels } from '../context/ChannelsContext';
 import { useOptionalRealtime } from '../context/RealtimeContext';
 import { resolveApiAssetUrl } from '../lib/api-client';
+import { formatAdminPendingBadgeLabel } from '../lib/realtime-reducer';
 import {
   colors,
   elevation,
@@ -29,6 +30,7 @@ import {
 } from '../theme';
 import { ClarifyLogoWordmark } from './ClarifyLogo';
 import { ProfileSettingsModal } from './ProfileSettingsModal';
+import { UrgentAnnouncementModal } from './UrgentAnnouncementModal';
 
 const DRAWER_WIDTH = 288;
 
@@ -37,6 +39,7 @@ interface NavDestination {
   label: string;
   href: string;
   active: boolean;
+  badge?: number | null;
 }
 
 /**
@@ -153,6 +156,7 @@ export function MobileAppShell({
           label: 'IT Admin Console',
           href: '/',
           active: isDashboardActive,
+          badge: realtime?.adminPendingCount ?? null,
         },
       ]
     : [
@@ -371,31 +375,57 @@ export function MobileAppShell({
 
               {/* Vertical Navigation Stack */}
               <View style={styles.navStack}>
-                {navItems.map((item) => (
-                  <Pressable
-                    key={item.key}
-                    onPress={() => handleNavigate(item)}
-                    accessibilityRole="button"
-                    accessibilityLabel={item.label}
-                    accessibilityState={{ selected: item.active }}
-                    style={({ pressed }) => [
-                      styles.navItem,
-                      item.active && styles.navItemActive,
-                      pressed && !item.active && styles.navItemPressed,
-                    ]}
-                  >
-                    <Text
-                      numberOfLines={1}
-                      ellipsizeMode="tail"
-                      style={[
-                        styles.navItemText,
-                        item.active && styles.navItemTextActive,
+                {navItems.map((item) => {
+                  const badgeLabel = formatAdminPendingBadgeLabel(item.badge);
+                  return (
+                    <Pressable
+                      key={item.key}
+                      onPress={() => handleNavigate(item)}
+                      accessibilityRole="button"
+                      accessibilityLabel={
+                        badgeLabel
+                          ? `${item.label}, ${badgeLabel} pending verifications`
+                          : item.label
+                      }
+                      accessibilityState={{ selected: item.active }}
+                      style={({ pressed }) => [
+                        styles.navItem,
+                        item.active && styles.navItemActive,
+                        pressed && !item.active && styles.navItemPressed,
                       ]}
                     >
-                      {item.label}
-                    </Text>
-                  </Pressable>
-                ))}
+                      <View style={styles.navItemRow}>
+                        {badgeLabel && (
+                          <View
+                            style={[
+                              styles.navBadgePill,
+                              item.active && styles.navBadgePillActive,
+                            ]}
+                          >
+                            <Text
+                              style={[
+                                styles.navBadgeText,
+                                item.active && styles.navBadgeTextActive,
+                              ]}
+                            >
+                              {badgeLabel}
+                            </Text>
+                          </View>
+                        )}
+                        <Text
+                          numberOfLines={1}
+                          ellipsizeMode="tail"
+                          style={[
+                            styles.navItemText,
+                            item.active && styles.navItemTextActive,
+                          ]}
+                        >
+                          {item.label}
+                        </Text>
+                      </View>
+                    </Pressable>
+                  );
+                })}
               </View>
             </ScrollView>
 
@@ -504,6 +534,9 @@ export function MobileAppShell({
         visible={isSettingsModalOpen}
         onClose={() => setIsSettingsModalOpen(false)}
       />
+
+      {/* Global Priority Urgent Announcement Popup (strictly hidden for IT Admins) */}
+      {!isAdmin && <UrgentAnnouncementModal />}
     </View>
   );
 }
@@ -715,8 +748,37 @@ const styles = StyleSheet.create({
     backgroundColor: colors.ustpOrangeDark,
     opacity: 0.8,
   },
-  navItemText: {
+  navItemRow: {
     width: '100%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    gap: spacing.sm,
+  },
+  navBadgePill: {
+    minWidth: 24,
+    height: 22,
+    paddingHorizontal: spacing.xs + 2,
+    borderRadius: radii.pill,
+    backgroundColor: colors.ustpNavy,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  navBadgePillActive: {
+    backgroundColor: colors.ustpGold,
+  },
+  navBadgeText: {
+    fontSize: typography.sizes.xxs,
+    fontWeight: '900',
+    color: colors.ustpGold,
+    fontFamily: typography.fontFamilyMono,
+    ...typography.tabularNums,
+  },
+  navBadgeTextActive: {
+    color: colors.ustpNavy,
+  },
+  navItemText: {
+    flexShrink: 1,
     textAlign: 'right',
     fontSize: typography.sizes.body,
     lineHeight: typography.lineHeights.body,

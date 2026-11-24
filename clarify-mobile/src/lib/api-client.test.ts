@@ -7,7 +7,10 @@ import {
   mapHttpErrorToApiError,
   onSessionExpired,
   parseRetryAfterSeconds,
+  requestPasswordOtpApi,
+  resetPasswordApi,
   updateProfileApi,
+  verifyPasswordOtpApi,
 } from './api-client.ts';
 import { getFieldValidationError } from './domain-logic.ts';
 import {
@@ -308,3 +311,120 @@ test('apiClient handles request timeout and network failure with status 0 ApiErr
     globalThis.fetch = originalFetch;
   }
 });
+
+test('password reset OTP API helpers send snake_case JSON without Bearer auth and extract 429 retry_after JSON', async () => {
+  const originalFetch = globalThis.fetch;
+  const requests: {
+    url: string;
+    method?: string;
+    headers: Record<string, string>;
+    body: unknown;
+  }[] = [];
+  let sessionExpiredTriggered = false;
+  const unsub = onSessionExpired(() => {
+    sessionExpiredTriggered = true;
+  });
+
+  try {
+    await setSecureToken('existing-user-token');
+
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const headers = (init?.headers || {}) as Record<string, string>;
+      const parsedBody =
+        typeof init?.body === 'string' ? JSON.parse(init.body) : null;
+      requests.push({ url, method: init?.method, headers, body: parsedBody });
+
+      if (url.endsWith('/auth/password/request-otp')) {
+        return createMockFetchResponse({
+          status: 200,
+          body: {
+            message: 'Code sent.',
+            masked_phone: '+63917***4567',
+            expires_in_seconds: 600,
+            resend_cooldown_seconds: 60,
+          },
+        });
+      }
+      if (url.endsWith('/auth/password/verify-otp')) {
+        return createMockFetchResponse({
+          status: 200,
+          body: {
+            message: 'Verified.',
+            reset_token: 'rst-tok-123',
+            expires_in_seconds: 600,
+          },
+        });
+      }
+      return createMockFetchResponse({
+        status: 200,
+        body: { message: 'Password updated.' },
+      });
+    }) as typeof fetch;
+
+    const reqRes = await requestPasswordOtpApi(' 2023300001 ');
+    assert.equal(reqRes.masked_phone, '+63917***4567');
+    assert.equal(reqRes.resend_cooldown_seconds, 60);
+
+    const verRes = await verifyPasswordOtpApi('2023300001', ' 482910 ');
+    assert.equal(verRes.reset_token, 'rst-tok-123');
+
+    const resetRes = await resetPasswordApi({
+      institutional_id: '2023300001',
+      reset_token: 'rst-tok-123',
+      password: 'NewPassword123',
+      password_confirmation: 'NewPassword123',
+    });
+    assert.equal(resetRes.message, 'Password updated.');
+
+    assert.equal(requests.length, 3);
+    for (const req of requests) {
+      assert.equal(req.method, 'POST');
+      assert.equal(req.headers.Authorization, undefined);
+      assert.equal(req.headers.Accept, 'application/json');
+    }
+    assert.deepEqual(requests[0].body, { institutional_id: '2023300001' });
+    assert.deepEqual(requests[1].body, {
+      institutional_id: '2023300001',
+      code: '482910',
+    });
+    assert.deepEqual(requests[2].body, {
+      institutional_id: '2023300001',
+      reset_token: 'rst-tok-123',
+      password: 'NewPassword123',
+      password_confirmation: 'NewPassword123',
+    });
+
+    // 429 JSON retry_after without Retry-After header
+    const err429Json = mapHttpErrorToApiError({
+      status: 429,
+      json: {
+        message: 'Please wait before requesting another code.',
+        retry_after: 47,
+      },
+      retryAfterHeader: null,
+      endpoint: '/auth/password/request-otp',
+    });
+    assert.equal(err429Json.status, 429);
+    assert.equal(err429Json.retryAfter, 47);
+    assert.equal(err429Json.message, 'Too many attempts, try again in 47 seconds');
+
+    // 401 on skipAuth endpoint must NOT clear SecureStore or trigger session-expired
+    globalThis.fetch = (async () =>
+      createMockFetchResponse({
+        status: 401,
+        body: { message: 'Unauthorized.' },
+      })) as typeof fetch;
+
+    await assert.rejects(async () => {
+      await requestPasswordOtpApi('2023300001');
+    });
+    assert.equal(sessionExpiredTriggered, false);
+    assert.equal(getCachedBearerToken(), 'existing-user-token');
+  } finally {
+    unsub();
+    globalThis.fetch = originalFetch;
+    await clearSecureToken();
+  }
+});
+

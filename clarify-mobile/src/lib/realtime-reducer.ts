@@ -342,8 +342,9 @@ export function planRealtimeEventEffects(
 
     case 'announcement.urgent': {
       const ann = event.announcement;
+      const isPublished = !ann?.status || ann.status === 'published';
       const hasFullAnnouncement = Boolean(
-        ann && ann.id && ann.title && ann.content
+        ann && ann.id && ann.title && ann.content && isPublished
       );
       const isAlreadyDismissed = ann?.id
         ? dismissedUrgentIds.has(ann.id)
@@ -358,13 +359,24 @@ export function planRealtimeEventEffects(
         !isAlreadyDismissed &&
         !isAlreadyAcked;
 
+      const normalizedCandidate =
+        shouldShowPopup && ann
+          ? {
+              ...ann,
+              read_reach: {
+                ...ann.read_reach,
+                has_current_user_acknowledged: false,
+              },
+            }
+          : null;
+
       return {
         ...emptyPlan,
         shouldScheduleChannelRefresh: !isItAdmin,
         shouldBumpAnnouncementVersion: !isItAdmin,
         shouldCheckUrgentAnnouncement:
           !isItAdmin && !isSelfActor && !hasFullAnnouncement,
-        urgentPopupCandidate: shouldShowPopup && ann ? ann : null,
+        urgentPopupCandidate: normalizedCandidate,
       };
     }
 
@@ -378,8 +390,9 @@ export function planRealtimeEventEffects(
     case 'announcement.updated': {
       const ann = event.announcement;
       const isUrgentUpdate = Boolean(ann?.is_urgent);
+      const isPublished = !ann?.status || ann.status === 'published';
       const hasFullAnnouncement = Boolean(
-        ann && ann.id && ann.title && ann.content
+        ann && ann.id && ann.title && ann.content && isPublished
       );
       const shouldShowPopup =
         !isItAdmin &&
@@ -388,11 +401,22 @@ export function planRealtimeEventEffects(
         hasFullAnnouncement &&
         Boolean(ann?.id && !dismissedUrgentIds.has(ann.id));
 
+      const normalizedCandidate =
+        shouldShowPopup && ann
+          ? {
+              ...ann,
+              read_reach: {
+                ...ann.read_reach,
+                has_current_user_acknowledged: false,
+              },
+            }
+          : null;
+
       return {
         ...emptyPlan,
         shouldScheduleChannelRefresh: !isItAdmin,
         shouldBumpAnnouncementVersion: !isItAdmin,
-        urgentPopupCandidate: shouldShowPopup && ann ? ann : null,
+        urgentPopupCandidate: normalizedCandidate,
       };
     }
 
@@ -750,4 +774,55 @@ export function getRealtimeUnavailableBannerMessage(params: {
 
   return null;
 }
+
+/**
+ * Normalizes the pending verification badge count for the IT Admin drawer entry.
+ * Prefers `metrics.pending_verifications_count` from the API, falling back to a local count if needed.
+ */
+export function resolveAdminPendingCount(
+  metricsPendingCount: number | null | undefined,
+  fallbackCount?: number | null
+): number | null {
+  if (
+    typeof metricsPendingCount === 'number' &&
+    Number.isFinite(metricsPendingCount) &&
+    metricsPendingCount >= 0
+  ) {
+    return Math.floor(metricsPendingCount);
+  }
+  if (
+    typeof fallbackCount === 'number' &&
+    Number.isFinite(fallbackCount) &&
+    fallbackCount >= 0
+  ) {
+    return Math.floor(fallbackCount);
+  }
+  return null;
+}
+
+/**
+ * Formats the pending verification count for display in the IT Admin drawer badge.
+ * Returns null when the badge should be hidden (null, undefined, or <= 0).
+ */
+export function formatAdminPendingBadgeLabel(
+  count: number | null | undefined
+): string | null {
+  if (typeof count !== 'number' || !Number.isFinite(count) || count <= 0) {
+    return null;
+  }
+  const normalized = Math.floor(count);
+  return normalized > 99 ? '99+' : String(normalized);
+}
+
+/**
+ * Returns true only when the active user is an authenticated IT Administrator
+ * and the app is in the foreground (prevents background/non-admin fetches).
+ */
+export function shouldFetchAdminPendingCount(
+  user: Pick<User, 'id' | 'role'> | null | undefined,
+  isAppActive: boolean
+): boolean {
+  return Boolean(user && user.id > 0 && user.role === 'it_admin' && isAppActive);
+}
+
 

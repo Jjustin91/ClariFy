@@ -22,7 +22,12 @@ import {
   updateUserRoleApi,
   verifyUserAccountApi,
 } from '../lib/api-client';
-import { getFieldValidationError } from '../lib/domain-logic';
+import {
+  filterAnnouncementAudits,
+  getFieldValidationError,
+  type AuditChangeTypeFilter,
+} from '../lib/domain-logic';
+import { resolveAdminPendingCount } from '../lib/realtime-reducer';
 import {
   colors,
   elevation,
@@ -96,6 +101,14 @@ export function AdminConsoleView() {
   const [verificationSearch, setVerificationSearch] = useState('');
   const [rbacSearch, setRbacSearch] = useState('');
 
+  // Immutable Announcement Audit Trail filters
+  const [auditSearch, setAuditSearch] = useState('');
+  const [auditRoleFilter, setAuditRoleFilter] = useState<'all' | UserRole>(
+    'all'
+  );
+  const [auditChangeTypeFilter, setAuditChangeTypeFilter] =
+    useState<AuditChangeTypeFilter>('all');
+
   // Role edit modal state
   const [editingRoleUser, setEditingRoleUser] = useState<User | null>(null);
   const [draftRole, setDraftRole] = useState<UserRole>('student');
@@ -153,6 +166,12 @@ export function AdminConsoleView() {
         setPendingUsers(snapshot.pendingUsers);
         setAllUsers(snapshot.allUsers);
         setMetrics(snapshot.metrics);
+        realtime?.setAdminPendingCount(
+          resolveAdminPendingCount(
+            snapshot.metrics?.pending_verifications_count,
+            snapshot.pendingUsers.length
+          )
+        );
         setError(null);
         hasLoadedOnceRef.current = true;
       } catch (err) {
@@ -167,12 +186,13 @@ export function AdminConsoleView() {
         }
       }
     },
-    [user, requestAdminSnapshot]
+    [user, requestAdminSnapshot, realtime]
   );
 
   // Initial load & realtime auto-refresh
   const realtimeAdminVersion = realtime?.adminVersion ?? 0;
   const realtimeAnnouncementVersion = realtime?.announcementVersion ?? 0;
+  const setAdminPendingCount = realtime?.setAdminPendingCount;
 
   useEffect(() => {
     if (!user || user.role !== 'it_admin') {
@@ -188,6 +208,12 @@ export function AdminConsoleView() {
         setPendingUsers(snapshot.pendingUsers);
         setAllUsers(snapshot.allUsers);
         setMetrics(snapshot.metrics);
+        setAdminPendingCount?.(
+          resolveAdminPendingCount(
+            snapshot.metrics?.pending_verifications_count,
+            snapshot.pendingUsers.length
+          )
+        );
         setError(null);
         hasLoadedOnceRef.current = true;
         setIsLoading(false);
@@ -210,6 +236,7 @@ export function AdminConsoleView() {
     realtimeAdminVersion,
     realtimeAnnouncementVersion,
     requestAdminSnapshot,
+    setAdminPendingCount,
   ]);
 
   const handleVerifyUser = async (
@@ -330,7 +357,28 @@ export function AdminConsoleView() {
 
   const semesterError = getFieldValidationError(syncErrors, 'semester_code');
   const syncLogs = metrics?.sync_logs ?? [];
-  const announcementAudits = metrics?.announcement_audits ?? [];
+  const announcementAudits = useMemo(
+    () => metrics?.announcement_audits ?? [],
+    [metrics]
+  );
+  const auditsTotal =
+    metrics?.announcement_audits_total ?? announcementAudits.length;
+
+  const filteredAnnouncementAudits = useMemo(
+    () =>
+      filterAnnouncementAudits(announcementAudits, {
+        search: auditSearch,
+        editorRole: auditRoleFilter,
+        changeType: auditChangeTypeFilter,
+      }),
+    [announcementAudits, auditSearch, auditRoleFilter, auditChangeTypeFilter]
+  );
+
+  const hasActiveAuditFilters = Boolean(
+    auditSearch.trim() ||
+      auditRoleFilter !== 'all' ||
+      auditChangeTypeFilter !== 'all'
+  );
 
   return (
     <>
@@ -382,7 +430,9 @@ export function AdminConsoleView() {
             </View>
             <View style={styles.kpiCard}>
               <Text style={styles.kpiLabel}>Immutable Edit Audits</Text>
-              <Text style={styles.kpiValue}>{announcementAudits.length}</Text>
+              <Text style={styles.kpiValue}>
+                {auditsTotal.toLocaleString()}
+              </Text>
             </View>
           </View>
         )}
@@ -491,7 +541,7 @@ export function AdminConsoleView() {
                 activeTab === 'metrics' && styles.tabPillTextActive,
               ]}
             >
-              4. Audits ({announcementAudits.length})
+              4. Audits ({auditsTotal})
             </Text>
           </Pressable>
         </ScrollView>
@@ -864,9 +914,15 @@ export function AdminConsoleView() {
 
             <View style={styles.sectionCard}>
               <View style={styles.sectionHeader}>
-                <Text style={styles.sectionTitle}>
-                  Immutable Announcement Audit Trail
-                </Text>
+                <View style={styles.auditHeaderTopRow}>
+                  <Text style={styles.sectionTitle}>
+                    Immutable Announcement Audit Trail
+                  </Text>
+                  <Text style={styles.auditCountSummary}>
+                    Showing {filteredAnnouncementAudits.length} of{' '}
+                    {announcementAudits.length} loaded ({auditsTotal} total)
+                  </Text>
+                </View>
                 <Text style={styles.sectionSubtitle}>
                   Append-only log recording every edit made to published
                   announcements, including previous/new content and editor
@@ -874,48 +930,255 @@ export function AdminConsoleView() {
                 </Text>
               </View>
 
-              {announcementAudits.length === 0 ? (
+              {/* Audit Search + Editor Role + Change Type Filter Bar */}
+              <View style={styles.auditFilterBox}>
+                <View style={styles.searchRow}>
+                  <View style={[styles.searchWrap, styles.searchWrapFlex]}>
+                    <Feather
+                      name="search"
+                      size={15}
+                      color={colors.mutedSlate}
+                      style={styles.searchIcon}
+                    />
+                    <TextInput
+                      value={auditSearch}
+                      onChangeText={setAuditSearch}
+                      placeholder="Search by audit ID, post ID, title, or editor..."
+                      placeholderTextColor={colors.placeholder}
+                      accessibilityLabel="Search announcement audits"
+                      style={[styles.searchInput, styles.searchInputClearable]}
+                    />
+                    {auditSearch.length > 0 && (
+                      <Pressable
+                        onPress={() => setAuditSearch('')}
+                        accessibilityRole="button"
+                        accessibilityLabel="Clear audit search"
+                        style={styles.searchClearBtn}
+                      >
+                        <Feather
+                          name="x"
+                          size={15}
+                          color={colors.mutedSlate}
+                        />
+                      </Pressable>
+                    )}
+                  </View>
+
+                  {hasActiveAuditFilters && (
+                    <Pressable
+                      onPress={() => {
+                        setAuditSearch('');
+                        setAuditRoleFilter('all');
+                        setAuditChangeTypeFilter('all');
+                      }}
+                      accessibilityRole="button"
+                      accessibilityLabel="Reset audit filters"
+                      style={({ pressed }) => [
+                        styles.resetFilterBtn,
+                        pressed && styles.pressed,
+                      ]}
+                    >
+                      <Feather
+                        name="rotate-ccw"
+                        size={14}
+                        color={colors.ustpNavy}
+                      />
+                      <Text style={styles.resetFilterText}>Reset</Text>
+                    </Pressable>
+                  )}
+                </View>
+
+                <View style={styles.filterGroup}>
+                  <Text style={styles.filterGroupLabel}>EDITOR ROLE</Text>
+                  <View style={styles.filterChipsRow}>
+                    {(
+                      [
+                        { key: 'all', label: 'All Editors' },
+                        { key: 'faculty', label: 'Faculty' },
+                        { key: 'dept_head', label: 'Dept Head' },
+                        { key: 'it_admin', label: 'IT Admin' },
+                      ] as const
+                    ).map((item) => {
+                      const active = auditRoleFilter === item.key;
+                      return (
+                        <Pressable
+                          key={item.key}
+                          onPress={() => setAuditRoleFilter(item.key)}
+                          accessibilityRole="button"
+                          accessibilityState={{ selected: active }}
+                          accessibilityLabel={`Filter audits by editor role ${item.label}`}
+                          style={[
+                            styles.filterChip,
+                            active && styles.filterChipNavyActive,
+                          ]}
+                        >
+                          <Text
+                            style={[
+                              styles.filterChipText,
+                              active && styles.filterChipNavyTextActive,
+                            ]}
+                          >
+                            {item.label}
+                          </Text>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+                </View>
+
+                <View style={styles.filterGroup}>
+                  <Text style={styles.filterGroupLabel}>CHANGE TYPE</Text>
+                  <View style={styles.filterChipsRow}>
+                    {(
+                      [
+                        { key: 'all', label: 'All Changes' },
+                        { key: 'title', label: 'Title Changed' },
+                        { key: 'content', label: 'Content Changed' },
+                      ] as const
+                    ).map((item) => {
+                      const active = auditChangeTypeFilter === item.key;
+                      return (
+                        <Pressable
+                          key={item.key}
+                          onPress={() => setAuditChangeTypeFilter(item.key)}
+                          accessibilityRole="button"
+                          accessibilityState={{ selected: active }}
+                          accessibilityLabel={`Filter audits by change type ${item.label}`}
+                          style={[
+                            styles.filterChip,
+                            active && styles.filterChipBlueActive,
+                          ]}
+                        >
+                          <Text
+                            style={[
+                              styles.filterChipText,
+                              active && styles.filterChipBlueTextActive,
+                            ]}
+                          >
+                            {item.label}
+                          </Text>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+                </View>
+              </View>
+
+              {filteredAnnouncementAudits.length === 0 ? (
                 <EmptyState
-                  title="No Announcement Audits Yet"
-                  description="Edits made to published announcements will be immutably logged here."
+                  title={
+                    announcementAudits.length === 0
+                      ? 'No Announcement Audits Yet'
+                      : 'No Audits Match Your Filters'
+                  }
+                  description={
+                    announcementAudits.length === 0
+                      ? 'Edits made to published announcements will be immutably logged here.'
+                      : 'Try adjusting your search text, editor role, or change-type filters.'
+                  }
                 />
               ) : (
                 <View style={styles.cardsList}>
-                  {announcementAudits.map((audit) => (
-                    <View key={String(audit.id)} style={styles.recordCard}>
-                      <View style={styles.recordTopRow}>
-                        <Text style={styles.recordId}>
-                          #{audit.id} (Post #{audit.announcement_id})
-                        </Text>
-                        <Text style={styles.auditTimeText}>
-                          {formatAuditTimestamp(audit.edited_at)}
+                  {filteredAnnouncementAudits.map((audit) => {
+                    const titleChanged =
+                      (audit.previous_title || '').trim() !==
+                      (audit.new_title || '').trim();
+                    const contentChanged =
+                      (audit.previous_content || '').trim() !==
+                      (audit.new_content || '').trim();
+                    return (
+                      <View key={String(audit.id)} style={styles.recordCard}>
+                        <View style={styles.recordTopRow}>
+                          <Text style={styles.recordId}>
+                            #{audit.id} (Post #{audit.announcement_id})
+                          </Text>
+                          <Text style={styles.auditTimeText}>
+                            {formatAuditTimestamp(audit.edited_at)}
+                          </Text>
+                        </View>
+
+                        <View style={styles.auditBadgesRow}>
+                          {titleChanged && (
+                            <View style={styles.changeBadgeTitle}>
+                              <Text style={styles.changeBadgeTitleText}>
+                                TITLE
+                              </Text>
+                            </View>
+                          )}
+                          {contentChanged && (
+                            <View style={styles.changeBadgeContent}>
+                              <Text style={styles.changeBadgeContentText}>
+                                CONTENT
+                              </Text>
+                            </View>
+                          )}
+                          <View
+                            style={[
+                              styles.rolePill,
+                              audit.editor_role === 'it_admin' &&
+                                styles.rolePillAdmin,
+                              audit.editor_role === 'dept_head' &&
+                                styles.rolePillDeptHead,
+                              audit.editor_role === 'faculty' &&
+                                styles.rolePillFaculty,
+                            ]}
+                          >
+                            <Text style={styles.rolePillText}>
+                              {formatRoleBadge(audit.editor_role)}
+                            </Text>
+                          </View>
+                        </View>
+
+                        <View style={styles.diffBox}>
+                          {titleChanged ? (
+                            <>
+                              <Text style={styles.diffPrevTitle}>
+                                {audit.previous_title}
+                              </Text>
+                              <Text style={styles.diffNewTitle}>
+                                → {audit.new_title}
+                              </Text>
+                            </>
+                          ) : (
+                            <Text style={styles.diffUnchangedTitle}>
+                              {audit.new_title}
+                            </Text>
+                          )}
+                        </View>
+
+                        <View style={styles.diffContentBox}>
+                          {contentChanged ? (
+                            <>
+                              <Text
+                                numberOfLines={3}
+                                style={styles.diffPrevContent}
+                              >
+                                Prev: {audit.previous_content}
+                              </Text>
+                              <Text
+                                numberOfLines={3}
+                                style={styles.diffNewContent}
+                              >
+                                New: {audit.new_content}
+                              </Text>
+                            </>
+                          ) : (
+                            <Text
+                              numberOfLines={3}
+                              style={styles.diffPrevContent}
+                            >
+                              {audit.new_content}
+                            </Text>
+                          )}
+                        </View>
+
+                        <Text style={styles.auditEditorText}>
+                          Editor: {audit.editor_name} • ID: {audit.editor_id} (
+                          {audit.editor_role})
                         </Text>
                       </View>
-
-                      <View style={styles.diffBox}>
-                        <Text style={styles.diffPrevTitle}>
-                          {audit.previous_title}
-                        </Text>
-                        <Text style={styles.diffNewTitle}>
-                          → {audit.new_title}
-                        </Text>
-                      </View>
-
-                      <View style={styles.diffContentBox}>
-                        <Text numberOfLines={3} style={styles.diffPrevContent}>
-                          Prev: {audit.previous_content}
-                        </Text>
-                        <Text numberOfLines={3} style={styles.diffNewContent}>
-                          New: {audit.new_content}
-                        </Text>
-                      </View>
-
-                      <Text style={styles.auditEditorText}>
-                        Editor: {audit.editor_name} • ID: {audit.editor_id} (
-                        {audit.editor_role})
-                      </Text>
-                    </View>
-                  ))}
+                    );
+                  })}
                 </View>
               )}
             </View>
@@ -1431,6 +1694,134 @@ const styles = StyleSheet.create({
     height: 32,
     backgroundColor: colors.border,
   },
+  auditHeaderTopRow: {
+    gap: spacing.xxs,
+  },
+  auditCountSummary: {
+    fontSize: typography.sizes.xs,
+    fontWeight: '800',
+    color: colors.ustpNavy,
+    fontFamily: typography.fontFamilyMono,
+    ...typography.tabularNums,
+  },
+  auditFilterBox: {
+    backgroundColor: colors.surfaceSubtle,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radii.md,
+    padding: spacing.md,
+    gap: spacing.sm,
+  },
+  searchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  searchWrapFlex: {
+    flex: 1,
+  },
+  searchInputClearable: {
+    paddingRight: 40,
+  },
+  searchClearBtn: {
+    position: 'absolute',
+    right: 0,
+    minWidth: 40,
+    minHeight: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  resetFilterBtn: {
+    minHeight: 44,
+    paddingHorizontal: spacing.md,
+    borderRadius: radii.md,
+    borderWidth: 1,
+    borderColor: colors.borderStrong,
+    backgroundColor: colors.white,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+  },
+  resetFilterText: {
+    fontSize: typography.sizes.xs,
+    fontWeight: '800',
+    color: colors.ustpNavy,
+  },
+  filterGroup: {
+    gap: spacing.xs,
+  },
+  filterGroupLabel: {
+    fontSize: typography.sizes.xxs,
+    fontWeight: '800',
+    color: colors.mutedSlate,
+    letterSpacing: 0.5,
+  },
+  filterChipsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.xs + 2,
+  },
+  filterChip: {
+    minHeight: 36,
+    paddingHorizontal: spacing.sm + 2,
+    borderRadius: radii.sm,
+    borderWidth: 1,
+    borderColor: colors.borderStrong,
+    backgroundColor: colors.white,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  filterChipNavyActive: {
+    backgroundColor: colors.ustpNavy,
+    borderColor: colors.ustpNavy,
+  },
+  filterChipBlueActive: {
+    backgroundColor: colors.ustpBlue,
+    borderColor: colors.ustpBlue,
+  },
+  filterChipText: {
+    fontSize: typography.sizes.xxs,
+    fontWeight: '800',
+    color: colors.ustpText,
+  },
+  filterChipNavyTextActive: {
+    color: colors.ustpGold,
+  },
+  filterChipBlueTextActive: {
+    color: colors.white,
+  },
+  auditBadgesRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: spacing.xs,
+  },
+  changeBadgeTitle: {
+    backgroundColor: colors.tagMemoBg,
+    borderWidth: 1,
+    borderColor: colors.tagMemoBorder,
+    borderRadius: radii.sm,
+    paddingHorizontal: spacing.xs + 2,
+    paddingVertical: 2,
+  },
+  changeBadgeTitleText: {
+    fontSize: typography.sizes.xxs,
+    fontWeight: '800',
+    color: colors.tagMemoText,
+  },
+  changeBadgeContent: {
+    backgroundColor: colors.tagDeptBg,
+    borderWidth: 1,
+    borderColor: colors.tagDeptBorder,
+    borderRadius: radii.sm,
+    paddingHorizontal: spacing.xs + 2,
+    paddingVertical: 2,
+  },
+  changeBadgeContentText: {
+    fontSize: typography.sizes.xxs,
+    fontWeight: '800',
+    color: colors.tagDeptText,
+  },
   auditTimeText: {
     fontSize: typography.sizes.xxs,
     color: colors.mutedSlate,
@@ -1450,6 +1841,11 @@ const styles = StyleSheet.create({
     fontSize: typography.sizes.sm,
     fontWeight: '800',
     color: colors.successText,
+  },
+  diffUnchangedTitle: {
+    fontSize: typography.sizes.sm,
+    fontWeight: '800',
+    color: colors.ustpText,
   },
   diffContentBox: {
     backgroundColor: colors.white,

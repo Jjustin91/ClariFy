@@ -185,15 +185,49 @@ export interface PrismsSyncLog {
   executed_at: string;
 }
 
+export interface AdminRoleBreakdown {
+  student: number;
+  faculty: number;
+  dept_head: number;
+  it_admin: number;
+}
+
 export interface AdminMetricsResponse {
   active_users_count: number;
   verified_accounts_count: number;
   pending_verifications_count: number;
+  rejected_verifications_count?: number;
+  total_registered_users_count?: number;
+  role_breakdown?: AdminRoleBreakdown;
+  department_breakdown?: Record<string, number>;
+  active_channels_count?: number;
+  course_hubs_count?: number;
+  published_announcements_count?: number;
+  urgent_announcements_count?: number;
   push_queue_latency_seconds: number;
   sms_fallback_dispatched_count: number;
   overall_read_reach_percentage: number;
   sync_logs: PrismsSyncLog[];
   announcement_audits: AnnouncementAudit[];
+  announcement_audits_total?: number;
+  api_latency_ms?: number;
+}
+
+export interface PasswordOtpRequestResponse {
+  message: string;
+  masked_phone: string | null;
+  expires_in_seconds: number;
+  resend_cooldown_seconds: number;
+}
+
+export interface PasswordOtpVerifyResponse {
+  message: string;
+  reset_token: string;
+  expires_in_seconds: number;
+}
+
+export interface PasswordResetResponse {
+  message: string;
 }
 
 export interface PaginatedMeta {

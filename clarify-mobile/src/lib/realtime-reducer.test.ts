@@ -12,12 +12,15 @@ import {
 import {
   ALL_REALTIME_EVENT_TYPES,
   computeDebouncedRefreshDelayMs,
+  formatAdminPendingBadgeLabel,
   getRealtimeUnavailableBannerMessage,
   normalizeReverbPayloadToEvent,
   patchAnnouncementFeedOnRealtimeEvent,
   planRealtimeEventEffects,
   reduceChannelsOnRealtimeEvent,
+  resolveAdminPendingCount,
   resolvePushNotificationRoute,
+  shouldFetchAdminPendingCount,
 } from './realtime-reducer.ts';
 import {
   computeReconnectBackoffMs,
@@ -571,4 +574,127 @@ test('mapHttpErrorToApiError extracts 429 retry seconds from AuthController JSON
   assert.equal(err.retryAfter, 37);
   assert.equal(err.message, 'Too many attempts, try again in 37 seconds');
 });
+
+test('urgent popup plan hides modal for it_admin, publisher self-actor, drafts, and dismissed IDs while resetting recipient ack state', () => {
+  const urgentPublished = makeAnnouncement(201, {
+    is_urgent: true,
+    status: 'published',
+    read_reach: {
+      acknowledged_count: 1,
+      enrolled_total: 40,
+      percentage: 2.5,
+      has_current_user_acknowledged: true,
+    },
+  });
+
+  // Student receives urgent popup with has_current_user_acknowledged normalized to false
+  const studentPlan = planRealtimeEventEffects(
+    normalizeReverbPayloadToEvent({
+      type: 'announcement.urgent',
+      channel_id: 100,
+      actor_id: facultyUser.id,
+      announcement: urgentPublished,
+    }),
+    studentUser
+  );
+  assert.equal(studentPlan.urgentPopupCandidate?.id, 201);
+  assert.equal(
+    studentPlan.urgentPopupCandidate?.read_reach.has_current_user_acknowledged,
+    false
+  );
+  assert.equal(studentPlan.shouldCheckUrgentAnnouncement, false);
+
+  // IT Admin NEVER sees urgent popup or triggers urgent check
+  const adminFullPlan = planRealtimeEventEffects(
+    normalizeReverbPayloadToEvent({
+      type: 'announcement.urgent',
+      channel_id: 100,
+      actor_id: facultyUser.id,
+      announcement: urgentPublished,
+    }),
+    itAdminUser
+  );
+  assert.equal(adminFullPlan.urgentPopupCandidate, null);
+  assert.equal(adminFullPlan.shouldCheckUrgentAnnouncement, false);
+
+  const adminMinimalPlan = planRealtimeEventEffects(
+    normalizeReverbPayloadToEvent({
+      type: 'announcement.urgent',
+      channel_id: 100,
+      actor_id: facultyUser.id,
+    }),
+    itAdminUser
+  );
+  assert.equal(adminMinimalPlan.urgentPopupCandidate, null);
+  assert.equal(adminMinimalPlan.shouldCheckUrgentAnnouncement, false);
+
+  // Publisher (self-actor) NEVER receives their own urgent popup
+  const selfPlan = planRealtimeEventEffects(
+    normalizeReverbPayloadToEvent({
+      type: 'announcement.urgent',
+      channel_id: 100,
+      actor_id: facultyUser.id,
+      announcement: urgentPublished,
+    }),
+    facultyUser
+  );
+  assert.equal(selfPlan.urgentPopupCandidate, null);
+  assert.equal(selfPlan.shouldCheckUrgentAnnouncement, false);
+
+  // Draft urgent announcement does not pop up
+  const draftUrgent = makeAnnouncement(202, {
+    is_urgent: true,
+    status: 'draft',
+  });
+  const draftPlan = planRealtimeEventEffects(
+    normalizeReverbPayloadToEvent({
+      type: 'announcement.updated',
+      channel_id: 100,
+      actor_id: facultyUser.id,
+      announcement: draftUrgent,
+    }),
+    studentUser
+  );
+  assert.equal(draftPlan.urgentPopupCandidate, null);
+
+  // Published urgent update surfaces popup unless dismissed
+  const urgentUpdatePlan = planRealtimeEventEffects(
+    normalizeReverbPayloadToEvent({
+      type: 'announcement.updated',
+      channel_id: 100,
+      actor_id: facultyUser.id,
+      announcement: urgentPublished,
+    }),
+    studentUser
+  );
+  assert.equal(urgentUpdatePlan.urgentPopupCandidate?.id, 201);
+  assert.equal(
+    urgentUpdatePlan.urgentPopupCandidate?.read_reach
+      .has_current_user_acknowledged,
+    false
+  );
+});
+
+test('admin pending badge count helpers resolve metrics count, format badge labels, and restrict fetching to active it_admin', () => {
+  assert.equal(resolveAdminPendingCount(7, 2), 7);
+  assert.equal(resolveAdminPendingCount(0, 5), 0);
+  assert.equal(resolveAdminPendingCount(undefined, 4), 4);
+  assert.equal(resolveAdminPendingCount(null, null), null);
+  assert.equal(resolveAdminPendingCount(-2, 3), 3);
+
+  assert.equal(formatAdminPendingBadgeLabel(null), null);
+  assert.equal(formatAdminPendingBadgeLabel(undefined), null);
+  assert.equal(formatAdminPendingBadgeLabel(0), null);
+  assert.equal(formatAdminPendingBadgeLabel(-1), null);
+  assert.equal(formatAdminPendingBadgeLabel(1), '1');
+  assert.equal(formatAdminPendingBadgeLabel(99), '99');
+  assert.equal(formatAdminPendingBadgeLabel(100), '99+');
+
+  assert.equal(shouldFetchAdminPendingCount(itAdminUser, true), true);
+  assert.equal(shouldFetchAdminPendingCount(itAdminUser, false), false);
+  assert.equal(shouldFetchAdminPendingCount(studentUser, true), false);
+  assert.equal(shouldFetchAdminPendingCount(facultyUser, true), false);
+  assert.equal(shouldFetchAdminPendingCount(null, true), false);
+});
+
 

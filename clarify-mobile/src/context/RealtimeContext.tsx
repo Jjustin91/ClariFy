@@ -9,7 +9,7 @@ import React, {
 } from 'react';
 import { AppState, type AppStateStatus } from 'react-native';
 
-import { getAnnouncementsApi } from '../lib/api-client';
+import { getAdminMetricsApi, getAnnouncementsApi } from '../lib/api-client';
 import { getSubscribableCourseHubIds } from '../lib/domain-logic';
 import {
   computeDebouncedRefreshDelayMs,
@@ -17,6 +17,8 @@ import {
   normalizeReverbPayloadToEvent,
   planRealtimeEventEffects,
   reduceChannelsOnRealtimeEvent,
+  resolveAdminPendingCount,
+  shouldFetchAdminPendingCount,
 } from '../lib/realtime-reducer';
 import {
   disconnectReverb,
@@ -38,6 +40,8 @@ export interface RealtimeContextValue {
   realtimeUnavailableMessage: string | null;
   announcementVersion: number;
   adminVersion: number;
+  adminPendingCount: number | null;
+  setAdminPendingCount: React.Dispatch<React.SetStateAction<number | null>>;
   urgentPopupAnnouncement: Announcement | null;
   dismissUrgentPopup: (announcementId?: number) => void;
   activeChannelId: number;
@@ -73,6 +77,9 @@ export function RealtimeProvider({ children }: { children: React.ReactNode }) {
   >(() => (reverbConfigStatus.configured ? 'disconnected' : 'unconfigured'));
   const [announcementVersion, setAnnouncementVersion] = useState<number>(0);
   const [adminVersion, setAdminVersion] = useState<number>(0);
+  const [adminPendingCount, setAdminPendingCount] = useState<number | null>(
+    null
+  );
   const [urgentPopupAnnouncement, setUrgentPopupAnnouncement] =
     useState<Announcement | null>(null);
   const [activeChannelId, setActiveChannelId] = useState<number>(0);
@@ -84,6 +91,7 @@ export function RealtimeProvider({ children }: { children: React.ReactNode }) {
     null
   );
   const urgentCheckInFlightRef = useRef<Promise<void> | null>(null);
+  const adminPendingInFlightRef = useRef<Promise<void> | null>(null);
   const isAppActiveRef = useRef<boolean>(AppState.currentState === 'active');
 
   const channelsRef = useRef(channels);
@@ -174,6 +182,12 @@ export function RealtimeProvider({ children }: { children: React.ReactNode }) {
         );
         if (unackedUrgent) {
           setUrgentPopupAnnouncement(unackedUrgent);
+        } else {
+          setUrgentPopupAnnouncement((current) => {
+            if (!current) return null;
+            const updatedMatch = list.find((a) => a.id === current.id);
+            return updatedMatch || current;
+          });
         }
       } catch {
         // Non-fatal; feed itself handles error banners
@@ -183,6 +197,35 @@ export function RealtimeProvider({ children }: { children: React.ReactNode }) {
     })();
 
     urgentCheckInFlightRef.current = request;
+    return request;
+  }, []);
+
+  const refreshAdminPendingCount = useCallback(async () => {
+    const activeUser = userRef.current;
+    if (!shouldFetchAdminPendingCount(activeUser, isAppActiveRef.current)) {
+      return;
+    }
+    if (adminPendingInFlightRef.current) {
+      return adminPendingInFlightRef.current;
+    }
+
+    const request = (async () => {
+      try {
+        const res = await getAdminMetricsApi();
+        const nextCount = resolveAdminPendingCount(
+          res?.data?.pending_verifications_count
+        );
+        if (nextCount !== null) {
+          setAdminPendingCount(nextCount);
+        }
+      } catch {
+        // Non-fatal; AdminConsoleView itself surfaces error banners
+      } finally {
+        adminPendingInFlightRef.current = null;
+      }
+    })();
+
+    adminPendingInFlightRef.current = request;
     return request;
   }, []);
 
@@ -237,6 +280,23 @@ export function RealtimeProvider({ children }: { children: React.ReactNode }) {
       if (plan.urgentPopupCandidate) {
         setUrgentPopupAnnouncement(plan.urgentPopupCandidate);
       }
+      if (
+        event.type === 'announcement.acknowledged' &&
+        event.announcement?.read_reach
+      ) {
+        const ackedAnn = event.announcement;
+        setUrgentPopupAnnouncement((current) => {
+          if (!current || current.id !== ackedAnn.id) return current;
+          return {
+            ...current,
+            read_reach: {
+              ...ackedAnn.read_reach,
+              has_current_user_acknowledged:
+                current.read_reach.has_current_user_acknowledged,
+            },
+          };
+        });
+      }
       if (plan.shouldCheckUrgentAnnouncement) {
         void checkUnacknowledgedUrgentAnnouncement();
       }
@@ -245,6 +305,7 @@ export function RealtimeProvider({ children }: { children: React.ReactNode }) {
       }
       if (plan.shouldBumpAdminVersion) {
         setAdminVersion((v) => v + 1);
+        void refreshAdminPendingCount();
       }
       if (plan.shouldImmediateChannelRefresh) {
         clearDebouncedChannelTimer();
@@ -263,6 +324,7 @@ export function RealtimeProvider({ children }: { children: React.ReactNode }) {
       applyChannelsPatch,
       notifyEventListeners,
       checkUnacknowledgedUrgentAnnouncement,
+      refreshAdminPendingCount,
       clearDebouncedChannelTimer,
       refreshChannels,
       scheduleDebouncedChannelRefresh,
@@ -295,14 +357,20 @@ export function RealtimeProvider({ children }: { children: React.ReactNode }) {
         setAppActiveEpoch((epoch) => epoch + 1);
 
         if (isAuthenticated && userRef.current) {
-          void refreshChannels({ silent: true });
-          setAnnouncementVersion((v) => v + 1);
-          const currentActiveId = activeChannelIdRef.current;
-          if (
-            currentActiveId > 0 &&
-            rosterByChannelIdRef.current[currentActiveId]
-          ) {
-            void refreshChannelRoster(currentActiveId);
+          if (userRef.current.role === 'it_admin') {
+            setAdminVersion((v) => v + 1);
+            void refreshAdminPendingCount();
+          } else {
+            void refreshChannels({ silent: true });
+            void checkUnacknowledgedUrgentAnnouncement();
+            setAnnouncementVersion((v) => v + 1);
+            const currentActiveId = activeChannelIdRef.current;
+            if (
+              currentActiveId > 0 &&
+              rosterByChannelIdRef.current[currentActiveId]
+            ) {
+              void refreshChannelRoster(currentActiveId);
+            }
           }
         }
       }
@@ -320,6 +388,32 @@ export function RealtimeProvider({ children }: { children: React.ReactNode }) {
     clearDebouncedChannelTimer,
     refreshChannels,
     refreshChannelRoster,
+    checkUnacknowledgedUrgentAnnouncement,
+    refreshAdminPendingCount,
+  ]);
+
+  // Initial authenticated check (once per session):
+  // - Non-admins: check for unacknowledged urgent announcements
+  // - IT Admins: fetch pending verification count for drawer badge
+  useEffect(() => {
+    if (!isAuthReady) {
+      return;
+    }
+    if (!isAuthenticated || !user?.id) {
+      return;
+    }
+    if (user.role === 'it_admin') {
+      void refreshAdminPendingCount();
+    } else {
+      void checkUnacknowledgedUrgentAnnouncement();
+    }
+  }, [
+    isAuthReady,
+    isAuthenticated,
+    user?.id,
+    user?.role,
+    checkUnacknowledgedUrgentAnnouncement,
+    refreshAdminPendingCount,
   ]);
 
   // Main authenticated Reverb subscription lifecycle (tears down cleanly on logout/unmount)
@@ -341,8 +435,14 @@ export function RealtimeProvider({ children }: { children: React.ReactNode }) {
 
     const handleReconnect = () => {
       if (!isAppActiveRef.current) return;
-      void refreshChannels({ silent: true });
-      setAnnouncementVersion((v) => v + 1);
+      if (userRef.current?.role === 'it_admin') {
+        setAdminVersion((v) => v + 1);
+        void refreshAdminPendingCount();
+      } else {
+        void refreshChannels({ silent: true });
+        void checkUnacknowledgedUrgentAnnouncement();
+        setAnnouncementVersion((v) => v + 1);
+      }
     };
 
     const unsubscribeGlobal = subscribeGlobalReverb(
@@ -384,6 +484,8 @@ export function RealtimeProvider({ children }: { children: React.ReactNode }) {
     clearDebouncedChannelTimer,
     handleIncomingRealtimeEvent,
     refreshChannels,
+    checkUnacknowledgedUrgentAnnouncement,
+    refreshAdminPendingCount,
   ]);
 
   // Ensure full socket disconnect on provider unmount
@@ -401,7 +503,13 @@ export function RealtimeProvider({ children }: { children: React.ReactNode }) {
         ? 'unconfigured'
         : connectionState;
   const effectiveUrgentPopup =
-    isAuthenticated && user?.id ? urgentPopupAnnouncement : null;
+    isAuthenticated && user?.id && user.role !== 'it_admin'
+      ? urgentPopupAnnouncement
+      : null;
+  const effectiveAdminPendingCount =
+    isAuthenticated && user?.id && user.role === 'it_admin'
+      ? adminPendingCount
+      : null;
   const effectiveActiveChannelId =
     isAuthenticated && user?.id ? activeChannelId : 0;
 
@@ -430,6 +538,8 @@ export function RealtimeProvider({ children }: { children: React.ReactNode }) {
       realtimeUnavailableMessage,
       announcementVersion,
       adminVersion,
+      adminPendingCount: effectiveAdminPendingCount,
+      setAdminPendingCount,
       urgentPopupAnnouncement: effectiveUrgentPopup,
       dismissUrgentPopup,
       activeChannelId: effectiveActiveChannelId,
@@ -443,6 +553,7 @@ export function RealtimeProvider({ children }: { children: React.ReactNode }) {
       realtimeUnavailableMessage,
       announcementVersion,
       adminVersion,
+      effectiveAdminPendingCount,
       effectiveUrgentPopup,
       dismissUrgentPopup,
       effectiveActiveChannelId,

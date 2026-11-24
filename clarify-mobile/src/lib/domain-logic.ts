@@ -1,5 +1,6 @@
 import type {
   Announcement,
+  AnnouncementAudit,
   Channel,
   NewActivityBreakdown,
   QaThread,
@@ -1593,3 +1594,177 @@ export function normalizePickedChatImage(params: {
     size,
   };
 }
+
+// ============================================================================
+// IT ADMIN CONSOLE SECTION & AUDIT TRAIL HELPERS (ported from clarify-web)
+// ============================================================================
+
+export type AdminSectionTab =
+  | 'verifications'
+  | 'rbac'
+  | 'roster-sync'
+  | 'audits';
+
+const VALID_ADMIN_SECTION_TABS: readonly AdminSectionTab[] = [
+  'verifications',
+  'rbac',
+  'roster-sync',
+  'audits',
+] as const;
+
+export function parseAdminSectionTab(
+  raw: string | null | undefined
+): AdminSectionTab {
+  if (!raw) return 'verifications';
+  const normalized = raw.trim().toLowerCase();
+  if (normalized === 'prisms') return 'roster-sync';
+  if (normalized === 'metrics') return 'audits';
+  if ((VALID_ADMIN_SECTION_TABS as readonly string[]).includes(normalized)) {
+    return normalized as AdminSectionTab;
+  }
+  return 'verifications';
+}
+
+export function getAdminSectionTitle(tab: AdminSectionTab): string {
+  switch (tab) {
+    case 'verifications':
+      return 'Account Verification Queue';
+    case 'rbac':
+      return 'Role & Access Control';
+    case 'roster-sync':
+      return 'Roster Sync Console';
+    case 'audits':
+      return 'System Metrics & Audit Trail';
+  }
+}
+
+export type AuditChangeTypeFilter = 'all' | 'title' | 'content';
+
+export function filterAnnouncementAudits(
+  audits: AnnouncementAudit[],
+  filters: {
+    search?: string;
+    editorRole?: 'all' | UserRole;
+    changeType?: AuditChangeTypeFilter;
+  }
+): AnnouncementAudit[] {
+  const query = (filters.search || '').trim().toLowerCase();
+  const roleFilter = filters.editorRole || 'all';
+  const changeType = filters.changeType || 'all';
+
+  return audits.filter((audit) => {
+    if (roleFilter !== 'all' && audit.editor_role !== roleFilter) {
+      return false;
+    }
+
+    const titleChanged =
+      (audit.previous_title || '').trim() !== (audit.new_title || '').trim();
+    const contentChanged =
+      (audit.previous_content || '').trim() !==
+      (audit.new_content || '').trim();
+
+    if (changeType === 'title' && !titleChanged) {
+      return false;
+    }
+    if (changeType === 'content' && !contentChanged) {
+      return false;
+    }
+
+    if (query) {
+      const haystack = [
+        String(audit.id),
+        String(audit.announcement_id),
+        audit.previous_title,
+        audit.new_title,
+        audit.previous_content,
+        audit.new_content,
+        audit.editor_name,
+        String(audit.editor_id),
+        audit.editor_role,
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+      if (!haystack.includes(query)) {
+        return false;
+      }
+    }
+
+    return true;
+  });
+}
+
+// ============================================================================
+// SMS OTP PASSWORD RESET HELPERS (ported from clarify-web)
+// ============================================================================
+
+export type PasswordResetStep = 'request' | 'verify' | 'reset' | 'done';
+
+/**
+ * Strips non-digit characters and caps OTP input to 6 digits so pasting
+ * formatted codes like "123 456" or "123-456" works cleanly.
+ */
+export function sanitizeOtpInput(raw: string): string {
+  return String(raw || '')
+    .replace(/\D/g, '')
+    .slice(0, 6);
+}
+
+/**
+ * Extracts a positive retry-after countdown in seconds from an ApiError / HTTP 429 payload.
+ */
+export function extractRetryAfterSeconds(error: unknown): number {
+  if (!error || typeof error !== 'object') {
+    return 0;
+  }
+  const errObj = error as {
+    retryAfter?: unknown;
+    retry_after?: unknown;
+    data?: { retry_after?: unknown };
+  };
+  const candidate =
+    typeof errObj.retryAfter === 'number'
+      ? errObj.retryAfter
+      : typeof errObj.retry_after === 'number'
+        ? errObj.retry_after
+        : typeof errObj.data?.retry_after === 'number'
+          ? errObj.data.retry_after
+          : 0;
+  return Number.isFinite(candidate) && candidate > 0
+    ? Math.ceil(candidate)
+    : 0;
+}
+
+/**
+ * Client-side validation for the new password + confirmation step (mirrors Laravel min:8 + confirmed).
+ */
+export function validatePasswordResetFields(
+  password: string,
+  confirmPassword: string
+): Record<string, string[]> {
+  const errors: Record<string, string[]> = {};
+  if (!password) {
+    errors.password = ['Please enter a new password.'];
+  } else if (password.length < 8) {
+    errors.password = ['Password must be at least 8 characters long.'];
+  }
+  if (!confirmPassword) {
+    errors.password_confirmation = ['Please confirm your new password.'];
+  } else if (password !== confirmPassword) {
+    errors.password_confirmation = [
+      'Password confirmation does not match your new password.',
+    ];
+  }
+  return errors;
+}
+
+/**
+ * Formats the resend OTP button label with live countdown.
+ */
+export function formatOtpCooldownLabel(cooldownSeconds: number): string {
+  if (cooldownSeconds > 0) {
+    return `Resend code in ${Math.ceil(cooldownSeconds)}s`;
+  }
+  return 'Resend SMS Code';
+}
+

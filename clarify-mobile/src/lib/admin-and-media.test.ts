@@ -8,18 +8,30 @@ import {
   buildProfileUpdateFormData,
   buildVoiceRecordingDescriptor,
   canManageAnnouncement,
+  extractRetryAfterSeconds,
+  filterAnnouncementAudits,
   formatAudioDuration,
   formatFileSize,
+  formatOtpCooldownLabel,
+  getAdminSectionTitle,
   MAX_ANNOUNCEMENT_ATTACHMENT_BYTES,
   MAX_CHAT_ATTACHMENT_BYTES,
   MAX_PROFILE_AVATAR_BYTES,
   normalizePickedChatImage,
+  parseAdminSectionTab,
   parseAnnouncementAttachment,
+  sanitizeOtpInput,
   validateAnnouncementAttachmentFile,
   validateChatAttachmentFile,
+  validatePasswordResetFields,
   validateProfileAvatarFile,
 } from './domain-logic.ts';
-import type { Announcement, Channel, User } from '../types/api.ts';
+import type {
+  Announcement,
+  AnnouncementAudit,
+  Channel,
+  User,
+} from '../types/api.ts';
 
 function makeUser(role: User['role'], id = 10): User {
   return {
@@ -445,4 +457,134 @@ test('buildChatMessageFormData serializes optional caption, temp_id, and attachm
   assert.equal(captionedDoc.get('temp_id'), 'temp-doc-2');
   assert.ok(captionedDoc.get('attachment') !== null);
 });
+
+test('password reset OTP helpers sanitize 6-digit input, extract retry_after, validate min-8 passwords, and format cooldown labels', () => {
+  assert.equal(sanitizeOtpInput('123-456'), '123456');
+  assert.equal(sanitizeOtpInput('  98a7b6c54321 '), '987654');
+  assert.equal(sanitizeOtpInput(''), '');
+
+  assert.equal(extractRetryAfterSeconds({ retryAfter: 45 }), 45);
+  assert.equal(extractRetryAfterSeconds({ retry_after: 31.2 }), 32);
+  assert.equal(extractRetryAfterSeconds({ data: { retry_after: 18 } }), 18);
+  assert.equal(extractRetryAfterSeconds({ retryAfter: 0 }), 0);
+  assert.equal(extractRetryAfterSeconds(null), 0);
+
+  const emptyErrs = validatePasswordResetFields('', '');
+  assert.ok(emptyErrs.password?.[0]);
+  assert.ok(emptyErrs.password_confirmation?.[0]);
+
+  const shortErrs = validatePasswordResetFields('short7', 'short7');
+  assert.match(shortErrs.password?.[0] || '', /at least 8 characters/i);
+  assert.equal(shortErrs.password_confirmation, undefined);
+
+  const mismatchErrs = validatePasswordResetFields('Password123', 'Password999');
+  assert.equal(mismatchErrs.password, undefined);
+  assert.match(mismatchErrs.password_confirmation?.[0] || '', /does not match/i);
+
+  assert.deepEqual(
+    validatePasswordResetFields('StrongPass88', 'StrongPass88'),
+    {}
+  );
+
+  assert.equal(formatOtpCooldownLabel(0), 'Resend SMS Code');
+  assert.equal(formatOtpCooldownLabel(-3), 'Resend SMS Code');
+  assert.equal(formatOtpCooldownLabel(29.1), 'Resend code in 30s');
+});
+
+test('filterAnnouncementAudits filters by search query, editorRole, changeType, and combined criteria', () => {
+  assert.equal(parseAdminSectionTab('prisms'), 'roster-sync');
+  assert.equal(parseAdminSectionTab('metrics'), 'audits');
+  assert.equal(parseAdminSectionTab('unknown'), 'verifications');
+  assert.equal(getAdminSectionTitle('audits'), 'System Metrics & Audit Trail');
+
+  const audits: AnnouncementAudit[] = [
+    {
+      id: 1,
+      announcement_id: 101,
+      previous_title: 'Midterm Room 201',
+      new_title: 'Midterm Room 305',
+      previous_content: 'Bring bluebook.',
+      new_content: 'Bring bluebook.',
+      editor_id: 12,
+      editor_name: 'Prof. Aki Hayakawa',
+      editor_role: 'faculty',
+      edited_at: '2026-11-20T09:00:00Z',
+    },
+    {
+      id: 2,
+      announcement_id: 102,
+      previous_title: 'Class Suspension',
+      new_title: 'Class Suspension',
+      previous_content: 'Afternoon classes only.',
+      new_content: 'All CDO campus classes suspended.',
+      editor_id: 5,
+      editor_name: 'Dr. Makima Reyes',
+      editor_role: 'dept_head',
+      edited_at: '2026-11-21T10:00:00Z',
+    },
+    {
+      id: 3,
+      announcement_id: 103,
+      previous_title: 'Old Portal Notice',
+      new_title: 'Updated Portal Maintenance',
+      previous_content: 'Maintenance at 10 PM.',
+      new_content: 'Maintenance moved to 11 PM.',
+      editor_id: 1,
+      editor_name: 'ICTO Admin',
+      editor_role: 'it_admin',
+      edited_at: '2026-11-22T11:00:00Z',
+    },
+  ];
+
+  // Unfiltered returns all
+  assert.equal(filterAnnouncementAudits(audits, {}).length, 3);
+
+  // Filter by editorRole
+  assert.deepEqual(
+    filterAnnouncementAudits(audits, { editorRole: 'faculty' }).map((a) => a.id),
+    [1]
+  );
+  assert.deepEqual(
+    filterAnnouncementAudits(audits, { editorRole: 'dept_head' }).map((a) => a.id),
+    [2]
+  );
+
+  // Filter by changeType
+  assert.deepEqual(
+    filterAnnouncementAudits(audits, { changeType: 'title' }).map((a) => a.id),
+    [1, 3]
+  );
+  assert.deepEqual(
+    filterAnnouncementAudits(audits, { changeType: 'content' }).map((a) => a.id),
+    [2, 3]
+  );
+
+  // Filter by search (post ID, editor name, content text)
+  assert.deepEqual(
+    filterAnnouncementAudits(audits, { search: '102' }).map((a) => a.id),
+    [2]
+  );
+  assert.deepEqual(
+    filterAnnouncementAudits(audits, { search: 'hayakawa' }).map((a) => a.id),
+    [1]
+  );
+
+  // Combined filters
+  assert.deepEqual(
+    filterAnnouncementAudits(audits, {
+      editorRole: 'it_admin',
+      changeType: 'title',
+      search: 'maintenance',
+    }).map((a) => a.id),
+    [3]
+  );
+  assert.equal(
+    filterAnnouncementAudits(audits, {
+      editorRole: 'faculty',
+      changeType: 'content',
+    }).length,
+    0
+  );
+});
+
 

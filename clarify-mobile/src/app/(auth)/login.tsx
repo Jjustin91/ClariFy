@@ -32,7 +32,6 @@ export default function MobileLoginScreen() {
     login,
     sessionExpiredMessage,
     dismissSessionExpiredMessage,
-    showToast,
   } = useAuth();
 
   const [institutionalId, setInstitutionalId] = useState('');
@@ -296,12 +295,7 @@ export default function MobileLoginScreen() {
             {/* Forgot Password Link Only */}
             <View style={styles.forgotRow}>
               <Pressable
-                onPress={() =>
-                  showToast(
-                    'Password recovery link dispatched via USTP ICTO Registrar portal.',
-                    'info'
-                  )
-                }
+                onPress={() => router.push('/(auth)/forgot-password' as never)}
                 accessibilityRole="button"
                 accessibilityLabel="Forgot Password"
                 style={styles.inlineLinkBtn}
