@@ -1069,7 +1069,8 @@ class ChannelAuthorizationTest extends TestCase
 
         // Feature assertions for /api/v1/auth/register
         $this->postJson('/api/v1/auth/register', [
-            'name' => 'Outside User',
+            'first_name' => 'Outside',
+            'last_name' => 'User',
             'institutional_id' => '2026000001',
             'email' => 'outside@gmail.com',
             'contact_number' => '09171234567',
@@ -1082,7 +1083,8 @@ class ChannelAuthorizationTest extends TestCase
           ->assertJsonPath('errors.email.0', 'Only @ustp.edu.ph email addresses can create an account.');
 
         $this->postJson('/api/v1/auth/register', [
-            'name' => 'Lookalike User',
+            'first_name' => 'Lookalike',
+            'last_name' => 'User',
             'institutional_id' => '2026000002',
             'email' => 'x@ustp.edu.ph.evil.com',
             'contact_number' => '09171234567',
@@ -1094,7 +1096,8 @@ class ChannelAuthorizationTest extends TestCase
           ->assertJsonValidationErrors(['email']);
 
         $this->postJson('/api/v1/auth/register', [
-            'name' => 'Subdomain User',
+            'first_name' => 'Subdomain',
+            'last_name' => 'User',
             'institutional_id' => '2026000003',
             'email' => 'x@mail.ustp.edu.ph',
             'contact_number' => '09171234567',
@@ -1105,10 +1108,41 @@ class ChannelAuthorizationTest extends TestCase
         ])->assertStatus(422)
           ->assertJsonValidationErrors(['email']);
 
+        // Missing or overlong first_name / last_name must return 422
+        \Illuminate\Support\Facades\RateLimiter::clear('register:127.0.0.1');
+        $this->postJson('/api/v1/auth/register', [
+            'first_name' => '   ',
+            'last_name' => '',
+            'institutional_id' => '2026000007',
+            'email' => 'missingnames@ustp.edu.ph',
+            'contact_number' => '09171234567',
+            'password' => 'password123',
+            'role' => 'student',
+            'department' => 'CITC',
+            'section' => 'IT3R2',
+        ])->assertStatus(422)
+          ->assertJsonValidationErrors(['first_name', 'last_name'])
+          ->assertJsonPath('errors.first_name.0', 'First name is required.')
+          ->assertJsonPath('errors.last_name.0', 'Last name is required.');
+
+        $this->postJson('/api/v1/auth/register', [
+            'first_name' => str_repeat('A', 76),
+            'last_name' => str_repeat('B', 76),
+            'institutional_id' => '2026000008',
+            'email' => 'longnames@ustp.edu.ph',
+            'contact_number' => '09171234567',
+            'password' => 'password123',
+            'role' => 'student',
+            'department' => 'CITC',
+            'section' => 'IT3R2',
+        ])->assertStatus(422)
+          ->assertJsonValidationErrors(['first_name', 'last_name']);
+
         // Missing or invalid mobile number must return 422
         \Illuminate\Support\Facades\RateLimiter::clear('register:127.0.0.1');
         $this->postJson('/api/v1/auth/register', [
-            'name' => 'No Phone Student',
+            'first_name' => 'No Phone',
+            'last_name' => 'Student',
             'institutional_id' => '2026000005',
             'email' => 'nophone@ustp.edu.ph',
             'password' => 'password123',
@@ -1119,7 +1153,8 @@ class ChannelAuthorizationTest extends TestCase
           ->assertJsonValidationErrors(['contact_number']);
 
         $this->postJson('/api/v1/auth/register', [
-            'name' => 'Bad Phone Student',
+            'first_name' => 'Bad Phone',
+            'last_name' => 'Student',
             'institutional_id' => '2026000006',
             'email' => 'badphone@ustp.edu.ph',
             'contact_number' => '12345',
@@ -1132,7 +1167,8 @@ class ChannelAuthorizationTest extends TestCase
 
         \Illuminate\Support\Facades\RateLimiter::clear('register:127.0.0.1');
         $res = $this->postJson('/api/v1/auth/register', [
-            'name' => 'Valid USTP Student',
+            'first_name' => '  Valid USTP  ',
+            'last_name' => '  Student  ',
             'institutional_id' => '2026000004',
             'email' => '  VALID.STUDENT@USTP.EDU.PH  ',
             'contact_number' => '0917 123 4567',
@@ -1142,6 +1178,9 @@ class ChannelAuthorizationTest extends TestCase
             'section' => 'IT3R2',
         ])->assertStatus(201);
 
+        $this->assertSame('Valid USTP', $res->json('data.first_name'));
+        $this->assertSame('Student', $res->json('data.last_name'));
+        $this->assertSame('Valid USTP Student', $res->json('data.name'));
         $this->assertSame('valid.student@ustp.edu.ph', $res->json('data.email'));
         $this->assertSame('+639171234567', $res->json('data.contact_number'));
     }

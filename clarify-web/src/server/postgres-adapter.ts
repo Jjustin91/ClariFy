@@ -234,6 +234,8 @@ async function ensurePostgresSchema(pool: Pool): Promise<void> {
         id BIGSERIAL PRIMARY KEY,
         institutional_id VARCHAR(32) UNIQUE NOT NULL,
         name VARCHAR(255) NOT NULL,
+        first_name VARCHAR(75) NULL,
+        last_name VARCHAR(75) NULL,
         email VARCHAR(255) UNIQUE NOT NULL,
         password VARCHAR(255) NOT NULL DEFAULT 'ustp2026',
         contact_number TEXT NULL,
@@ -250,6 +252,14 @@ async function ensurePostgresSchema(pool: Pool): Promise<void> {
 
     await client.query(`
       ALTER TABLE users ALTER COLUMN avatar_url TYPE TEXT;
+    `).catch(() => {});
+
+    await client.query(`
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS first_name VARCHAR(75) NULL;
+    `).catch(() => {});
+
+    await client.query(`
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS last_name VARCHAR(75) NULL;
     `).catch(() => {});
 
     await client.query(`
@@ -439,6 +449,8 @@ async function ensurePostgresSchema(pool: Pool): Promise<void> {
     const adminAcc = {
       institutional_id: '90001',
       name: 'Engr. Makima Cruz',
+      first_name: 'Engr. Makima',
+      last_name: 'Cruz',
       email: 'icto.admin@ustp.edu.ph',
       contact_number: '+63 917 900 0001',
       role: 'it_admin',
@@ -462,13 +474,15 @@ async function ensurePostgresSchema(pool: Pool): Promise<void> {
     let adminId: number;
     if (!existingAdmin.rowCount || existingAdmin.rowCount === 0) {
       const ins = await client.query(
-        `INSERT INTO users (institutional_id, name, email, password, contact_number, role, verification_status, verified_at)
-         VALUES ($1, $2, $3, 'ustp2026', $4, $5, $6, CURRENT_TIMESTAMP)
-         ON CONFLICT (institutional_id) DO UPDATE SET name = EXCLUDED.name, role = 'it_admin', verification_status = 'approved'
+        `INSERT INTO users (institutional_id, name, first_name, last_name, email, password, contact_number, role, verification_status, verified_at)
+         VALUES ($1, $2, $3, $4, $5, 'ustp2026', $6, $7, $8, CURRENT_TIMESTAMP)
+         ON CONFLICT (institutional_id) DO UPDATE SET name = EXCLUDED.name, first_name = EXCLUDED.first_name, last_name = EXCLUDED.last_name, role = 'it_admin', verification_status = 'approved'
          RETURNING id`,
         [
           adminAcc.institutional_id,
           adminAcc.name,
+          adminAcc.first_name,
+          adminAcc.last_name,
           adminAcc.email,
           adminAcc.contact_number,
           adminAcc.role,
@@ -641,6 +655,8 @@ function mapRowToUser(row: Record<string, unknown>): User {
     id: Number(row.id),
     institutional_id: String(row.institutional_id),
     name: String(row.name),
+    first_name: row.first_name ? String(row.first_name) : null,
+    last_name: row.last_name ? String(row.last_name) : null,
     email: String(row.email),
     contact_number: row.contact_number ? String(row.contact_number) : null,
     avatar_url: row.avatar_url ? String(row.avatar_url) : null,
@@ -1231,7 +1247,9 @@ export async function handlePostgresApiRequest(
 
     // PUBLIC REGISTRATION: POST /auth/register (Student & Faculty Sign Up)
     if (method === 'POST' && cleanPath === '/auth/register') {
-      const name = String(body.name || '').trim();
+      const firstName = String(body.first_name || '').trim();
+      const lastName = String(body.last_name || '').trim();
+      const name = `${firstName} ${lastName}`.trim();
       const institutionalId = String(body.institutional_id || '').trim();
       const email = String(body.email || '')
         .trim()
@@ -1244,8 +1262,15 @@ export async function handlePostgresApiRequest(
       const section = String(body.section || '').trim();
 
       const errors: Record<string, string[]> = {};
-      if (!name) {
-        errors.name = ['Your full name is required.'];
+      if (!firstName) {
+        errors.first_name = ['First name is required.'];
+      } else if (firstName.length > 75) {
+        errors.first_name = ['First name cannot exceed 75 characters.'];
+      }
+      if (!lastName) {
+        errors.last_name = ['Last name is required.'];
+      } else if (lastName.length > 75) {
+        errors.last_name = ['Last name cannot exceed 75 characters.'];
       }
       if (!institutionalId) {
         errors.institutional_id = ['Your Institutional ID number is required.'];
@@ -1315,10 +1340,10 @@ export async function handlePostgresApiRequest(
       }
 
       const insUser = await pool.query(
-        `INSERT INTO users (institutional_id, name, email, password, role, verification_status, verified_at, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, 'pending', NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        `INSERT INTO users (institutional_id, name, first_name, last_name, email, password, role, verification_status, verified_at, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending', NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
          RETURNING id`,
-        [institutionalId, name, email, password, role]
+        [institutionalId, name, firstName, lastName, email, password, role]
       );
       const newUid = Number(insUser.rows[0].id);
 

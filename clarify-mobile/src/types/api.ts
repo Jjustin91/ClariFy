@@ -17,6 +17,8 @@ export interface User {
   id: number;
   institutional_id: string;
   name: string;
+  first_name?: string | null;
+  last_name?: string | null;
   email: string;
   contact_number?: string | null;
   avatar_url?: string | null;

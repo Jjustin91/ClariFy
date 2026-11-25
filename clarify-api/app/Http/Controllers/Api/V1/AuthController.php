@@ -51,7 +51,8 @@ class AuthController
         }
 
         $validated = $request->validate([
-            'name' => ['required', 'string', 'max:150'],
+            'first_name' => ['required', 'string', 'max:75'],
+            'last_name' => ['required', 'string', 'max:75'],
             'institutional_id' => ['required', 'string', 'max:32', 'unique:users,institutional_id'],
             'email' => [
                 'required',
@@ -79,6 +80,8 @@ class AuthController
             'department' => ['required', 'string', 'max:32'],
             'section' => ['required', 'string', 'max:64'],
         ], [
+            'first_name.required' => 'First name is required.',
+            'last_name.required' => 'Last name is required.',
             'institutional_id.unique' => 'This Institutional ID is already registered.',
             'email.unique' => 'This institutional email address is already registered.',
             'contact_number.required' => 'Mobile number is required for urgent campus SMS alerts.',
@@ -87,10 +90,15 @@ class AuthController
         ]);
 
         $normalizedPhone = PhoneNormalizer::normalize((string) $validated['contact_number']);
+        $firstName = trim($validated['first_name']);
+        $lastName = trim($validated['last_name']);
+        $fullName = trim("{$firstName} {$lastName}");
 
         $user = new User([
             'institutional_id' => trim($validated['institutional_id']),
-            'name' => trim($validated['name']),
+            'name' => $fullName,
+            'first_name' => $firstName,
+            'last_name' => $lastName,
             'email' => UstpEmailValidator::normalize($validated['email']),
             'contact_number' => $normalizedPhone,
             'password' => $validated['password'],

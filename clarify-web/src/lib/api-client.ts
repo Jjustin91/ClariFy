@@ -296,7 +296,8 @@ async function requestLaravel<T>(
 // ============================================================================
 
 export async function registerApi(payload: {
-  name: string;
+  first_name: string;
+  last_name: string;
   institutional_id: string;
   email: string;
   contact_number: string;
@@ -310,6 +311,8 @@ export async function registerApi(payload: {
     method: 'POST',
     body: JSON.stringify({
       ...payload,
+      first_name: payload.first_name.trim(),
+      last_name: payload.last_name.trim(),
       password_confirmation: payload.password_confirmation || payload.password,
     }),
   });

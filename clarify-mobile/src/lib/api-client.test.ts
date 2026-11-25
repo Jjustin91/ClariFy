@@ -7,6 +7,7 @@ import {
   mapHttpErrorToApiError,
   onSessionExpired,
   parseRetryAfterSeconds,
+  registerApi,
   requestPasswordOtpApi,
   resetPasswordApi,
   updateProfileApi,
@@ -423,6 +424,71 @@ test('password reset OTP API helpers send snake_case JSON without Bearer auth an
     assert.equal(getCachedBearerToken(), 'existing-user-token');
   } finally {
     unsub();
+    globalThis.fetch = originalFetch;
+    await clearSecureToken();
+  }
+});
+
+test('registerApi posts trimmed first_name and last_name without Bearer auth', async () => {
+  const originalFetch = globalThis.fetch;
+  const capturedRequests: {
+    url: string;
+    method?: string;
+    headers: Record<string, string>;
+    body: Record<string, unknown>;
+  }[] = [];
+
+  try {
+    await setSecureToken('existing-user-token');
+
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      capturedRequests.push({
+        url: String(input),
+        method: init?.method,
+        headers: (init?.headers || {}) as Record<string, string>,
+        body: JSON.parse(String(init?.body || '{}')) as Record<string, unknown>,
+      });
+      return createMockFetchResponse({
+        status: 201,
+        body: {
+          message: 'Account registered successfully!',
+          data: {
+            id: 42,
+            institutional_id: '2026123456',
+            name: 'Juan Dela Cruz',
+            first_name: 'Juan',
+            last_name: 'Dela Cruz',
+            email: 'juan@ustp.edu.ph',
+            role: 'student',
+            verification_status: 'pending',
+          },
+        },
+      });
+    }) as typeof fetch;
+
+    const res = await registerApi({
+      first_name: '  Juan  ',
+      last_name: '  Dela Cruz  ',
+      institutional_id: '2026123456',
+      email: 'juan@ustp.edu.ph',
+      contact_number: '+639171234567',
+      password: 'Password123',
+      role: 'student',
+      department: 'CITC',
+      section: 'IT3R2',
+    });
+
+    assert.equal(res.data.name, 'Juan Dela Cruz');
+    assert.equal(res.data.first_name, 'Juan');
+    assert.equal(res.data.last_name, 'Dela Cruz');
+    assert.equal(capturedRequests.length, 1);
+    const req = capturedRequests[0];
+    assert.equal(req.method, 'POST');
+    assert.equal(req.headers.Authorization, undefined);
+    assert.equal(req.body.first_name, 'Juan');
+    assert.equal(req.body.last_name, 'Dela Cruz');
+    assert.equal('name' in req.body, false);
+  } finally {
     globalThis.fetch = originalFetch;
     await clearSecureToken();
   }

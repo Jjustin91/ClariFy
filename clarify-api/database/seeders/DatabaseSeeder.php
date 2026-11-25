@@ -20,6 +20,8 @@ class DatabaseSeeder extends Seeder
             ['institutional_id' => '90001'],
             [
                 'name' => 'Engr. Makima Cruz',
+                'first_name' => 'Engr. Makima',
+                'last_name' => 'Cruz',
                 'email' => 'icto.admin@ustp.edu.ph',
                 'password' => 'ustp2026',
                 'contact_number' => '+63 917 900 0001',

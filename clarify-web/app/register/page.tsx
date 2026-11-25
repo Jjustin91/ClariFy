@@ -28,7 +28,8 @@ export default function RegisterPage() {
   const { showToast } = useClarify();
 
   const [role, setRole] = useState<'student' | 'faculty'>('student');
-  const [name, setName] = useState('');
+  const [firstName, setFirstName] = useState('');
+  const [lastName, setLastName] = useState('');
   const [institutionalId, setInstitutionalId] = useState('');
   const [email, setEmail] = useState('');
   const [contactNumber, setContactNumber] = useState('');
@@ -98,6 +99,19 @@ export default function RegisterPage() {
     setGeneralError(null);
 
     const clientErrors: Record<string, string[]> = {};
+    const trimmedFirstName = firstName.trim();
+    const trimmedLastName = lastName.trim();
+    if (!trimmedFirstName) {
+      clientErrors.first_name = ['First name is required.'];
+    } else if (trimmedFirstName.length > 75) {
+      clientErrors.first_name = ['First name cannot exceed 75 characters.'];
+    }
+    if (!trimmedLastName) {
+      clientErrors.last_name = ['Last name is required.'];
+    } else if (trimmedLastName.length > 75) {
+      clientErrors.last_name = ['Last name cannot exceed 75 characters.'];
+    }
+
     const normalizedEmail = normalizeUstpEmail(email);
     const emailDomainErr = validateUstpEmail(normalizedEmail);
     if (emailDomainErr) {
@@ -129,7 +143,8 @@ export default function RegisterPage() {
     setIsSubmitting(true);
     try {
       const res = await registerApi({
-        name,
+        first_name: trimmedFirstName,
+        last_name: trimmedLastName,
         institutional_id: institutionalId,
         email: normalizedEmail,
         contact_number: normalizedPhone!,
@@ -158,7 +173,8 @@ export default function RegisterPage() {
     }
   };
 
-  const nameError = getFieldValidationError(fieldErrors, 'name');
+  const firstNameError = getFieldValidationError(fieldErrors, 'first_name');
+  const lastNameError = getFieldValidationError(fieldErrors, 'last_name');
   const idError = getFieldValidationError(fieldErrors, 'institutional_id');
   const emailError = getFieldValidationError(fieldErrors, 'email');
   const contactNumberError = getFieldValidationError(
@@ -309,7 +325,8 @@ export default function RegisterPage() {
                   type="button"
                   onClick={() => {
                     setRegisteredUser(null);
-                    setName('');
+                    setFirstName('');
+                    setLastName('');
                     setInstitutionalId('');
                     setEmail('');
                     setContactNumber('');
@@ -377,34 +394,83 @@ export default function RegisterPage() {
                 </div>
               </div>
 
-              {/* Full Name */}
-              <div>
-                <label
-                  htmlFor="reg-name"
-                  className="block text-xs font-bold text-ustp-text mb-1"
-                >
-                  Full Name
-                </label>
-                <input
-                  id="reg-name"
-                  type="text"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder={
-                    role === 'faculty'
-                      ? 'e.g., Prof. Aki Hayakawa'
-                      : 'e.g., Kobeni Higashiyama'
-                  }
-                  className="w-full px-3 py-2 text-sm bg-white text-ustp-text border border-slate-300 rounded focus:outline-none focus:border-ustp-navy"
-                />
-                {nameError && (
-                  <p
-                    className="text-xs font-bold text-red-700 mt-1"
-                    role="alert"
+              {/* First Name & Last Name */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label
+                    htmlFor="reg-first-name"
+                    className="block text-xs font-bold text-ustp-text mb-1"
                   >
-                    {nameError}
-                  </p>
-                )}
+                    First Name
+                  </label>
+                  <input
+                    id="reg-first-name"
+                    type="text"
+                    autoComplete="given-name"
+                    value={firstName}
+                    onChange={(e) => {
+                      setFirstName(e.target.value);
+                      if (fieldErrors.first_name) {
+                        setFieldErrors((prev) => {
+                          const next = { ...prev };
+                          delete next.first_name;
+                          return next;
+                        });
+                      }
+                    }}
+                    placeholder={
+                      role === 'faculty' ? 'e.g., Aki' : 'e.g., Kobeni'
+                    }
+                    className="w-full px-3 py-2 text-sm bg-white text-ustp-text border border-slate-300 rounded focus:outline-none focus:border-ustp-navy"
+                  />
+                  {firstNameError && (
+                    <p
+                      className="text-xs font-bold text-red-700 mt-1"
+                      role="alert"
+                    >
+                      {firstNameError}
+                    </p>
+                  )}
+                </div>
+
+                <div>
+                  <label
+                    htmlFor="reg-last-name"
+                    className="block text-xs font-bold text-ustp-text mb-1"
+                  >
+                    Last Name
+                  </label>
+                  <input
+                    id="reg-last-name"
+                    type="text"
+                    autoComplete="family-name"
+                    value={lastName}
+                    onChange={(e) => {
+                      setLastName(e.target.value);
+                      if (fieldErrors.last_name) {
+                        setFieldErrors((prev) => {
+                          const next = { ...prev };
+                          delete next.last_name;
+                          return next;
+                        });
+                      }
+                    }}
+                    placeholder={
+                      role === 'faculty'
+                        ? 'e.g., Hayakawa'
+                        : 'e.g., Higashiyama'
+                    }
+                    className="w-full px-3 py-2 text-sm bg-white text-ustp-text border border-slate-300 rounded focus:outline-none focus:border-ustp-navy"
+                  />
+                  {lastNameError && (
+                    <p
+                      className="text-xs font-bold text-red-700 mt-1"
+                      role="alert"
+                    >
+                      {lastNameError}
+                    </p>
+                  )}
+                </div>
               </div>
 
               {/* Institutional ID & Email */}

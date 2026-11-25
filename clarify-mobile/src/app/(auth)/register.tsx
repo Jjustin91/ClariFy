@@ -40,7 +40,8 @@ export default function MobileRegisterScreen() {
   const { showToast } = useAuth();
 
   const [role, setRole] = useState<'student' | 'faculty'>('student');
-  const [name, setName] = useState('');
+  const [firstName, setFirstName] = useState('');
+  const [lastName, setLastName] = useState('');
   const [institutionalId, setInstitutionalId] = useState('');
   const [email, setEmail] = useState('');
   const [contactNumber, setContactNumber] = useState('');
@@ -120,16 +121,23 @@ export default function MobileRegisterScreen() {
     errors: Record<string, string[]>;
   } => {
     const errors: Record<string, string[]> = {};
-    const trimmedName = name.trim();
+    const trimmedFirstName = firstName.trim();
+    const trimmedLastName = lastName.trim();
     const trimmedId = institutionalId.trim();
     const normalizedEmail = normalizeUstpEmail(email);
     const trimmedSection = section.trim();
     const trimmedContact = contactNumber.trim();
 
-    if (!trimmedName) {
-      errors.name = ['Full name is required.'];
-    } else if (trimmedName.length > 150) {
-      errors.name = ['Full name cannot exceed 150 characters.'];
+    if (!trimmedFirstName) {
+      errors.first_name = ['First name is required.'];
+    } else if (trimmedFirstName.length > 75) {
+      errors.first_name = ['First name cannot exceed 75 characters.'];
+    }
+
+    if (!trimmedLastName) {
+      errors.last_name = ['Last name is required.'];
+    } else if (trimmedLastName.length > 75) {
+      errors.last_name = ['Last name cannot exceed 75 characters.'];
     }
 
     if (!trimmedId) {
@@ -206,7 +214,8 @@ export default function MobileRegisterScreen() {
 
     try {
       const res = await registerApi({
-        name: name.trim(),
+        first_name: firstName.trim(),
+        last_name: lastName.trim(),
         institutional_id: institutionalId.trim(),
         email: validation.normalizedEmail,
         contact_number: validation.normalizedPhone,
@@ -252,7 +261,8 @@ export default function MobileRegisterScreen() {
 
   const handleResetForAnother = () => {
     setRegisteredUser(null);
-    setName('');
+    setFirstName('');
+    setLastName('');
     setInstitutionalId('');
     setEmail('');
     setContactNumber('');
@@ -262,7 +272,8 @@ export default function MobileRegisterScreen() {
     setGeneralError(null);
   };
 
-  const nameError = getFieldValidationError(fieldErrors, 'name');
+  const firstNameError = getFieldValidationError(fieldErrors, 'first_name');
+  const lastNameError = getFieldValidationError(fieldErrors, 'last_name');
   const idError = getFieldValidationError(fieldErrors, 'institutional_id');
   const emailError = getFieldValidationError(fieldErrors, 'email');
   const contactError = getFieldValidationError(fieldErrors, 'contact_number');
@@ -527,32 +538,62 @@ export default function MobileRegisterScreen() {
                   )}
                 </View>
 
-                {/* Full Name */}
+                {/* First Name */}
                 <View style={styles.fieldGroup}>
-                  <Text style={styles.fieldLabel}>Full Name</Text>
+                  <Text style={styles.fieldLabel}>First Name</Text>
                   <TextInput
-                    value={name}
+                    value={firstName}
                     onChangeText={(val) => {
-                      setName(val);
-                      clearFieldError('name');
+                      setFirstName(val);
+                      clearFieldError('first_name');
                     }}
                     placeholder={
-                      role === 'faculty'
-                        ? 'e.g., Prof. Aki Hayakawa'
-                        : 'e.g., Juan Dela Cruz'
+                      role === 'faculty' ? 'e.g., Aki' : 'e.g., Juan'
                     }
                     placeholderTextColor={colors.placeholder}
                     autoCapitalize="words"
+                    autoComplete="given-name"
+                    textContentType="givenName"
                     editable={!isSubmitting}
-                    accessibilityLabel="Full Name"
+                    accessibilityLabel="First Name"
                     style={[
                       styles.textInput,
-                      nameError ? styles.inputError : null,
+                      firstNameError ? styles.inputError : null,
                     ]}
                   />
-                  {nameError && (
+                  {firstNameError && (
                     <Text accessibilityRole="alert" style={styles.fieldError}>
-                      {nameError}
+                      {firstNameError}
+                    </Text>
+                  )}
+                </View>
+
+                {/* Last Name */}
+                <View style={styles.fieldGroup}>
+                  <Text style={styles.fieldLabel}>Last Name</Text>
+                  <TextInput
+                    value={lastName}
+                    onChangeText={(val) => {
+                      setLastName(val);
+                      clearFieldError('last_name');
+                    }}
+                    placeholder={
+                      role === 'faculty' ? 'e.g., Hayakawa' : 'e.g., Dela Cruz'
+                    }
+                    placeholderTextColor={colors.placeholder}
+                    autoCapitalize="words"
+                    autoComplete="family-name"
+                    textContentType="familyName"
+                    editable={!isSubmitting}
+                    accessibilityLabel="Last Name"
+                    style={[
+                      styles.textInput,
+                      lastNameError ? styles.inputError : null,
+                    ]}
+                  />
+                  {lastNameError && (
+                    <Text accessibilityRole="alert" style={styles.fieldError}>
+                      {lastNameError}
                     </Text>
                   )}
                 </View>

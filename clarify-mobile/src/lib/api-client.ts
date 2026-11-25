@@ -332,7 +332,8 @@ export async function apiClient<T>(
 // ============================================================================
 
 export async function registerApi(payload: {
-  name: string;
+  first_name: string;
+  last_name: string;
   institutional_id: string;
   email: string;
   contact_number?: string;
@@ -342,13 +343,15 @@ export async function registerApi(payload: {
   department: string;
   section: string;
 }): Promise<SingleResourceResponse<User>> {
-  const { contact_number, ...rest } = payload;
+  const { contact_number, first_name, last_name, ...rest } = payload;
   const trimmedContact = contact_number?.trim();
   return apiClient<SingleResourceResponse<User>>('/auth/register', {
     method: 'POST',
     skipAuth: true,
     body: JSON.stringify({
       ...rest,
+      first_name: first_name.trim(),
+      last_name: last_name.trim(),
       ...(trimmedContact ? { contact_number: trimmedContact } : {}),
       password_confirmation: payload.password_confirmation || payload.password,
     }),
