@@ -325,7 +325,7 @@ class ChannelChatController
             'nullable',
             'file',
             'max:10240',
-            'mimes:' . implode(',', self::ALLOWED_ATTACHMENT_EXTENSIONS),
+            'mimes:' . implode(',', array_merge(self::ALLOWED_ATTACHMENT_EXTENSIONS, ['mp4', 'mp4a'])),
             function (string $attribute, mixed $value, \Closure $fail): void {
                 if (! $value instanceof UploadedFile) {
                     return;
