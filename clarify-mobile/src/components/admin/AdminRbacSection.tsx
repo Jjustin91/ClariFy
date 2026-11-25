@@ -4,7 +4,6 @@ import {
   ActivityIndicator,
   Modal,
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -12,6 +11,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { FilterPopover } from '@/components/FilterPopover';
 import {
   EmptyState,
   ErrorBanner,
@@ -127,10 +127,8 @@ export function AdminRbacSection({
     return <ErrorBanner error={error} onRetry={onRetry} />;
   }
 
-  const hasActiveRbacFilters =
-    rbacSearch.trim() !== '' ||
-    rbacRoleFilter !== 'all' ||
-    rbacDeptFilter !== 'ALL';
+  const rbacFilterCount =
+    (rbacRoleFilter !== 'all' ? 1 : 0) + (rbacDeptFilter !== 'ALL' ? 1 : 0);
 
   const openEditor = (targetUser: User) => {
     const currentDept =
@@ -212,7 +210,7 @@ export function AdminRbacSection({
           </Text>
         </View>
 
-        {/* Search & Filter Tags */}
+        {/* Search & Single Floating Filter Button */}
         <View style={adminSharedStyles.filterPanel}>
           <View style={adminSharedStyles.searchAndResetRow}>
             <View style={adminSharedStyles.searchWrap}>
@@ -225,7 +223,7 @@ export function AdminRbacSection({
               <TextInput
                 value={rbacSearch}
                 onChangeText={setRbacSearch}
-                placeholder="Search approved accounts by name, ID number, email, section, or role..."
+                placeholder="Search approved accounts, ID, email..."
                 placeholderTextColor={colors.placeholder}
                 accessibilityLabel="Search RBAC directory"
                 style={adminSharedStyles.searchInput}
@@ -242,123 +240,59 @@ export function AdminRbacSection({
               )}
             </View>
 
-            {hasActiveRbacFilters && (
-              <Pressable
-                onPress={() => {
-                  setRbacSearch('');
-                  setRbacRoleFilter('all');
-                  setRbacDeptFilter('ALL');
-                }}
-                accessibilityRole="button"
-                accessibilityLabel="Reset Filters"
-                style={({ pressed }) => [
-                  adminSharedStyles.resetBtn,
-                  pressed && adminSharedStyles.pressed,
-                ]}
-              >
-                <Feather
-                  name="rotate-ccw"
-                  size={13}
-                  color={colors.mutedSlate}
-                />
-                <Text style={adminSharedStyles.resetBtnText}>
-                  Reset Filters
-                </Text>
-              </Pressable>
-            )}
-          </View>
-
-          {/* Role Filter Chips */}
-          <View style={adminSharedStyles.filterGroup}>
-            <Text style={adminSharedStyles.filterGroupLabel}>Role:</Text>
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={adminSharedStyles.chipsScrollRow}
-            >
-              {(
-                [
-                  { key: 'all', label: `All (${allUsers.length})` },
-                  {
-                    key: 'student',
-                    label: `Student (${resolvedRoleCounts.student})`,
-                  },
-                  {
-                    key: 'faculty',
-                    label: `Faculty (${resolvedRoleCounts.faculty})`,
-                  },
-                  {
-                    key: 'dept_head',
-                    label: `Dept Head (${resolvedRoleCounts.dept_head})`,
-                  },
-                  {
-                    key: 'it_admin',
-                    label: `IT Admin (${resolvedRoleCounts.it_admin})`,
-                  },
-                ] as const
-              ).map((item) => {
-                const active = rbacRoleFilter === item.key;
-                return (
-                  <Pressable
-                    key={item.key}
-                    onPress={() => setRbacRoleFilter(item.key)}
-                    accessibilityRole="button"
-                    accessibilityState={{ selected: active }}
-                    accessibilityLabel={item.label}
-                    style={[
-                      adminSharedStyles.filterChip,
-                      active && adminSharedStyles.filterChipNavyActive,
-                    ]}
-                  >
-                    <Text
-                      style={[
-                        adminSharedStyles.filterChipText,
-                        active && adminSharedStyles.filterChipTextNavyActive,
-                      ]}
-                    >
-                      {item.label}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </ScrollView>
-          </View>
-
-          {/* Department Filter Chips */}
-          <View style={adminSharedStyles.filterGroup}>
-            <Text style={adminSharedStyles.filterGroupLabel}>Dept:</Text>
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={adminSharedStyles.chipsScrollRow}
-            >
-              {(['ALL', ...ADMIN_DEPARTMENT_TAGS] as const).map((dept) => {
-                const active = rbacDeptFilter === dept;
-                const label = dept === 'ALL' ? 'All Depts' : dept;
-                return (
-                  <Pressable
-                    key={dept}
-                    onPress={() => setRbacDeptFilter(dept)}
-                    accessibilityRole="button"
-                    accessibilityState={{ selected: active }}
-                    accessibilityLabel={`Department filter ${label}`}
-                    style={[
-                      adminSharedStyles.filterChip,
-                      active && adminSharedStyles.filterChipBlueActive,
-                    ]}
-                  >
-                    <Text
-                      style={[
-                        adminSharedStyles.filterChipText,
-                        active && adminSharedStyles.filterChipTextBlueActive,
-                      ]}
-                    >
-                      {label}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </ScrollView>
+            <FilterPopover
+              title="Filter RBAC Directory"
+              accessibilityLabel="Filter RBAC directory"
+              compact
+              activeCount={rbacFilterCount}
+              onReset={() => {
+                setRbacRoleFilter('all');
+                setRbacDeptFilter('ALL');
+              }}
+              sections={[
+                {
+                  kind: 'single',
+                  id: 'mobile-rbac-role',
+                  label: 'Role',
+                  value: rbacRoleFilter,
+                  onChange: (val) =>
+                    setRbacRoleFilter(val as 'all' | UserRole),
+                  options: [
+                    { value: 'all', label: `All (${allUsers.length})` },
+                    {
+                      value: 'student',
+                      label: `Student (${resolvedRoleCounts.student})`,
+                    },
+                    {
+                      value: 'faculty',
+                      label: `Faculty (${resolvedRoleCounts.faculty})`,
+                    },
+                    {
+                      value: 'dept_head',
+                      label: `Dept Head (${resolvedRoleCounts.dept_head})`,
+                    },
+                    {
+                      value: 'it_admin',
+                      label: `IT Admin (${resolvedRoleCounts.it_admin})`,
+                    },
+                  ],
+                },
+                {
+                  kind: 'single',
+                  id: 'mobile-rbac-dept',
+                  label: 'Department',
+                  value: rbacDeptFilter,
+                  activeTone: 'blue',
+                  onChange: (val) => setRbacDeptFilter(val),
+                  options: (['ALL', ...ADMIN_DEPARTMENT_TAGS] as const).map(
+                    (dept) => ({
+                      value: dept,
+                      label: dept === 'ALL' ? 'All Depts' : dept,
+                    })
+                  ),
+                },
+              ]}
+            />
           </View>
         </View>
 

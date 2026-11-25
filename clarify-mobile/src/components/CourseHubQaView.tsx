@@ -65,6 +65,7 @@ import {
   typography,
 } from '../theme';
 import type { ApiError, QaThread } from '../types/api';
+import { FilterPopover } from './FilterPopover';
 import { EmptyState, ErrorBanner, SkeletonCards } from './StateViews';
 
 function formatShortThreadTime(iso: string): string {
@@ -587,119 +588,60 @@ export function CourseHubQaView({
         )}
       </View>
 
-      {/* Filter Bar + Status Legend */}
+      {/* Single Filter Button + Status Legend */}
       <View style={styles.filterCard}>
         <View style={styles.filterChipsRow}>
-          <Pressable
-            onPress={() => setStatusFilter('all')}
-            accessibilityRole="button"
-            accessibilityState={{ selected: statusFilter === 'all' }}
-            style={({ pressed }) => [
-              styles.filterChip,
-              statusFilter === 'all' && styles.filterChipActive,
-              pressed && styles.pressed,
+          <FilterPopover
+            title="Filter Q&A Threads"
+            accessibilityLabel="Filter Q and A threads"
+            align="left"
+            compact
+            activeCount={
+              (statusFilter !== 'all' ? 1 : 0) + (unreadOnly ? 1 : 0)
+            }
+            onReset={() => {
+              setStatusFilter('all');
+              setUnreadOnly(false);
+            }}
+            sections={[
+              {
+                kind: 'single',
+                id: 'mobile-qa-status',
+                label: 'Resolution Status',
+                value: statusFilter,
+                onChange: (val) =>
+                  setStatusFilter(val as QaThreadStatusFilter),
+                options: [
+                  { value: 'all', label: `All (${filterCounts.all})` },
+                  {
+                    value: 'unresolved',
+                    label: `Unresolved (${filterCounts.unresolved})`,
+                    badge:
+                      canResolve && filterCounts.unresolved > 0
+                        ? 'Needs Triage'
+                        : undefined,
+                    highlight:
+                      canResolve && filterCounts.unresolved > 0
+                        ? 'amber'
+                        : undefined,
+                  },
+                  {
+                    value: 'resolved',
+                    label: `Resolved (${filterCounts.resolved})`,
+                  },
+                ],
+              },
+              {
+                kind: 'toggle',
+                id: 'mobile-qa-unread',
+                label: 'Activity',
+                checked: unreadOnly,
+                onToggle: () => setUnreadOnly((prev) => !prev),
+                optionLabel: `Unread Only (${filterCounts.unread})`,
+                hasAlert: filterCounts.unread > 0,
+              },
             ]}
-          >
-            <Text
-              style={[
-                styles.filterChipText,
-                statusFilter === 'all' && styles.filterChipTextActive,
-              ]}
-            >
-              All ({filterCounts.all})
-            </Text>
-          </Pressable>
-
-          <Pressable
-            onPress={() => setStatusFilter('unresolved')}
-            accessibilityRole="button"
-            accessibilityState={{ selected: statusFilter === 'unresolved' }}
-            style={({ pressed }) => [
-              styles.filterChip,
-              statusFilter === 'unresolved'
-                ? styles.filterChipActive
-                : canResolve && filterCounts.unresolved > 0
-                  ? styles.filterChipTriage
-                  : null,
-              pressed && styles.pressed,
-            ]}
-          >
-            <Text
-              style={[
-                styles.filterChipText,
-                statusFilter === 'unresolved'
-                  ? styles.filterChipTextActiveGold
-                  : canResolve && filterCounts.unresolved > 0
-                    ? styles.filterChipTextTriage
-                    : null,
-              ]}
-            >
-              Unresolved ({filterCounts.unresolved})
-            </Text>
-            {canResolve && filterCounts.unresolved > 0 && (
-              <View style={styles.triagePill}>
-                <Text style={styles.triagePillText}>Needs Triage</Text>
-              </View>
-            )}
-          </Pressable>
-
-          <Pressable
-            onPress={() => setStatusFilter('resolved')}
-            accessibilityRole="button"
-            accessibilityState={{ selected: statusFilter === 'resolved' }}
-            style={({ pressed }) => [
-              styles.filterChip,
-              statusFilter === 'resolved' && styles.filterChipActive,
-              pressed && styles.pressed,
-            ]}
-          >
-            <Text
-              style={[
-                styles.filterChipText,
-                statusFilter === 'resolved' && styles.filterChipTextActive,
-              ]}
-            >
-              Resolved ({filterCounts.resolved})
-            </Text>
-          </Pressable>
-
-          <Pressable
-            onPress={() => setUnreadOnly((prev) => !prev)}
-            accessibilityRole="button"
-            accessibilityState={{ selected: unreadOnly }}
-            style={({ pressed }) => [
-              styles.filterChip,
-              unreadOnly
-                ? styles.filterChipUnreadActive
-                : filterCounts.unread > 0
-                  ? styles.filterChipUnreadAvailable
-                  : null,
-              pressed && styles.pressed,
-            ]}
-          >
-            <View
-              style={[
-                styles.unreadDot,
-                unreadOnly
-                  ? styles.unreadDotActive
-                  : filterCounts.unread > 0
-                    ? styles.unreadDotAlert
-                    : styles.unreadDotMuted,
-              ]}
-            />
-            <Text
-              style={[
-                styles.filterChipText,
-                unreadOnly
-                  ? styles.filterChipTextActive
-                  : filterCounts.unread > 0
-                    ? styles.filterChipTextAlert
-                    : null,
-              ]}
-            >
-              Unread ({filterCounts.unread})
-            </Text>
-          </Pressable>
+          />
         </View>
 
         <View style={styles.legendRow}>

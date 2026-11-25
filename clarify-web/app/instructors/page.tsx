@@ -4,6 +4,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Search } from 'lucide-react';
 import { AppShell } from '@/src/components/layout/AppShell';
+import { FilterPopover } from '@/src/components/ui/FilterPopover';
 import {
   EmptyState,
   ErrorBanner,
@@ -105,12 +106,15 @@ export default function InstructorsPage() {
     return null;
   }
 
+  const activeFilterCount =
+    (department !== 'ALL' ? 1 : 0) + (sortBy !== 'name' ? 1 : 0);
+
   return (
     <AppShell title="View Instructors">
       <div className="flex-1 flex flex-col p-4 sm:p-6 lg:p-8 max-w-6xl w-full mx-auto space-y-5 sm:space-y-6">
-        {/* Top Bar matching Wireframes Pages 3 & 6 */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4">
-          <div className="relative w-full sm:max-w-xs">
+        {/* Top Bar: Search Input + Single Floating Filter Button */}
+        <div className="flex items-center justify-between gap-3">
+          <div className="relative flex-1 sm:max-w-sm">
             <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-2.5" />
             <input
               type="search"
@@ -121,58 +125,54 @@ export default function InstructorsPage() {
               }}
               placeholder="Search....."
               aria-label="Search verified instructors by name, course, or specialization"
-              className="w-full pl-9 pr-4 py-2 text-xs sm:text-sm bg-white border border-slate-300 rounded-xl text-ustp-text placeholder:text-slate-400 focus:outline-none focus:border-ustp-navy"
+              className="w-full pl-9 pr-4 py-2 text-xs sm:text-sm bg-white border border-slate-300 rounded-xl text-ustp-text placeholder:text-slate-400 focus:outline-none focus:border-ustp-navy shadow-2xs"
             />
           </div>
 
-          <div className="flex items-center gap-3 self-end sm:self-auto">
-            <label
-              htmlFor="instructor-sort-select"
-              className="text-xs font-bold text-ustp-text underline"
-            >
-              Sort by...
-            </label>
-            <select
-              id="instructor-sort-select"
-              value={sortBy}
-              onChange={(e) => {
-                setSortBy(e.target.value as 'name' | 'department');
-                setPage(1);
-              }}
-              className="text-xs font-semibold text-ustp-text bg-white border border-slate-300 rounded-md px-2.5 py-1.5 focus:outline-none focus:border-ustp-navy"
-            >
-              <option value="name">Name (A–Z)</option>
-              <option value="department">Department (CITC / CEA / COT / CSM)</option>
-            </select>
-          </div>
-        </div>
-
-        {/* Department Filter Pills */}
-        <div
-          className="flex items-center gap-1.5 flex-wrap"
-          role="group"
-          aria-label="Filter instructors by department"
-        >
-          {DEPARTMENTS.map((dept) => {
-            const active = department === dept;
-            return (
-              <button
-                key={dept}
-                type="button"
-                onClick={() => {
-                  setDepartment(dept);
+          <FilterPopover
+            title="Filter & Sort Faculty"
+            ariaLabel="Filter and sort verified instructors"
+            activeCount={activeFilterCount}
+            onReset={() => {
+              setDepartment('ALL');
+              setSortBy('name');
+              setPage(1);
+            }}
+            sections={[
+              {
+                kind: 'single',
+                id: 'instructor-department',
+                label: 'College / Department',
+                value: department,
+                onChange: (val) => {
+                  setDepartment(val);
                   setPage(1);
-                }}
-                className={`px-3 py-1 rounded-md text-xs font-bold border transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                  active
-                    ? 'bg-ustp-navy text-ustp-gold border-ustp-navy'
-                    : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'
-                }`}
-              >
-                {dept === 'ALL' ? 'All Colleges / Depts' : dept}
-              </button>
-            );
-          })}
+                },
+                options: DEPARTMENTS.map((dept) => ({
+                  value: dept,
+                  label: dept === 'ALL' ? 'All Colleges / Depts' : dept,
+                })),
+              },
+              {
+                kind: 'single',
+                id: 'instructor-sort',
+                label: 'Sort by',
+                value: sortBy,
+                activeTone: 'blue',
+                onChange: (val) => {
+                  setSortBy(val as 'name' | 'department');
+                  setPage(1);
+                },
+                options: [
+                  { value: 'name', label: 'Name (A–Z)' },
+                  {
+                    value: 'department',
+                    label: 'Department (CITC / CEA / COT / CSM)',
+                  },
+                ],
+              },
+            ]}
+          />
         </div>
 
         {/* Selected Instructor Consultation Details Bar */}

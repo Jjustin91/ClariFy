@@ -16,7 +16,6 @@ import {
   Database,
   History,
   RefreshCw,
-  RotateCcw,
   Search,
   ShieldCheck,
   UserCheck,
@@ -25,6 +24,7 @@ import {
   XCircle,
 } from 'lucide-react';
 import { AppShell } from '@/src/components/layout/AppShell';
+import { FilterPopover } from '@/src/components/ui/FilterPopover';
 import {
   EmptyState,
   ErrorBanner,
@@ -477,26 +477,21 @@ function AdminConsoleContent() {
     );
   }
 
-  const hasActiveQueueFilters =
-    queueSearch.trim() !== '' ||
-    queueRoleFilter !== 'all' ||
-    queueDeptFilter !== 'ALL' ||
-    queueStatusFilter !== 'pending';
+  const queueFilterCount =
+    (queueStatusFilter !== 'pending' ? 1 : 0) +
+    (queueRoleFilter !== 'all' ? 1 : 0) +
+    (queueDeptFilter !== 'ALL' ? 1 : 0);
+  const hasActiveQueueFilters = queueSearch.trim() !== '' || queueFilterCount > 0;
 
-  const hasActiveRbacFilters =
-    rbacSearch.trim() !== '' ||
-    rbacRoleFilter !== 'all' ||
-    rbacDeptFilter !== 'ALL';
+  const rbacFilterCount =
+    (rbacRoleFilter !== 'all' ? 1 : 0) + (rbacDeptFilter !== 'ALL' ? 1 : 0);
 
-  const hasActiveSyncFilters =
-    syncSearch.trim() !== '' ||
-    syncTypeFilter !== 'all' ||
-    syncStatusFilter !== 'all';
+  const syncFilterCount =
+    (syncTypeFilter !== 'all' ? 1 : 0) + (syncStatusFilter !== 'all' ? 1 : 0);
 
-  const hasActiveAuditFilters =
-    auditSearch.trim() !== '' ||
-    auditEditorRoleFilter !== 'all' ||
-    auditChangeTypeFilter !== 'all';
+  const auditFilterCount =
+    (auditEditorRoleFilter !== 'all' ? 1 : 0) +
+    (auditChangeTypeFilter !== 'all' ? 1 : 0);
 
   const verificationRatePercent =
     totalRegisteredAccountsCount > 0
@@ -655,9 +650,9 @@ function AdminConsoleContent() {
               </span>
             </div>
 
-            {/* Search & Filter Tag Controls */}
-            <div className="px-5 py-3.5 bg-slate-50/80 border-b border-slate-200 space-y-3">
-              <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5">
+            {/* Search & Single Floating Filter Button */}
+            <div className="px-5 py-3.5 bg-slate-50/80 border-b border-slate-200">
+              <div className="flex items-center gap-2.5">
                 <div className="relative flex-1">
                   <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
                   <input
@@ -680,107 +675,68 @@ function AdminConsoleContent() {
                   )}
                 </div>
 
-                {hasActiveQueueFilters && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setQueueSearch('');
-                      setQueueStatusFilter('pending');
-                      setQueueRoleFilter('all');
-                      setQueueDeptFilter('ALL');
-                    }}
-                    className="inline-flex items-center justify-center gap-1 px-3 py-2 text-xs font-bold text-slate-600 bg-white border border-slate-300 rounded-md hover:bg-slate-100 cursor-pointer shrink-0"
-                  >
-                    <RotateCcw className="w-3.5 h-3.5" />
-                    <span>Reset Filters</span>
-                  </button>
-                )}
-              </div>
-
-              <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-                {/* Status Tags */}
-                <div className="flex flex-wrap items-center gap-1.5">
-                  <span className="text-[11px] font-bold uppercase tracking-wide text-slate-500 mr-1">
-                    Status:
-                  </span>
-                  {(
-                    [
-                      {
-                        key: 'pending',
-                        label: `Pending (${pendingCount})`,
-                      },
-                      {
-                        key: 'rejected',
-                        label: `Rejected (${rejectedCount})`,
-                      },
-                      {
-                        key: 'all',
-                        label: `All Queue (${queueUsers.length})`,
-                      },
-                    ] as const
-                  ).map((item) => (
-                    <button
-                      key={item.key}
-                      type="button"
-                      onClick={() => setQueueStatusFilter(item.key)}
-                      className={`px-2.5 py-1 rounded text-[11px] font-bold border transition-colors cursor-pointer font-mono tabular-nums ${
-                        queueStatusFilter === item.key
-                          ? 'bg-ustp-navy text-ustp-gold border-ustp-navy'
-                          : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'
-                      }`}
-                    >
-                      {item.label}
-                    </button>
-                  ))}
-                </div>
-
-                {/* Role Tags */}
-                <div className="flex flex-wrap items-center gap-1.5">
-                  <span className="text-[11px] font-bold uppercase tracking-wide text-slate-500 mr-1">
-                    Role:
-                  </span>
-                  {(
-                    [
-                      { key: 'all', label: 'All' },
-                      { key: 'student', label: 'Student' },
-                      { key: 'faculty', label: 'Faculty' },
-                    ] as const
-                  ).map((item) => (
-                    <button
-                      key={item.key}
-                      type="button"
-                      onClick={() => setQueueRoleFilter(item.key)}
-                      className={`px-2.5 py-1 rounded text-[11px] font-bold border transition-colors cursor-pointer ${
-                        queueRoleFilter === item.key
-                          ? 'bg-ustp-navy text-ustp-gold border-ustp-navy'
-                          : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'
-                      }`}
-                    >
-                      {item.label}
-                    </button>
-                  ))}
-                </div>
-
-                {/* Department Tags */}
-                <div className="flex flex-wrap items-center gap-1.5">
-                  <span className="text-[11px] font-bold uppercase tracking-wide text-slate-500 mr-1">
-                    Dept:
-                  </span>
-                  {(['ALL', ...ADMIN_DEPARTMENT_TAGS] as const).map((dept) => (
-                    <button
-                      key={dept}
-                      type="button"
-                      onClick={() => setQueueDeptFilter(dept)}
-                      className={`px-2.5 py-1 rounded text-[11px] font-bold border transition-colors cursor-pointer ${
-                        queueDeptFilter === dept
-                          ? 'bg-ustp-blue text-white border-ustp-blue'
-                          : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'
-                      }`}
-                    >
-                      {dept === 'ALL' ? 'All Depts' : dept}
-                    </button>
-                  ))}
-                </div>
+                <FilterPopover
+                  title="Filter Verification Queue"
+                  ariaLabel="Filter verification queue"
+                  activeCount={queueFilterCount}
+                  triggerClassName="rounded-md"
+                  onReset={() => {
+                    setQueueStatusFilter('pending');
+                    setQueueRoleFilter('all');
+                    setQueueDeptFilter('ALL');
+                  }}
+                  sections={[
+                    {
+                      kind: 'single',
+                      id: 'queue-status',
+                      label: 'Status',
+                      value: queueStatusFilter,
+                      onChange: (val) =>
+                        setQueueStatusFilter(val as VerificationStatusFilter),
+                      options: [
+                        { key: 'pending', label: `Pending (${pendingCount})` },
+                        {
+                          key: 'rejected',
+                          label: `Rejected (${rejectedCount})`,
+                        },
+                        {
+                          key: 'all',
+                          label: `All Queue (${queueUsers.length})`,
+                        },
+                      ].map((item) => ({
+                        value: item.key,
+                        label: item.label,
+                      })),
+                    },
+                    {
+                      kind: 'single',
+                      id: 'queue-role',
+                      label: 'Role',
+                      value: queueRoleFilter,
+                      onChange: (val) =>
+                        setQueueRoleFilter(val as 'all' | 'student' | 'faculty'),
+                      options: [
+                        { value: 'all', label: 'All' },
+                        { value: 'student', label: 'Student' },
+                        { value: 'faculty', label: 'Faculty' },
+                      ],
+                    },
+                    {
+                      kind: 'single',
+                      id: 'queue-dept',
+                      label: 'Department',
+                      value: queueDeptFilter,
+                      activeTone: 'blue',
+                      onChange: (val) => setQueueDeptFilter(val),
+                      options: (['ALL', ...ADMIN_DEPARTMENT_TAGS] as const).map(
+                        (dept) => ({
+                          value: dept,
+                          label: dept === 'ALL' ? 'All Depts' : dept,
+                        })
+                      ),
+                    },
+                  ]}
+                />
               </div>
             </div>
 
@@ -937,9 +893,9 @@ function AdminConsoleContent() {
               </span>
             </div>
 
-            {/* Search & Filter Tags */}
-            <div className="px-5 py-3.5 bg-slate-50/80 border-b border-slate-200 space-y-3">
-              <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5">
+            {/* Search & Single Floating Filter Button */}
+            <div className="px-5 py-3.5 bg-slate-50/80 border-b border-slate-200">
+              <div className="flex items-center gap-2.5">
                 <div className="relative flex-1">
                   <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
                   <input
@@ -962,84 +918,59 @@ function AdminConsoleContent() {
                   )}
                 </div>
 
-                {hasActiveRbacFilters && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setRbacSearch('');
-                      setRbacRoleFilter('all');
-                      setRbacDeptFilter('ALL');
-                    }}
-                    className="inline-flex items-center justify-center gap-1 px-3 py-2 text-xs font-bold text-slate-600 bg-white border border-slate-300 rounded-md hover:bg-slate-100 cursor-pointer shrink-0"
-                  >
-                    <RotateCcw className="w-3.5 h-3.5" />
-                    <span>Reset Filters</span>
-                  </button>
-                )}
-              </div>
-
-              <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-                {/* Role Filter Tags */}
-                <div className="flex flex-wrap items-center gap-1.5">
-                  <span className="text-[11px] font-bold uppercase tracking-wide text-slate-500 mr-1">
-                    Role:
-                  </span>
-                  {(
-                    [
-                      { key: 'all', label: `All (${allUsers.length})` },
-                      {
-                        key: 'student',
-                        label: `Student (${roleCounts.student})`,
-                      },
-                      {
-                        key: 'faculty',
-                        label: `Faculty (${roleCounts.faculty})`,
-                      },
-                      {
-                        key: 'dept_head',
-                        label: `Dept Head (${roleCounts.dept_head})`,
-                      },
-                      {
-                        key: 'it_admin',
-                        label: `IT Admin (${roleCounts.it_admin})`,
-                      },
-                    ] as const
-                  ).map((item) => (
-                    <button
-                      key={item.key}
-                      type="button"
-                      onClick={() => setRbacRoleFilter(item.key)}
-                      className={`px-2.5 py-1 rounded text-[11px] font-bold border transition-colors cursor-pointer font-mono tabular-nums ${
-                        rbacRoleFilter === item.key
-                          ? 'bg-ustp-navy text-ustp-gold border-ustp-navy'
-                          : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'
-                      }`}
-                    >
-                      {item.label}
-                    </button>
-                  ))}
-                </div>
-
-                {/* Department Filter Tags */}
-                <div className="flex flex-wrap items-center gap-1.5">
-                  <span className="text-[11px] font-bold uppercase tracking-wide text-slate-500 mr-1">
-                    Dept:
-                  </span>
-                  {(['ALL', ...ADMIN_DEPARTMENT_TAGS] as const).map((dept) => (
-                    <button
-                      key={dept}
-                      type="button"
-                      onClick={() => setRbacDeptFilter(dept)}
-                      className={`px-2.5 py-1 rounded text-[11px] font-bold border transition-colors cursor-pointer ${
-                        rbacDeptFilter === dept
-                          ? 'bg-ustp-blue text-white border-ustp-blue'
-                          : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'
-                      }`}
-                    >
-                      {dept === 'ALL' ? 'All Depts' : dept}
-                    </button>
-                  ))}
-                </div>
+                <FilterPopover
+                  title="Filter RBAC Directory"
+                  ariaLabel="Filter RBAC directory"
+                  activeCount={rbacFilterCount}
+                  triggerClassName="rounded-md"
+                  onReset={() => {
+                    setRbacRoleFilter('all');
+                    setRbacDeptFilter('ALL');
+                  }}
+                  sections={[
+                    {
+                      kind: 'single',
+                      id: 'rbac-role',
+                      label: 'Role',
+                      value: rbacRoleFilter,
+                      onChange: (val) =>
+                        setRbacRoleFilter(val as 'all' | UserRole),
+                      options: [
+                        { value: 'all', label: `All (${allUsers.length})` },
+                        {
+                          value: 'student',
+                          label: `Student (${roleCounts.student})`,
+                        },
+                        {
+                          value: 'faculty',
+                          label: `Faculty (${roleCounts.faculty})`,
+                        },
+                        {
+                          value: 'dept_head',
+                          label: `Dept Head (${roleCounts.dept_head})`,
+                        },
+                        {
+                          value: 'it_admin',
+                          label: `IT Admin (${roleCounts.it_admin})`,
+                        },
+                      ],
+                    },
+                    {
+                      kind: 'single',
+                      id: 'rbac-dept',
+                      label: 'Department',
+                      value: rbacDeptFilter,
+                      activeTone: 'blue',
+                      onChange: (val) => setRbacDeptFilter(val),
+                      options: (['ALL', ...ADMIN_DEPARTMENT_TAGS] as const).map(
+                        (dept) => ({
+                          value: dept,
+                          label: dept === 'ALL' ? 'All Depts' : dept,
+                        })
+                      ),
+                    },
+                  ]}
+                />
               </div>
             </div>
 
@@ -1273,8 +1204,8 @@ function AdminConsoleContent() {
                 </span>
               </div>
 
-              <div className="px-5 py-3 bg-slate-50/80 border-b border-slate-200 space-y-2.5">
-                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5">
+              <div className="px-5 py-3 bg-slate-50/80 border-b border-slate-200">
+                <div className="flex items-center gap-2.5">
                   <div className="relative flex-1">
                     <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
                     <input
@@ -1296,75 +1227,55 @@ function AdminConsoleContent() {
                       </button>
                     )}
                   </div>
-                  {hasActiveSyncFilters && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setSyncSearch('');
-                        setSyncTypeFilter('all');
-                        setSyncStatusFilter('all');
-                      }}
-                      className="inline-flex items-center justify-center gap-1 px-3 py-2 text-xs font-bold text-slate-600 bg-white border border-slate-300 rounded-md hover:bg-slate-100 cursor-pointer shrink-0"
-                    >
-                      <RotateCcw className="w-3.5 h-3.5" />
-                      <span>Reset</span>
-                    </button>
-                  )}
-                </div>
 
-                <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    <span className="text-[11px] font-bold uppercase tracking-wide text-slate-500 mr-1">
-                      Trigger:
-                    </span>
-                    {(
-                      [
-                        { key: 'all', label: 'All Runs' },
-                        { key: 'manual_admin', label: 'Manual Admin' },
-                        { key: 'scheduled_midnight', label: 'Scheduled' },
-                      ] as const
-                    ).map((item) => (
-                      <button
-                        key={item.key}
-                        type="button"
-                        onClick={() => setSyncTypeFilter(item.key)}
-                        className={`px-2.5 py-1 rounded text-[11px] font-bold border transition-colors cursor-pointer ${
-                          syncTypeFilter === item.key
-                            ? 'bg-ustp-navy text-ustp-gold border-ustp-navy'
-                            : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'
-                        }`}
-                      >
-                        {item.label}
-                      </button>
-                    ))}
-                  </div>
-
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    <span className="text-[11px] font-bold uppercase tracking-wide text-slate-500 mr-1">
-                      Status:
-                    </span>
-                    {(
-                      [
-                        { key: 'all', label: 'All' },
-                        { key: 'completed', label: 'Completed' },
-                        { key: 'partial_warning', label: 'Warning' },
-                        { key: 'failed', label: 'Failed' },
-                      ] as const
-                    ).map((item) => (
-                      <button
-                        key={item.key}
-                        type="button"
-                        onClick={() => setSyncStatusFilter(item.key)}
-                        className={`px-2.5 py-1 rounded text-[11px] font-bold border transition-colors cursor-pointer ${
-                          syncStatusFilter === item.key
-                            ? 'bg-ustp-blue text-white border-ustp-blue'
-                            : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'
-                        }`}
-                      >
-                        {item.label}
-                      </button>
-                    ))}
-                  </div>
+                  <FilterPopover
+                    title="Filter Sync History"
+                    ariaLabel="Filter synchronization logs"
+                    activeCount={syncFilterCount}
+                    triggerClassName="rounded-md"
+                    onReset={() => {
+                      setSyncTypeFilter('all');
+                      setSyncStatusFilter('all');
+                    }}
+                    sections={[
+                      {
+                        kind: 'single',
+                        id: 'sync-trigger',
+                        label: 'Trigger',
+                        value: syncTypeFilter,
+                        onChange: (val) =>
+                          setSyncTypeFilter(
+                            val as 'all' | 'manual_admin' | 'scheduled_midnight'
+                          ),
+                        options: [
+                          { value: 'all', label: 'All Runs' },
+                          { value: 'manual_admin', label: 'Manual Admin' },
+                          { value: 'scheduled_midnight', label: 'Scheduled' },
+                        ],
+                      },
+                      {
+                        kind: 'single',
+                        id: 'sync-status',
+                        label: 'Status',
+                        value: syncStatusFilter,
+                        activeTone: 'blue',
+                        onChange: (val) =>
+                          setSyncStatusFilter(
+                            val as
+                              | 'all'
+                              | 'completed'
+                              | 'partial_warning'
+                              | 'failed'
+                          ),
+                        options: [
+                          { value: 'all', label: 'All' },
+                          { value: 'completed', label: 'Completed' },
+                          { value: 'partial_warning', label: 'Warning' },
+                          { value: 'failed', label: 'Failed' },
+                        ],
+                      },
+                    ]}
+                  />
                 </div>
               </div>
 
@@ -1549,9 +1460,9 @@ function AdminConsoleContent() {
                 </span>
               </div>
 
-              {/* Search & Filter Tag Controls */}
-              <div className="px-5 py-3.5 bg-slate-50/80 border-b border-slate-200 space-y-3">
-                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5">
+              {/* Search & Single Floating Filter Button */}
+              <div className="px-5 py-3.5 bg-slate-50/80 border-b border-slate-200">
+                <div className="flex items-center gap-2.5">
                   <div className="relative flex-1">
                     <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
                     <input
@@ -1574,77 +1485,49 @@ function AdminConsoleContent() {
                     )}
                   </div>
 
-                  {hasActiveAuditFilters && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setAuditSearch('');
-                        setAuditEditorRoleFilter('all');
-                        setAuditChangeTypeFilter('all');
-                      }}
-                      className="inline-flex items-center justify-center gap-1 px-3 py-2 text-xs font-bold text-slate-600 bg-white border border-slate-300 rounded-md hover:bg-slate-100 cursor-pointer shrink-0"
-                    >
-                      <RotateCcw className="w-3.5 h-3.5" />
-                      <span>Reset Filters</span>
-                    </button>
-                  )}
-                </div>
-
-                <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-                  {/* Editor Role Filter Tags */}
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    <span className="text-[11px] font-bold uppercase tracking-wide text-slate-500 mr-1">
-                      Editor Role:
-                    </span>
-                    {(
-                      [
-                        { key: 'all', label: 'All Editors' },
-                        { key: 'faculty', label: 'Faculty' },
-                        { key: 'dept_head', label: 'Dept Head' },
-                        { key: 'it_admin', label: 'IT Admin' },
-                      ] as const
-                    ).map((item) => (
-                      <button
-                        key={item.key}
-                        type="button"
-                        onClick={() => setAuditEditorRoleFilter(item.key)}
-                        className={`px-2.5 py-1 rounded text-[11px] font-bold border transition-colors cursor-pointer ${
-                          auditEditorRoleFilter === item.key
-                            ? 'bg-ustp-navy text-ustp-gold border-ustp-navy'
-                            : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'
-                        }`}
-                      >
-                        {item.label}
-                      </button>
-                    ))}
-                  </div>
-
-                  {/* Revision Change Type Filter Tags */}
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    <span className="text-[11px] font-bold uppercase tracking-wide text-slate-500 mr-1">
-                      Change Type:
-                    </span>
-                    {(
-                      [
-                        { key: 'all', label: 'All Changes' },
-                        { key: 'title_changed', label: 'Title Changed' },
-                        { key: 'content_changed', label: 'Content Changed' },
-                      ] as const
-                    ).map((item) => (
-                      <button
-                        key={item.key}
-                        type="button"
-                        onClick={() => setAuditChangeTypeFilter(item.key)}
-                        className={`px-2.5 py-1 rounded text-[11px] font-bold border transition-colors cursor-pointer ${
-                          auditChangeTypeFilter === item.key
-                            ? 'bg-ustp-blue text-white border-ustp-blue'
-                            : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'
-                        }`}
-                      >
-                        {item.label}
-                      </button>
-                    ))}
-                  </div>
+                  <FilterPopover
+                    title="Filter Audit Trail"
+                    ariaLabel="Filter announcement audit trail"
+                    activeCount={auditFilterCount}
+                    triggerClassName="rounded-md"
+                    onReset={() => {
+                      setAuditEditorRoleFilter('all');
+                      setAuditChangeTypeFilter('all');
+                    }}
+                    sections={[
+                      {
+                        kind: 'single',
+                        id: 'audit-editor-role',
+                        label: 'Editor Role',
+                        value: auditEditorRoleFilter,
+                        onChange: (val) =>
+                          setAuditEditorRoleFilter(val as 'all' | UserRole),
+                        options: [
+                          { value: 'all', label: 'All Editors' },
+                          { value: 'faculty', label: 'Faculty' },
+                          { value: 'dept_head', label: 'Dept Head' },
+                          { value: 'it_admin', label: 'IT Admin' },
+                        ],
+                      },
+                      {
+                        kind: 'single',
+                        id: 'audit-change-type',
+                        label: 'Change Type',
+                        value: auditChangeTypeFilter,
+                        activeTone: 'blue',
+                        onChange: (val) =>
+                          setAuditChangeTypeFilter(val as AuditChangeTypeFilter),
+                        options: [
+                          { value: 'all', label: 'All Changes' },
+                          { value: 'title_changed', label: 'Title Changed' },
+                          {
+                            value: 'content_changed',
+                            label: 'Content Changed',
+                          },
+                        ],
+                      },
+                    ]}
+                  />
                 </div>
               </div>
 

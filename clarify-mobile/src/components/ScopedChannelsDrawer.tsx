@@ -466,7 +466,10 @@ export function ScopedChannelsDrawer({
         >
           {/* Drawer Header */}
           <View style={styles.headerRow}>
-            <Text style={styles.headerTitle}>COURSE HUBS</Text>
+            <View style={styles.headerTitleRow}>
+              <Feather name="book-open" size={14} color={colors.ustpGold} />
+              <Text style={styles.headerTitle}>COURSE HUBS</Text>
+            </View>
             <Pressable
               onPress={onClose}
               accessibilityRole="button"
@@ -659,6 +662,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     marginBottom: spacing.xs,
+  },
+  headerTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs + 2,
   },
   headerTitle: {
     fontSize: typography.sizes.xs,

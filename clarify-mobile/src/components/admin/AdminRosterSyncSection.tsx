@@ -3,13 +3,13 @@ import React, { useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
   TextInput,
   View,
 } from 'react-native';
 
+import { FilterPopover } from '@/components/FilterPopover';
 import {
   EmptyState,
   ErrorBanner,
@@ -85,10 +85,8 @@ export function AdminRosterSyncSection({
   }
 
   const semesterError = getFieldValidationError(syncErrors, 'semester_code');
-  const hasActiveSyncFilters =
-    syncSearch.trim() !== '' ||
-    syncTypeFilter !== 'all' ||
-    syncStatusFilter !== 'all';
+  const syncFilterCount =
+    (syncTypeFilter !== 'all' ? 1 : 0) + (syncStatusFilter !== 'all' ? 1 : 0);
 
   const handleRunSync = async () => {
     if (isSyncing) return;
@@ -222,7 +220,7 @@ export function AdminRosterSyncSection({
           </View>
         </View>
 
-        {/* Search + Trigger + Status Filter Chips */}
+        {/* Search & Single Floating Filter Button */}
         <View style={adminSharedStyles.filterPanel}>
           <View style={adminSharedStyles.searchAndResetRow}>
             <View style={adminSharedStyles.searchWrap}>
@@ -235,7 +233,7 @@ export function AdminRosterSyncSection({
               <TextInput
                 value={syncSearch}
                 onChangeText={setSyncSearch}
-                placeholder="Search sync logs by ID, semester code, or admin name..."
+                placeholder="Search sync logs by ID, semester..."
                 placeholderTextColor={colors.placeholder}
                 accessibilityLabel="Search synchronization logs"
                 style={adminSharedStyles.searchInput}
@@ -252,113 +250,50 @@ export function AdminRosterSyncSection({
               )}
             </View>
 
-            {hasActiveSyncFilters && (
-              <Pressable
-                onPress={() => {
-                  setSyncSearch('');
-                  setSyncTypeFilter('all');
-                  setSyncStatusFilter('all');
-                }}
-                accessibilityRole="button"
-                accessibilityLabel="Reset sync log filters"
-                style={({ pressed }) => [
-                  adminSharedStyles.resetBtn,
-                  pressed && adminSharedStyles.pressed,
-                ]}
-              >
-                <Feather
-                  name="rotate-ccw"
-                  size={13}
-                  color={colors.mutedSlate}
-                />
-                <Text style={adminSharedStyles.resetBtnText}>Reset</Text>
-              </Pressable>
-            )}
-          </View>
-
-          {/* Trigger Chips */}
-          <View style={adminSharedStyles.filterGroup}>
-            <Text style={adminSharedStyles.filterGroupLabel}>Trigger:</Text>
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={adminSharedStyles.chipsScrollRow}
-            >
-              {(
-                [
-                  { key: 'all', label: 'All Runs' },
-                  { key: 'manual_admin', label: 'Manual Admin' },
-                  { key: 'scheduled_midnight', label: 'Scheduled' },
-                ] as const
-              ).map((item) => {
-                const active = syncTypeFilter === item.key;
-                return (
-                  <Pressable
-                    key={item.key}
-                    onPress={() => setSyncTypeFilter(item.key)}
-                    accessibilityRole="button"
-                    accessibilityState={{ selected: active }}
-                    accessibilityLabel={`Trigger filter ${item.label}`}
-                    style={[
-                      adminSharedStyles.filterChip,
-                      active && adminSharedStyles.filterChipNavyActive,
-                    ]}
-                  >
-                    <Text
-                      style={[
-                        adminSharedStyles.filterChipText,
-                        active && adminSharedStyles.filterChipTextNavyActive,
-                      ]}
-                    >
-                      {item.label}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </ScrollView>
-          </View>
-
-          {/* Status Chips */}
-          <View style={adminSharedStyles.filterGroup}>
-            <Text style={adminSharedStyles.filterGroupLabel}>Status:</Text>
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={adminSharedStyles.chipsScrollRow}
-            >
-              {(
-                [
-                  { key: 'all', label: 'All' },
-                  { key: 'completed', label: 'Completed' },
-                  { key: 'partial_warning', label: 'Warning' },
-                  { key: 'failed', label: 'Failed' },
-                ] as const
-              ).map((item) => {
-                const active = syncStatusFilter === item.key;
-                return (
-                  <Pressable
-                    key={item.key}
-                    onPress={() => setSyncStatusFilter(item.key)}
-                    accessibilityRole="button"
-                    accessibilityState={{ selected: active }}
-                    accessibilityLabel={`Status filter ${item.label}`}
-                    style={[
-                      adminSharedStyles.filterChip,
-                      active && adminSharedStyles.filterChipBlueActive,
-                    ]}
-                  >
-                    <Text
-                      style={[
-                        adminSharedStyles.filterChipText,
-                        active && adminSharedStyles.filterChipTextBlueActive,
-                      ]}
-                    >
-                      {item.label}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </ScrollView>
+            <FilterPopover
+              title="Filter Sync History"
+              accessibilityLabel="Filter synchronization logs"
+              compact
+              activeCount={syncFilterCount}
+              onReset={() => {
+                setSyncTypeFilter('all');
+                setSyncStatusFilter('all');
+              }}
+              sections={[
+                {
+                  kind: 'single',
+                  id: 'mobile-sync-trigger',
+                  label: 'Trigger',
+                  value: syncTypeFilter,
+                  onChange: (val) =>
+                    setSyncTypeFilter(
+                      val as 'all' | 'manual_admin' | 'scheduled_midnight'
+                    ),
+                  options: [
+                    { value: 'all', label: 'All Runs' },
+                    { value: 'manual_admin', label: 'Manual Admin' },
+                    { value: 'scheduled_midnight', label: 'Scheduled' },
+                  ],
+                },
+                {
+                  kind: 'single',
+                  id: 'mobile-sync-status',
+                  label: 'Status',
+                  value: syncStatusFilter,
+                  activeTone: 'blue',
+                  onChange: (val) =>
+                    setSyncStatusFilter(
+                      val as 'all' | 'completed' | 'partial_warning' | 'failed'
+                    ),
+                  options: [
+                    { value: 'all', label: 'All' },
+                    { value: 'completed', label: 'Completed' },
+                    { value: 'partial_warning', label: 'Warning' },
+                    { value: 'failed', label: 'Failed' },
+                  ],
+                },
+              ]}
+            />
           </View>
         </View>
 

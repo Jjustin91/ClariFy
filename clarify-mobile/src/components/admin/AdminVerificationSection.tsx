@@ -3,13 +3,13 @@ import React, { useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
   TextInput,
   View,
 } from 'react-native';
 
+import { FilterPopover } from '@/components/FilterPopover';
 import {
   EmptyState,
   ErrorBanner,
@@ -95,11 +95,13 @@ export function AdminVerificationSection({
     return <ErrorBanner error={error} onRetry={onRetry} />;
   }
 
+  const queueFilterCount =
+    (queueStatusFilter !== 'pending' ? 1 : 0) +
+    (queueRoleFilter !== 'all' ? 1 : 0) +
+    (queueDeptFilter !== 'ALL' ? 1 : 0);
+
   const hasActiveQueueFilters =
-    queueSearch.trim() !== '' ||
-    queueRoleFilter !== 'all' ||
-    queueDeptFilter !== 'ALL' ||
-    queueStatusFilter !== 'pending';
+    queueSearch.trim() !== '' || queueFilterCount > 0;
 
   return (
     <View style={adminSharedStyles.sectionCard}>
@@ -122,7 +124,7 @@ export function AdminVerificationSection({
         </Text>
       </View>
 
-      {/* Search & Filter Tag Controls */}
+      {/* Search & Single Floating Filter Button */}
       <View style={adminSharedStyles.filterPanel}>
         <View style={adminSharedStyles.searchAndResetRow}>
           <View style={adminSharedStyles.searchWrap}>
@@ -135,7 +137,7 @@ export function AdminVerificationSection({
             <TextInput
               value={queueSearch}
               onChangeText={setQueueSearch}
-              placeholder="Search by name, Institutional ID, @ustp.edu.ph email, mobile, or section..."
+              placeholder="Search name, ID, email, section..."
               placeholderTextColor={colors.placeholder}
               accessibilityLabel="Search verification queue"
               style={adminSharedStyles.searchInput}
@@ -152,155 +154,68 @@ export function AdminVerificationSection({
             )}
           </View>
 
-          {hasActiveQueueFilters && (
-            <Pressable
-              onPress={() => {
-                setQueueSearch('');
-                setQueueStatusFilter('pending');
-                setQueueRoleFilter('all');
-                setQueueDeptFilter('ALL');
-              }}
-              accessibilityRole="button"
-              accessibilityLabel="Reset Filters"
-              style={({ pressed }) => [
-                adminSharedStyles.resetBtn,
-                pressed && adminSharedStyles.pressed,
-              ]}
-            >
-              <Feather name="rotate-ccw" size={13} color={colors.mutedSlate} />
-              <Text style={adminSharedStyles.resetBtnText}>Reset Filters</Text>
-            </Pressable>
-          )}
-        </View>
-
-        {/* Status Chips */}
-        <View style={adminSharedStyles.filterGroup}>
-          <Text style={adminSharedStyles.filterGroupLabel}>Status:</Text>
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={adminSharedStyles.chipsScrollRow}
-          >
-            {(
-              [
-                {
-                  key: 'pending',
-                  label: `Pending (${resolvedPendingCount})`,
-                },
-                {
-                  key: 'rejected',
-                  label: `Rejected (${resolvedRejectedCount})`,
-                },
-                {
-                  key: 'all',
-                  label: `All Queue (${queueUsers.length})`,
-                },
-              ] as const
-            ).map((item) => {
-              const active = queueStatusFilter === item.key;
-              return (
-                <Pressable
-                  key={item.key}
-                  onPress={() => setQueueStatusFilter(item.key)}
-                  accessibilityRole="button"
-                  accessibilityState={{ selected: active }}
-                  accessibilityLabel={item.label}
-                  style={[
-                    adminSharedStyles.filterChip,
-                    active && adminSharedStyles.filterChipNavyActive,
-                  ]}
-                >
-                  <Text
-                    style={[
-                      adminSharedStyles.filterChipText,
-                      active && adminSharedStyles.filterChipTextNavyActive,
-                    ]}
-                  >
-                    {item.label}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </ScrollView>
-        </View>
-
-        {/* Role Chips */}
-        <View style={adminSharedStyles.filterGroup}>
-          <Text style={adminSharedStyles.filterGroupLabel}>Role:</Text>
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={adminSharedStyles.chipsScrollRow}
-          >
-            {(
-              [
-                { key: 'all', label: 'All' },
-                { key: 'student', label: 'Student' },
-                { key: 'faculty', label: 'Faculty' },
-              ] as const
-            ).map((item) => {
-              const active = queueRoleFilter === item.key;
-              return (
-                <Pressable
-                  key={item.key}
-                  onPress={() => setQueueRoleFilter(item.key)}
-                  accessibilityRole="button"
-                  accessibilityState={{ selected: active }}
-                  accessibilityLabel={`Role filter ${item.label}`}
-                  style={[
-                    adminSharedStyles.filterChip,
-                    active && adminSharedStyles.filterChipNavyActive,
-                  ]}
-                >
-                  <Text
-                    style={[
-                      adminSharedStyles.filterChipText,
-                      active && adminSharedStyles.filterChipTextNavyActive,
-                    ]}
-                  >
-                    {item.label}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </ScrollView>
-        </View>
-
-        {/* Department Chips */}
-        <View style={adminSharedStyles.filterGroup}>
-          <Text style={adminSharedStyles.filterGroupLabel}>Dept:</Text>
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={adminSharedStyles.chipsScrollRow}
-          >
-            {(['ALL', ...ADMIN_DEPARTMENT_TAGS] as const).map((dept) => {
-              const active = queueDeptFilter === dept;
-              const label = dept === 'ALL' ? 'All Depts' : dept;
-              return (
-                <Pressable
-                  key={dept}
-                  onPress={() => setQueueDeptFilter(dept)}
-                  accessibilityRole="button"
-                  accessibilityState={{ selected: active }}
-                  accessibilityLabel={`Department filter ${label}`}
-                  style={[
-                    adminSharedStyles.filterChip,
-                    active && adminSharedStyles.filterChipBlueActive,
-                  ]}
-                >
-                  <Text
-                    style={[
-                      adminSharedStyles.filterChipText,
-                      active && adminSharedStyles.filterChipTextBlueActive,
-                    ]}
-                  >
-                    {label}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </ScrollView>
+          <FilterPopover
+            title="Filter Verification Queue"
+            accessibilityLabel="Filter verification queue"
+            compact
+            activeCount={queueFilterCount}
+            onReset={() => {
+              setQueueStatusFilter('pending');
+              setQueueRoleFilter('all');
+              setQueueDeptFilter('ALL');
+            }}
+            sections={[
+              {
+                kind: 'single',
+                id: 'mobile-queue-status',
+                label: 'Status',
+                value: queueStatusFilter,
+                onChange: (val) =>
+                  setQueueStatusFilter(val as VerificationStatusFilter),
+                options: [
+                  {
+                    value: 'pending',
+                    label: `Pending (${resolvedPendingCount})`,
+                  },
+                  {
+                    value: 'rejected',
+                    label: `Rejected (${resolvedRejectedCount})`,
+                  },
+                  {
+                    value: 'all',
+                    label: `All Queue (${queueUsers.length})`,
+                  },
+                ],
+              },
+              {
+                kind: 'single',
+                id: 'mobile-queue-role',
+                label: 'Role',
+                value: queueRoleFilter,
+                onChange: (val) =>
+                  setQueueRoleFilter(val as 'all' | 'student' | 'faculty'),
+                options: [
+                  { value: 'all', label: 'All' },
+                  { value: 'student', label: 'Student' },
+                  { value: 'faculty', label: 'Faculty' },
+                ],
+              },
+              {
+                kind: 'single',
+                id: 'mobile-queue-dept',
+                label: 'Department',
+                value: queueDeptFilter,
+                activeTone: 'blue',
+                onChange: (val) => setQueueDeptFilter(val),
+                options: (['ALL', ...ADMIN_DEPARTMENT_TAGS] as const).map(
+                  (dept) => ({
+                    value: dept,
+                    label: dept === 'ALL' ? 'All Depts' : dept,
+                  })
+                ),
+              },
+            ]}
+          />
         </View>
       </View>
 

@@ -6,13 +6,13 @@ import {
   Image,
   Pressable,
   RefreshControl,
-  ScrollView,
   StyleSheet,
   Text,
   TextInput,
   View,
 } from 'react-native';
 
+import { FilterPopover } from '@/components/FilterPopover';
 import { MobileAppShell } from '@/components/MobileAppShell';
 import {
   EmptyState,
@@ -238,107 +238,74 @@ export default function MobileInstructorsScreen() {
 
   const keyExtractor = useCallback((item: Instructor) => String(item.id), []);
 
+  const activeFilterCount =
+    (department !== 'ALL' ? 1 : 0) + (sortBy !== 'name' ? 1 : 0);
+
   const renderHeader = () => (
     <View style={styles.controlsWrap}>
-      {/* Search Bar */}
-      <View style={styles.searchBox}>
-        <Feather name="search" size={16} color={colors.mutedSlate} />
-        <TextInput
-          value={searchInput}
-          onChangeText={setSearchInput}
-          placeholder="Search instructors, courses, specialization..."
-          placeholderTextColor={colors.placeholder}
-          returnKeyType="search"
-          accessibilityLabel="Search verified instructors"
-          style={styles.searchInput}
-        />
-        {searchInput.length > 0 && (
-          <Pressable
-            onPress={() => {
-              setSearchInput('');
-              setDebouncedSearch('');
-            }}
-            accessibilityRole="button"
-            accessibilityLabel="Clear instructor search"
-            style={styles.clearBtn}
-          >
-            <Feather name="x" size={16} color={colors.mutedSlate} />
-          </Pressable>
-        )}
-      </View>
-
-      {/* Sort Row */}
-      <View style={styles.sortRow}>
-        <Text style={styles.sortLabel}>Sort by:</Text>
-        <View style={styles.sortPillsRow}>
-          {(
-            [
-              { value: 'name', label: 'Name (A–Z)' },
-              { value: 'department', label: 'Department' },
-            ] as const
-          ).map((opt) => {
-            const active = sortBy === opt.value;
-            return (
-              <Pressable
-                key={opt.value}
-                onPress={() => setSortBy(opt.value)}
-                accessibilityRole="button"
-                accessibilityLabel={`Sort faculty by ${opt.label}`}
-                accessibilityState={{ selected: active }}
-                style={({ pressed }) => [
-                  styles.sortPill,
-                  active && styles.sortPillActive,
-                  pressed && styles.pressed,
-                ]}
-              >
-                <Text
-                  style={[
-                    styles.sortPillText,
-                    active && styles.sortPillTextActive,
-                  ]}
-                >
-                  {opt.label}
-                </Text>
-              </Pressable>
-            );
-          })}
-        </View>
-      </View>
-
-      {/* Department Filter Pills */}
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.deptScrollRow}
-      >
-        {DEPARTMENTS.map((dept) => {
-          const active = department === dept;
-          const label = dept === 'ALL' ? 'All Colleges / Depts' : dept;
-          return (
+      {/* Search Bar + Single Filter Button */}
+      <View style={styles.searchFilterRow}>
+        <View style={styles.searchBox}>
+          <Feather name="search" size={16} color={colors.mutedSlate} />
+          <TextInput
+            value={searchInput}
+            onChangeText={setSearchInput}
+            placeholder="Search faculty, courses..."
+            placeholderTextColor={colors.placeholder}
+            returnKeyType="search"
+            accessibilityLabel="Search verified instructors"
+            style={styles.searchInput}
+          />
+          {searchInput.length > 0 && (
             <Pressable
-              key={dept}
-              onPress={() => setDepartment(dept)}
+              onPress={() => {
+                setSearchInput('');
+                setDebouncedSearch('');
+              }}
               accessibilityRole="button"
-              accessibilityLabel={`Filter faculty by ${label}`}
-              accessibilityState={{ selected: active }}
-              style={({ pressed }) => [
-                styles.filterChip,
-                active && styles.filterChipActive,
-                pressed && styles.pressed,
-              ]}
+              accessibilityLabel="Clear instructor search"
+              style={styles.clearBtn}
             >
-              <Text
-                style={[
-                  styles.filterChipText,
-                  active && styles.filterChipTextActive,
-                ]}
-              >
-                {label}
-              </Text>
+              <Feather name="x" size={16} color={colors.mutedSlate} />
             </Pressable>
-          );
-        })}
-      </ScrollView>
+          )}
+        </View>
+
+        <FilterPopover
+          title="Filter & Sort Faculty"
+          accessibilityLabel="Filter and sort verified instructors"
+          activeCount={activeFilterCount}
+          onReset={() => {
+            setDepartment('ALL');
+            setSortBy('name');
+          }}
+          sections={[
+            {
+              kind: 'single',
+              id: 'mobile-faculty-dept',
+              label: 'College / Department',
+              value: department,
+              onChange: (val) => setDepartment(val),
+              options: DEPARTMENTS.map((dept) => ({
+                value: dept,
+                label: dept === 'ALL' ? 'All Colleges / Depts' : dept,
+              })),
+            },
+            {
+              kind: 'single',
+              id: 'mobile-faculty-sort',
+              label: 'Sort by',
+              value: sortBy,
+              activeTone: 'blue',
+              onChange: (val) => setSortBy(val as 'name' | 'department'),
+              options: [
+                { value: 'name', label: 'Name (A–Z)' },
+                { value: 'department', label: 'Department' },
+              ],
+            },
+          ]}
+        />
+      </View>
 
       {error && instructors.length > 0 && (
         <ErrorBanner
@@ -441,7 +408,13 @@ const styles = StyleSheet.create({
     gap: spacing.md,
     marginBottom: spacing.lg,
   },
+  searchFilterRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
   searchBox: {
+    flex: 1,
     minHeight: touchTarget.minHeight,
     backgroundColor: colors.white,
     borderWidth: 1,
@@ -463,71 +436,6 @@ const styles = StyleSheet.create({
     minHeight: touchTarget.minHeight,
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  sortRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: spacing.sm,
-  },
-  sortLabel: {
-    fontSize: typography.sizes.xs,
-    fontWeight: '800',
-    color: colors.ustpText,
-  },
-  sortPillsRow: {
-    flexDirection: 'row',
-    gap: spacing.xs + 2,
-  },
-  sortPill: {
-    minHeight: touchTarget.minHeight,
-    paddingHorizontal: spacing.md,
-    borderRadius: radii.md,
-    borderWidth: 1,
-    borderColor: colors.borderStrong,
-    backgroundColor: colors.white,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  sortPillActive: {
-    backgroundColor: colors.ustpNavy,
-    borderColor: colors.ustpNavy,
-  },
-  sortPillText: {
-    fontSize: typography.sizes.xs,
-    fontWeight: '700',
-    color: colors.ustpText,
-  },
-  sortPillTextActive: {
-    color: colors.ustpGold,
-    fontWeight: '800',
-  },
-  deptScrollRow: {
-    gap: spacing.xs + 2,
-    paddingVertical: 2,
-  },
-  filterChip: {
-    minHeight: touchTarget.minHeight,
-    paddingHorizontal: spacing.md,
-    borderRadius: radii.md,
-    borderWidth: 1,
-    borderColor: colors.borderStrong,
-    backgroundColor: colors.white,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  filterChipActive: {
-    backgroundColor: colors.ustpNavy,
-    borderColor: colors.ustpNavy,
-  },
-  filterChipText: {
-    fontSize: typography.sizes.xs,
-    fontWeight: '700',
-    color: colors.mutedSlate,
-  },
-  filterChipTextActive: {
-    color: colors.ustpGold,
-    fontWeight: '800',
   },
   facultyCard: {
     backgroundColor: colors.white,

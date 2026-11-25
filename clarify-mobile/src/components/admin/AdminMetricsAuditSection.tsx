@@ -2,13 +2,13 @@ import { Feather } from '@expo/vector-icons';
 import React, { useMemo, useState } from 'react';
 import {
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
   TextInput,
   View,
 } from 'react-native';
 
+import { FilterPopover } from '@/components/FilterPopover';
 import {
   EmptyState,
   ErrorBanner,
@@ -74,10 +74,9 @@ export function AdminMetricsAuditSection({
     return <ErrorBanner error={error} onRetry={onRetry} />;
   }
 
-  const hasActiveAuditFilters =
-    auditSearch.trim() !== '' ||
-    auditEditorRoleFilter !== 'all' ||
-    auditChangeTypeFilter !== 'all';
+  const auditFilterCount =
+    (auditEditorRoleFilter !== 'all' ? 1 : 0) +
+    (auditChangeTypeFilter !== 'all' ? 1 : 0);
 
   const { health, latency, kpi } = snapshot;
 
@@ -193,7 +192,7 @@ export function AdminMetricsAuditSection({
           </Text>
         </View>
 
-        {/* Search & Filter Tag Controls */}
+        {/* Search & Single Floating Filter Button */}
         <View style={adminSharedStyles.filterPanel}>
           <View style={adminSharedStyles.searchAndResetRow}>
             <View style={adminSharedStyles.searchWrap}>
@@ -206,7 +205,7 @@ export function AdminMetricsAuditSection({
               <TextInput
                 value={auditSearch}
                 onChangeText={setAuditSearch}
-                placeholder="Search audits by audit ID, post ID, title revision, content diff, or editor name..."
+                placeholder="Search audits by ID, post, editor..."
                 placeholderTextColor={colors.placeholder}
                 accessibilityLabel="Search announcement audit trail"
                 style={adminSharedStyles.searchInput}
@@ -223,119 +222,46 @@ export function AdminMetricsAuditSection({
               )}
             </View>
 
-            {hasActiveAuditFilters && (
-              <Pressable
-                onPress={() => {
-                  setAuditSearch('');
-                  setAuditEditorRoleFilter('all');
-                  setAuditChangeTypeFilter('all');
-                }}
-                accessibilityRole="button"
-                accessibilityLabel="Reset Filters"
-                style={({ pressed }) => [
-                  adminSharedStyles.resetBtn,
-                  pressed && adminSharedStyles.pressed,
-                ]}
-              >
-                <Feather
-                  name="rotate-ccw"
-                  size={13}
-                  color={colors.mutedSlate}
-                />
-                <Text style={adminSharedStyles.resetBtnText}>
-                  Reset Filters
-                </Text>
-              </Pressable>
-            )}
-          </View>
-
-          {/* Editor Role Filter Chips */}
-          <View style={adminSharedStyles.filterGroup}>
-            <Text style={adminSharedStyles.filterGroupLabel}>
-              Editor Role:
-            </Text>
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={adminSharedStyles.chipsScrollRow}
-            >
-              {(
-                [
-                  { key: 'all', label: 'All Editors' },
-                  { key: 'faculty', label: 'Faculty' },
-                  { key: 'dept_head', label: 'Dept Head' },
-                  { key: 'it_admin', label: 'IT Admin' },
-                ] as const
-              ).map((item) => {
-                const active = auditEditorRoleFilter === item.key;
-                return (
-                  <Pressable
-                    key={item.key}
-                    onPress={() => setAuditEditorRoleFilter(item.key)}
-                    accessibilityRole="button"
-                    accessibilityState={{ selected: active }}
-                    accessibilityLabel={`Filter audits by editor role ${item.label}`}
-                    style={[
-                      adminSharedStyles.filterChip,
-                      active && adminSharedStyles.filterChipNavyActive,
-                    ]}
-                  >
-                    <Text
-                      style={[
-                        adminSharedStyles.filterChipText,
-                        active && adminSharedStyles.filterChipTextNavyActive,
-                      ]}
-                    >
-                      {item.label}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </ScrollView>
-          </View>
-
-          {/* Change Type Filter Chips */}
-          <View style={adminSharedStyles.filterGroup}>
-            <Text style={adminSharedStyles.filterGroupLabel}>
-              Change Type:
-            </Text>
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={adminSharedStyles.chipsScrollRow}
-            >
-              {(
-                [
-                  { key: 'all', label: 'All Changes' },
-                  { key: 'title_changed', label: 'Title Changed' },
-                  { key: 'content_changed', label: 'Content Changed' },
-                ] as const
-              ).map((item) => {
-                const active = auditChangeTypeFilter === item.key;
-                return (
-                  <Pressable
-                    key={item.key}
-                    onPress={() => setAuditChangeTypeFilter(item.key)}
-                    accessibilityRole="button"
-                    accessibilityState={{ selected: active }}
-                    accessibilityLabel={`Filter audits by change type ${item.label}`}
-                    style={[
-                      adminSharedStyles.filterChip,
-                      active && adminSharedStyles.filterChipBlueActive,
-                    ]}
-                  >
-                    <Text
-                      style={[
-                        adminSharedStyles.filterChipText,
-                        active && adminSharedStyles.filterChipTextBlueActive,
-                      ]}
-                    >
-                      {item.label}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </ScrollView>
+            <FilterPopover
+              title="Filter Audit Trail"
+              accessibilityLabel="Filter announcement audit trail"
+              compact
+              activeCount={auditFilterCount}
+              onReset={() => {
+                setAuditEditorRoleFilter('all');
+                setAuditChangeTypeFilter('all');
+              }}
+              sections={[
+                {
+                  kind: 'single',
+                  id: 'mobile-audit-editor-role',
+                  label: 'Editor Role',
+                  value: auditEditorRoleFilter,
+                  onChange: (val) =>
+                    setAuditEditorRoleFilter(val as 'all' | UserRole),
+                  options: [
+                    { value: 'all', label: 'All Editors' },
+                    { value: 'faculty', label: 'Faculty' },
+                    { value: 'dept_head', label: 'Dept Head' },
+                    { value: 'it_admin', label: 'IT Admin' },
+                  ],
+                },
+                {
+                  kind: 'single',
+                  id: 'mobile-audit-change-type',
+                  label: 'Change Type',
+                  value: auditChangeTypeFilter,
+                  activeTone: 'blue',
+                  onChange: (val) =>
+                    setAuditChangeTypeFilter(val as AuditChangeTypeFilter),
+                  options: [
+                    { value: 'all', label: 'All Changes' },
+                    { value: 'title_changed', label: 'Title Changed' },
+                    { value: 'content_changed', label: 'Content Changed' },
+                  ],
+                },
+              ]}
+            />
           </View>
         </View>
 

@@ -5,11 +5,20 @@ import Image from 'next/image';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import {
+  Activity,
+  BookOpen,
   ChevronLeft,
   ChevronRight,
+  Database,
+  LayoutDashboard,
   LogOut,
+  type LucideIcon,
+  Megaphone,
   Menu,
   Settings,
+  ShieldCheck,
+  UserCheck,
+  Users,
   X,
 } from 'lucide-react';
 import { useClarify } from '../../context/ClarifyContext';
@@ -156,6 +165,7 @@ export function AppShell({
     label: string;
     href: string;
     active: boolean;
+    icon: LucideIcon;
     badge?: number | null;
   }[] = isAdmin
     ? [
@@ -164,42 +174,54 @@ export function AppShell({
           href: '/admin?tab=verifications',
           active:
             pathname.startsWith('/admin') && resolvedAdminTab === 'verifications',
+          icon: UserCheck,
           badge: adminPendingCount,
         },
         {
           label: 'RBAC Role Management',
           href: '/admin?tab=rbac',
           active: pathname.startsWith('/admin') && resolvedAdminTab === 'rbac',
+          icon: ShieldCheck,
         },
         {
           label: 'Account & Roster Sync',
           href: '/admin?tab=roster-sync',
           active:
             pathname.startsWith('/admin') && resolvedAdminTab === 'roster-sync',
+          icon: Database,
         },
         {
           label: 'System Metrics & Audit Trail',
           href: '/admin?tab=metrics',
           active:
             pathname.startsWith('/admin') && resolvedAdminTab === 'metrics',
+          icon: Activity,
         },
       ]
     : [
-        { label: 'Dashboard', href: '/', active: pathname === '/' },
+        {
+          label: 'Dashboard',
+          href: '/',
+          active: pathname === '/',
+          icon: LayoutDashboard,
+        },
         {
           label: 'Announcements',
           href: '/announcements',
           active: pathname.startsWith('/announcements'),
+          icon: Megaphone,
         },
         {
           label: 'View Faculty',
           href: '/instructors',
           active: pathname.startsWith('/instructors'),
+          icon: Users,
         },
         {
           label: 'Course Hubs',
           href: `/channels/${primaryChannelId}`,
           active: pathname.startsWith('/channels'),
+          icon: BookOpen,
         },
       ];
 
@@ -364,32 +386,43 @@ export function AppShell({
 
             {/* Vertical Navigation Stack */}
             <nav aria-label="Primary Navigation" className="divide-y divide-amber-700/30 border-b border-amber-700/30">
-              {navItems.map((item) => (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  onClick={handleNavClickOnMobile}
-                  aria-current={item.active ? 'page' : undefined}
-                  className={`flex items-center justify-end gap-2 w-full px-5 py-3.5 text-right text-sm font-bold transition-colors ${
-                    item.active
-                      ? 'bg-ustp-orange-dark text-ustp-text font-extrabold'
-                      : 'hover:bg-ustp-orange-dark/50 text-ustp-text'
-                  }`}
-                >
-                  <span className="leading-snug">{item.label}</span>
-                  {typeof item.badge === 'number' && (
-                    <span
-                      className={`inline-flex items-center justify-center min-w-[22px] h-5 px-1.5 rounded text-[11px] font-mono font-extrabold tabular-nums shrink-0 ${
-                        item.badge > 0
-                          ? 'bg-ustp-navy text-ustp-gold'
-                          : 'bg-ustp-navy/15 text-ustp-navy'
+              {navItems.map((item) => {
+                const NavIcon = item.icon;
+                return (
+                  <Link
+                    key={item.href}
+                    href={item.href}
+                    onClick={handleNavClickOnMobile}
+                    aria-current={item.active ? 'page' : undefined}
+                    className={`flex items-center justify-end gap-2.5 w-full px-5 py-3.5 text-right text-sm font-bold transition-colors ${
+                      item.active
+                        ? 'bg-ustp-orange-dark text-ustp-text font-extrabold'
+                        : 'hover:bg-ustp-orange-dark/50 text-ustp-text'
+                    }`}
+                  >
+                    {typeof item.badge === 'number' && (
+                      <span
+                        className={`inline-flex items-center justify-center min-w-[22px] h-5 px-1.5 rounded text-[11px] font-mono font-extrabold tabular-nums shrink-0 ${
+                          item.badge > 0
+                            ? 'bg-ustp-navy text-ustp-gold'
+                            : 'bg-ustp-navy/15 text-ustp-navy'
+                        }`}
+                      >
+                        {item.badge}
+                      </span>
+                    )}
+                    <span className="leading-snug">{item.label}</span>
+                    <NavIcon
+                      aria-hidden="true"
+                      className={`w-4 h-4 shrink-0 ${
+                        item.active
+                          ? 'text-ustp-navy stroke-[2.4]'
+                          : 'text-ustp-navy/85 stroke-[2]'
                       }`}
-                    >
-                      {item.badge}
-                    </span>
-                  )}
-                </Link>
-              ))}
+                    />
+                  </Link>
+                );
+              })}
             </nav>
           </div>
 
@@ -401,18 +434,18 @@ export function AppShell({
                 handleNavClickOnMobile();
                 setIsSettingsModalOpen(true);
               }}
-              className="w-full flex items-center justify-end gap-2 px-2 py-2 min-h-[40px] text-sm font-bold text-ustp-text hover:underline cursor-pointer"
+              className="w-full flex items-center justify-end gap-2.5 px-1 py-2 min-h-[40px] text-sm font-bold text-ustp-text hover:underline cursor-pointer"
             >
-              <Settings className="w-4 h-4" />
               <span>Settings</span>
+              <Settings className="w-4 h-4 text-ustp-navy/85 shrink-0" />
             </button>
             <button
               type="button"
               onClick={(e) => openLogoutConfirm(e.currentTarget)}
-              className="w-full flex items-center justify-end gap-2 px-2 py-2 min-h-[40px] text-sm font-bold text-ustp-text hover:underline cursor-pointer"
+              className="w-full flex items-center justify-end gap-2.5 px-1 py-2 min-h-[40px] text-sm font-bold text-ustp-text hover:underline cursor-pointer"
             >
-              <LogOut className="w-4 h-4" />
               <span>Logout</span>
+              <LogOut className="w-4 h-4 text-ustp-navy/85 shrink-0" />
             </button>
           </div>
         </aside>

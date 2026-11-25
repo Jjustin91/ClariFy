@@ -40,6 +40,7 @@ interface NavDestination {
   label: string;
   href: string;
   active: boolean;
+  icon: React.ComponentProps<typeof Feather>['name'];
   adminTab?: AdminSectionTab;
   badge?: number | null;
 }
@@ -163,6 +164,7 @@ export function MobileAppShell({
           href: '/admin?tab=verifications',
           adminTab: 'verifications',
           active: isAdminRoute && resolvedAdminTab === 'verifications',
+          icon: 'user-check',
           badge: realtime?.adminPendingCount ?? null,
         },
         {
@@ -171,6 +173,7 @@ export function MobileAppShell({
           href: '/admin?tab=rbac',
           adminTab: 'rbac',
           active: isAdminRoute && resolvedAdminTab === 'rbac',
+          icon: 'shield',
         },
         {
           key: 'admin-roster-sync',
@@ -178,6 +181,7 @@ export function MobileAppShell({
           href: '/admin?tab=roster-sync',
           adminTab: 'roster-sync',
           active: isAdminRoute && resolvedAdminTab === 'roster-sync',
+          icon: 'database',
         },
         {
           key: 'admin-metrics',
@@ -185,6 +189,7 @@ export function MobileAppShell({
           href: '/admin?tab=metrics',
           adminTab: 'metrics',
           active: isAdminRoute && resolvedAdminTab === 'metrics',
+          icon: 'activity',
         },
       ]
     : [
@@ -193,24 +198,28 @@ export function MobileAppShell({
           label: 'Dashboard',
           href: '/',
           active: isDashboardActive,
+          icon: 'grid',
         },
         {
           key: 'announcements',
           label: 'Announcements',
           href: '/announcements',
           active: isAnnouncementsActive,
+          icon: 'volume-2',
         },
         {
           key: 'instructors',
           label: 'View Faculty',
           href: '/instructors',
           active: isInstructorsActive,
+          icon: 'users',
         },
         {
           key: 'channels',
           label: 'Course Hubs',
           href: defaultChannelRoute,
           active: isChannelsActive,
+          icon: 'book-open',
         },
       ];
 
@@ -478,6 +487,11 @@ export function MobileAppShell({
                         >
                           {item.label}
                         </Text>
+                        <Feather
+                          name={item.icon}
+                          size={18}
+                          color={colors.ustpNavy}
+                        />
                       </View>
                     </Pressable>
                   );
@@ -499,8 +513,8 @@ export function MobileAppShell({
                   pressed && styles.pressed,
                 ]}
               >
-                <Feather name="settings" size={16} color={colors.ustpText} />
                 <Text style={styles.footerActionText}>Settings</Text>
+                <Feather name="settings" size={17} color={colors.ustpNavy} />
               </Pressable>
 
               <Pressable
@@ -515,8 +529,8 @@ export function MobileAppShell({
                   pressed && styles.pressed,
                 ]}
               >
-                <Feather name="log-out" size={16} color={colors.ustpText} />
                 <Text style={styles.footerActionText}>Logout</Text>
+                <Feather name="log-out" size={17} color={colors.ustpNavy} />
               </Pressable>
             </View>
           </Animated.View>

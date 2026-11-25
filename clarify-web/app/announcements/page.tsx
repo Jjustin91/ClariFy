@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { FileText, Image as ImageIcon, Search } from 'lucide-react';
 import { AppShell } from '@/src/components/layout/AppShell';
 import { AnnouncementCard } from '@/src/components/announcements/AnnouncementCard';
+import { FilterPopover } from '@/src/components/ui/FilterPopover';
 import {
   EmptyState,
   ErrorBanner,
@@ -122,14 +123,16 @@ export default function AnnouncementsPage() {
   }
 
   const canPublishCampusWide = canPublishCampusWideAnnouncements(user.role);
+  const activeFilterCount =
+    (selectedTag !== 'ALL' ? 1 : 0) + (sortBy !== 'latest' ? 1 : 0);
 
   return (
     <AppShell title="Announcements">
       <div className="flex-1 flex flex-col p-4 sm:p-6 lg:p-8 max-w-6xl w-full mx-auto space-y-5 sm:space-y-6">
-        {/* Top Controls Row matching Wireframes Pages 2, 5 & 6 */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4">
+        {/* Top Controls Row: Search Input + Single Floating Filter Button (FR-05) */}
+        <div className="flex items-center justify-between gap-3">
           {/* Left: Rounded "Search....." input (FR-05) */}
-          <div className="relative w-full sm:max-w-xs">
+          <div className="relative flex-1 sm:max-w-sm">
             <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-2.5" />
             <input
               type="search"
@@ -144,58 +147,55 @@ export default function AnnouncementsPage() {
             />
           </div>
 
-          {/* Right: "Sort by..." dropdown with red indicator matching Wireframes */}
-          <div className="flex items-center gap-2 self-end sm:self-auto">
-            <label
-              htmlFor="announcements-sort-select"
-              className="text-xs font-bold text-ustp-text underline cursor-pointer"
-            >
-              Sort by...
-            </label>
-            <select
-              id="announcements-sort-select"
-              value={sortBy}
-              onChange={(e) => {
-                setSortBy(
-                  e.target.value as 'latest' | 'oldest' | 'read_reach'
-                );
-                setPage(1);
-              }}
-              className="text-xs font-semibold text-ustp-text bg-white border border-slate-300 rounded-md px-2.5 py-1.5 focus:outline-none focus:border-ustp-navy"
-            >
-              <option value="latest">Latest (Urgent Pinned First)</option>
-              <option value="oldest">Oldest First</option>
-              <option value="read_reach">Highest Read Reach (%)</option>
-            </select>
-          </div>
-        </div>
-
-        {/* Tag Filter Buttons (FR-05) */}
-        <div
-          className="flex items-center gap-1.5 flex-wrap"
-          role="group"
-          aria-label="Filter announcements by tag"
-        >
-          {FILTER_TAGS.map((tag) => {
-            const active = selectedTag === tag;
-            return (
-              <button
-                key={tag}
-                type="button"
-                onClick={() => {
-                  setSelectedTag(tag);
+          {/* Right: Single Filter Button opening Floating Tab */}
+          <FilterPopover
+            title="Filter & Sort Announcements"
+            ariaLabel="Filter and sort announcements"
+            activeCount={activeFilterCount}
+            onReset={() => {
+              setSelectedTag('ALL');
+              setSortBy('latest');
+              setPage(1);
+            }}
+            sections={[
+              {
+                kind: 'single',
+                id: 'announcement-tag',
+                label: 'Tag',
+                value: selectedTag,
+                onChange: (val) => {
+                  setSelectedTag(val);
                   setPage(1);
-                }}
-                className={`px-3 py-1 rounded-md text-xs font-bold border transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                  active
-                    ? 'bg-ustp-navy text-ustp-gold border-ustp-navy'
-                    : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'
-                }`}
-              >
-                {tag === 'ALL' ? 'All Tags' : tag}
-              </button>
-            );
-          })}
+                },
+                options: FILTER_TAGS.map((tag) => ({
+                  value: tag,
+                  label: tag === 'ALL' ? 'All Tags' : tag,
+                })),
+              },
+              {
+                kind: 'single',
+                id: 'announcement-sort',
+                label: 'Sort by',
+                value: sortBy,
+                activeTone: 'blue',
+                onChange: (val) => {
+                  setSortBy(val as 'latest' | 'oldest' | 'read_reach');
+                  setPage(1);
+                },
+                options: [
+                  {
+                    value: 'latest',
+                    label: 'Latest (Urgent Pinned First)',
+                  },
+                  { value: 'oldest', label: 'Oldest First' },
+                  {
+                    value: 'read_reach',
+                    label: 'Highest Read Reach (%)',
+                  },
+                ],
+              },
+            ]}
+          />
         </div>
 
         {/* Department Head Quick-Create Trigger Bar for Campus-Wide Announcements */}

@@ -5,7 +5,6 @@ import {
   FlatList,
   Pressable,
   RefreshControl,
-  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -17,6 +16,7 @@ import {
   AnnouncementFormModal,
   type AnnouncementComposerMode,
 } from '@/components/AnnouncementFormModal';
+import { FilterPopover } from '@/components/FilterPopover';
 import { MobileAppShell } from '@/components/MobileAppShell';
 import {
   EmptyState,
@@ -168,102 +168,75 @@ export default function MobileAnnouncementsScreen() {
 
   const keyExtractor = useCallback((item: Announcement) => String(item.id), []);
 
+  const activeFilterCount =
+    (selectedTag !== 'ALL' ? 1 : 0) + (sortBy !== 'latest' ? 1 : 0);
+
   const renderListHeader = () => (
     <View style={styles.controlsWrap}>
-      {/* Search Input */}
-      <View style={styles.searchBox}>
-        <Feather name="search" size={16} color={colors.mutedSlate} />
-        <TextInput
-          value={searchInput}
-          onChangeText={setSearchInput}
-          placeholder="Search... (e.g., IT314, ES211a, CEA)"
-          placeholderTextColor={colors.placeholder}
-          returnKeyType="search"
-          accessibilityLabel="Search announcements by course code, keyword, or department"
-          style={styles.searchInput}
-        />
-        {searchInput.length > 0 && (
-          <Pressable
-            onPress={() => {
-              setSearchInput('');
-              setDebouncedSearch('');
-            }}
-            accessibilityRole="button"
-            accessibilityLabel="Clear search"
-            style={styles.clearIconBtn}
-          >
-            <Feather name="x" size={16} color={colors.mutedSlate} />
-          </Pressable>
-        )}
-      </View>
-
-      {/* Sort Selector */}
-      <View style={styles.sortRow}>
-        <Text style={styles.sortLabel}>Sort by:</Text>
-        <View style={styles.sortPillsRow}>
-          {SORT_OPTIONS.map((opt) => {
-            const active = sortBy === opt.value;
-            return (
-              <Pressable
-                key={opt.value}
-                onPress={() => setSortBy(opt.value)}
-                accessibilityRole="button"
-                accessibilityLabel={`Sort announcements by ${opt.label}`}
-                accessibilityState={{ selected: active }}
-                style={({ pressed }) => [
-                  styles.sortPill,
-                  active && styles.sortPillActive,
-                  pressed && styles.pressed,
-                ]}
-              >
-                <Text
-                  style={[
-                    styles.sortPillText,
-                    active && styles.sortPillTextActive,
-                  ]}
-                >
-                  {opt.label}
-                </Text>
-              </Pressable>
-            );
-          })}
-        </View>
-      </View>
-
-      {/* Horizontal Tag Filter Row */}
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.tagScrollRow}
-      >
-        {FILTER_TAGS.map((tag) => {
-          const active = selectedTag === tag;
-          const label = tag === 'ALL' ? 'All Tags' : tag;
-          return (
+      {/* Search Input + Single Filter Button */}
+      <View style={styles.searchFilterRow}>
+        <View style={styles.searchBox}>
+          <Feather name="search" size={16} color={colors.mutedSlate} />
+          <TextInput
+            value={searchInput}
+            onChangeText={setSearchInput}
+            placeholder="Search... (e.g., IT314, CEA)"
+            placeholderTextColor={colors.placeholder}
+            returnKeyType="search"
+            accessibilityLabel="Search announcements by course code, keyword, or department"
+            style={styles.searchInput}
+          />
+          {searchInput.length > 0 && (
             <Pressable
-              key={tag}
-              onPress={() => setSelectedTag(tag)}
+              onPress={() => {
+                setSearchInput('');
+                setDebouncedSearch('');
+              }}
               accessibilityRole="button"
-              accessibilityLabel={`Filter by ${label}`}
-              accessibilityState={{ selected: active }}
-              style={({ pressed }) => [
-                styles.filterChip,
-                active && styles.filterChipActive,
-                pressed && styles.pressed,
-              ]}
+              accessibilityLabel="Clear search"
+              style={styles.clearIconBtn}
             >
-              <Text
-                style={[
-                  styles.filterChipText,
-                  active && styles.filterChipTextActive,
-                ]}
-              >
-                {label}
-              </Text>
+              <Feather name="x" size={16} color={colors.mutedSlate} />
             </Pressable>
-          );
-        })}
-      </ScrollView>
+          )}
+        </View>
+
+        <FilterPopover
+          title="Filter & Sort Announcements"
+          accessibilityLabel="Filter and sort announcements"
+          activeCount={activeFilterCount}
+          onReset={() => {
+            setSelectedTag('ALL');
+            setSortBy('latest');
+          }}
+          sections={[
+            {
+              kind: 'single',
+              id: 'mobile-announcement-tag',
+              label: 'Tag',
+              value: selectedTag,
+              onChange: (val) => setSelectedTag(val),
+              options: FILTER_TAGS.map((tag) => ({
+                value: tag,
+                label: tag === 'ALL' ? 'All Tags' : tag,
+              })),
+            },
+            {
+              kind: 'single',
+              id: 'mobile-announcement-sort',
+              label: 'Sort by',
+              value: sortBy,
+              activeTone: 'blue',
+              onChange: (val) =>
+                setSortBy(val as 'latest' | 'oldest' | 'read_reach'),
+              options: SORT_OPTIONS.map((opt) => ({
+                value: opt.value,
+                label: opt.label,
+              })),
+            },
+          ]}
+        />
+      </View>
 
       {/* Faculty / Department Head Quick-Create Trigger Bar (Strictly Hidden for Students) */}
       {canPublish && (canPublishCampusWide || hasHandledHubs) && (
@@ -419,7 +392,13 @@ const styles = StyleSheet.create({
     gap: spacing.md,
     marginBottom: spacing.lg,
   },
+  searchFilterRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
   searchBox: {
+    flex: 1,
     minHeight: touchTarget.minHeight,
     backgroundColor: colors.white,
     borderWidth: 1,
@@ -441,72 +420,6 @@ const styles = StyleSheet.create({
     minHeight: touchTarget.minHeight,
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  sortRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    flexWrap: 'wrap',
-    gap: spacing.sm,
-  },
-  sortLabel: {
-    fontSize: typography.sizes.xs,
-    fontWeight: '800',
-    color: colors.ustpText,
-  },
-  sortPillsRow: {
-    flexDirection: 'row',
-    gap: spacing.xs + 2,
-  },
-  sortPill: {
-    minHeight: touchTarget.minHeight,
-    paddingHorizontal: spacing.md,
-    borderRadius: radii.md,
-    borderWidth: 1,
-    borderColor: colors.borderStrong,
-    backgroundColor: colors.white,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  sortPillActive: {
-    backgroundColor: colors.ustpNavy,
-    borderColor: colors.ustpNavy,
-  },
-  sortPillText: {
-    fontSize: typography.sizes.xs,
-    fontWeight: '700',
-    color: colors.ustpText,
-  },
-  sortPillTextActive: {
-    color: colors.ustpGold,
-    fontWeight: '800',
-  },
-  tagScrollRow: {
-    gap: spacing.xs + 2,
-    paddingVertical: 2,
-  },
-  filterChip: {
-    minHeight: touchTarget.minHeight,
-    paddingHorizontal: spacing.md,
-    borderRadius: radii.md,
-    borderWidth: 1,
-    borderColor: colors.borderStrong,
-    backgroundColor: colors.white,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  filterChipActive: {
-    backgroundColor: colors.ustpNavy,
-    borderColor: colors.ustpNavy,
-  },
-  filterChipText: {
-    fontSize: typography.sizes.xs,
-    fontWeight: '700',
-    color: colors.mutedSlate,
-  },
-  filterChipTextActive: {
-    color: colors.ustpGold,
-    fontWeight: '800',
   },
   separator: {
     height: spacing.md,

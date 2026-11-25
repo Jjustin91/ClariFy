@@ -36,6 +36,7 @@ import {
   SkeletonCards,
 } from '@/src/components/ui/StateViews';
 import { ConfirmDeleteModal } from '@/src/components/ui/ConfirmDeleteModal';
+import { FilterPopover } from '@/src/components/ui/FilterPopover';
 import { useClarify } from '@/src/context/ClarifyContext';
 import {
   convertThreadToFaqApi,
@@ -617,8 +618,9 @@ export default function CourseHubPage() {
         >
           <div className="space-y-3">
             <div className="flex items-center justify-between px-1">
-              <h2 className="text-xs font-extrabold uppercase tracking-wider text-ustp-gold">
-                COURSE HUBS
+              <h2 className="text-xs font-extrabold uppercase tracking-wider text-ustp-gold inline-flex items-center gap-1.5">
+                <BookOpen className="w-3.5 h-3.5 shrink-0" />
+                <span>COURSE HUBS</span>
               </h2>
               <button
                 type="button"
@@ -1182,89 +1184,67 @@ export default function CourseHubPage() {
                     )}
                   </div>
 
-                  {/* Filter Bar: All | Unresolved | Resolved + Unread Toggle, plus Legend */}
-                  <div className="bg-white border border-slate-200 rounded-lg p-3 space-y-2.5">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div
-                        role="group"
-                        aria-label="Filter Q&A threads by resolution status"
-                        className="flex flex-wrap items-center gap-1.5"
-                      >
-                        <button
-                          type="button"
-                          onClick={() => setQaStatusFilter('all')}
-                          aria-pressed={qaStatusFilter === 'all'}
-                          className={`px-3 py-1.5 rounded text-xs font-extrabold tabular-nums transition-colors cursor-pointer focus-visible:outline-2 focus-visible:outline-ustp-navy ${
-                            qaStatusFilter === 'all'
-                              ? 'bg-ustp-navy text-white border border-ustp-navy'
-                              : 'bg-slate-50 text-ustp-text border border-slate-200 hover:bg-slate-100'
-                          }`}
-                        >
-                          All ({qaFilterCounts.all})
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setQaStatusFilter('unresolved')}
-                          aria-pressed={qaStatusFilter === 'unresolved'}
-                          className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-extrabold tabular-nums transition-colors cursor-pointer focus-visible:outline-2 focus-visible:outline-ustp-navy ${
-                            qaStatusFilter === 'unresolved'
-                              ? 'bg-ustp-navy text-ustp-gold border border-ustp-navy'
-                              : canResolve && qaFilterCounts.unresolved > 0
-                              ? 'bg-amber-100 text-amber-950 border border-amber-400 hover:bg-amber-200'
-                              : 'bg-slate-50 text-ustp-text border border-slate-200 hover:bg-slate-100'
-                          }`}
-                        >
-                          <span>Unresolved ({qaFilterCounts.unresolved})</span>
-                          {canResolve && qaFilterCounts.unresolved > 0 && (
-                            <span className="px-1.5 py-0.2 rounded text-[10px] font-extrabold bg-ustp-gold text-ustp-navy">
-                              Needs Triage
-                            </span>
-                          )}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setQaStatusFilter('resolved')}
-                          aria-pressed={qaStatusFilter === 'resolved'}
-                          className={`px-3 py-1.5 rounded text-xs font-extrabold tabular-nums transition-colors cursor-pointer focus-visible:outline-2 focus-visible:outline-ustp-navy ${
-                            qaStatusFilter === 'resolved'
-                              ? 'bg-ustp-navy text-white border border-ustp-navy'
-                              : 'bg-slate-50 text-ustp-text border border-slate-200 hover:bg-slate-100'
-                          }`}
-                        >
-                          Resolved ({qaFilterCounts.resolved})
-                        </button>
-                      </div>
-
-                      <button
-                        type="button"
-                        onClick={() => setQaUnreadOnly((prev) => !prev)}
-                        aria-pressed={qaUnreadOnly}
-                        className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-extrabold tabular-nums transition-colors cursor-pointer focus-visible:outline-2 focus-visible:outline-ustp-navy ${
-                          qaUnreadOnly
-                            ? 'bg-red-700 text-white border border-red-700'
-                            : qaFilterCounts.unread > 0
-                            ? 'bg-red-50 text-red-800 border border-red-300 hover:bg-red-100'
-                            : 'bg-slate-50 text-slate-600 border border-slate-200 hover:bg-slate-100'
-                        }`}
-                      >
-                        <span
-                          aria-hidden="true"
-                          className={`w-2 h-2 rounded-full ${
-                            qaUnreadOnly
-                              ? 'bg-white'
-                              : qaFilterCounts.unread > 0
-                              ? 'bg-red-600'
-                              : 'bg-slate-400'
-                          }`}
-                        />
-                        <span>Unread ({qaFilterCounts.unread})</span>
-                      </button>
-                    </div>
+                  {/* Single Filter Button + Status Legend */}
+                  <div className="bg-white border border-slate-200 rounded-lg p-3 flex flex-wrap items-center justify-between gap-3">
+                    <FilterPopover
+                      title="Filter Q&A Threads"
+                      ariaLabel="Filter Q&A threads"
+                      align="left"
+                      activeCount={
+                        (qaStatusFilter !== 'all' ? 1 : 0) +
+                        (qaUnreadOnly ? 1 : 0)
+                      }
+                      onReset={() => {
+                        setQaStatusFilter('all');
+                        setQaUnreadOnly(false);
+                      }}
+                      sections={[
+                        {
+                          kind: 'single',
+                          id: 'qa-status',
+                          label: 'Resolution Status',
+                          value: qaStatusFilter,
+                          onChange: (val) =>
+                            setQaStatusFilter(val as QaThreadStatusFilter),
+                          options: [
+                            {
+                              value: 'all',
+                              label: `All (${qaFilterCounts.all})`,
+                            },
+                            {
+                              value: 'unresolved',
+                              label: `Unresolved (${qaFilterCounts.unresolved})`,
+                              badge:
+                                canResolve && qaFilterCounts.unresolved > 0
+                                  ? 'Needs Triage'
+                                  : undefined,
+                              highlight:
+                                canResolve && qaFilterCounts.unresolved > 0
+                                  ? 'amber'
+                                  : undefined,
+                            },
+                            {
+                              value: 'resolved',
+                              label: `Resolved (${qaFilterCounts.resolved})`,
+                            },
+                          ],
+                        },
+                        {
+                          kind: 'toggle',
+                          id: 'qa-unread',
+                          label: 'Activity',
+                          checked: qaUnreadOnly,
+                          onToggle: () => setQaUnreadOnly((prev) => !prev),
+                          optionLabel: `Unread Only (${qaFilterCounts.unread})`,
+                          hasAlert: qaFilterCounts.unread > 0,
+                        },
+                      ]}
+                    />
 
                     {/* Legend explaining NEW dot + badge, UNRESOLVED, and RESOLVED */}
                     <div
                       aria-label="Q&A status legend"
-                      className="flex flex-wrap items-center gap-x-4 gap-y-1 pt-2 border-t border-slate-100 text-[11px] text-slate-600"
+                      className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-slate-600"
                     >
                       <span className="font-bold text-slate-500">Legend:</span>
                       <span className="inline-flex items-center gap-1.5">
