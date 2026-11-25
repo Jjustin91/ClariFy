@@ -23,7 +23,7 @@ import type { ApiError } from '@/types/api';
 
 /**
  * Ported from clarify-web/app/login/page.tsx and unified for mobile handsets:
- * single full-screen USTP Orange canvas with navy ClariFy wordmark + campus branding
+ * single full-screen USTP Orange canvas with navy/gold ClariFy wordmark badge + campus branding
  * at the top, Institutional Sign In form in the center, and Sign Up callout below Enter.
  */
 export default function MobileLoginScreen() {
@@ -115,10 +115,10 @@ export default function MobileLoginScreen() {
           showsVerticalScrollIndicator={false}
         >
           <View style={styles.loginFormContainer}>
-            {/* Top Institutional Branding directly on USTP Orange */}
+            {/* Top Institutional Branding Header */}
             <View style={styles.brandingHeader}>
-              <View style={styles.logoWrap}>
-                <ClarifyLogoWordmark height={48} color={colors.ustpNavy} />
+              <View style={styles.logoBadge}>
+                <ClarifyLogoWordmark height={44} color={colors.ustpOrange} />
               </View>
               <Text style={styles.platformSubtitle}>
                 Unified Campus Noticeboard &amp; Scoped Communication Platform
@@ -384,10 +384,16 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: spacing.sm,
   },
-  logoWrap: {
+  logoBadge: {
+    backgroundColor: colors.ustpNavy,
+    borderWidth: 2,
+    borderColor: colors.ustpGold,
+    borderRadius: radii.xl,
+    paddingHorizontal: spacing.xl,
+    paddingVertical: 10,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: spacing.xs,
+    marginBottom: spacing.md,
   },
   platformSubtitle: {
     fontSize: typography.sizes.body,
@@ -395,7 +401,6 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: colors.ustpNavy,
     textAlign: 'center',
-    marginTop: spacing.xs,
   },
   campusCaption: {
     fontSize: typography.sizes.xs,
