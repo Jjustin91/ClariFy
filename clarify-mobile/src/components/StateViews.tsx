@@ -128,7 +128,7 @@ export function ErrorBanner({
   retryLabel?: string;
 }) {
   const status = error?.status;
-  const isOffline = status === 0;
+  const isOffline = status === 0 && (!error?.code || error.code === 'offline');
   const isForbidden = status === 403;
 
   const heading = isOffline

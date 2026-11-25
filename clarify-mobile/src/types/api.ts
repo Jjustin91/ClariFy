@@ -329,6 +329,13 @@ export interface PersistenceStatus {
   revision: number;
 }
 
+export type ApiErrorCode =
+  | 'offline'
+  | 'timeout'
+  | 'file_unreadable'
+  | 'upload_failed'
+  | 'network_error';
+
 export interface ApiError {
   status: number;
   message: string;
@@ -336,6 +343,12 @@ export interface ApiError {
   retryAfter?: number | null;
   verification_status?: VerificationStatus;
   data?: unknown;
+  /** Non-secret diagnostic category for client-side/network failures (status === 0). */
+  code?: ApiErrorCode;
+  /** Original error name (e.g., 'AbortError', 'FetchError', 'UploadPreflightError'). */
+  causeName?: string;
+  /** Sanitized original error message with secrets/tokens stripped. */
+  causeMessage?: string;
 }
 
 export type LaravelValidationError = ApiError;

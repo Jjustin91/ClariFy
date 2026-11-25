@@ -4,13 +4,16 @@ import test from 'node:test';
 import {
   apiClient,
   loginApi,
+  mapClientErrorToApiError,
   mapHttpErrorToApiError,
   onSessionExpired,
   parseRetryAfterSeconds,
   registerApi,
   requestPasswordOtpApi,
   resetPasswordApi,
+  sendChannelChatMessageApi,
   updateProfileApi,
+  UPLOAD_REQUEST_TIMEOUT_MS,
   verifyPasswordOtpApi,
 } from './api-client.ts';
 import { getFieldValidationError } from './domain-logic.ts';
@@ -22,6 +25,14 @@ import {
   setSecureTokenStorageAdapterForTests,
   TOKEN_STORAGE_KEY,
 } from './secure-token.ts';
+import {
+  prepareFormDataForUpload,
+  prepareUploadFileForFormData,
+  sanitizeUploadErrorDetail,
+  setUploadFileSystemAdapterForTests,
+  type UploadFileSystemAdapter,
+  type UploadFileSystemFile,
+} from './upload-file.ts';
 import type { ApiError } from '../types/api.ts';
 
 function createMockFetchResponse(options: {
@@ -489,6 +500,446 @@ test('registerApi posts trimmed first_name and last_name without Bearer auth', a
     assert.equal(req.body.last_name, 'Dela Cruz');
     assert.equal('name' in req.body, false);
   } finally {
+    globalThis.fetch = originalFetch;
+    await clearSecureToken();
+  }
+});
+
+test('mapClientErrorToApiError preserves non-secret cause details and maps failure types accurately', () => {
+  // 1. Timeout on upload vs non-upload
+  const abortErr = new Error('The operation was aborted.');
+  abortErr.name = 'AbortError';
+
+  const nonUploadTimeout = mapClientErrorToApiError(abortErr, { isUpload: false });
+  assert.equal(nonUploadTimeout.status, 0);
+  assert.equal(nonUploadTimeout.code, 'timeout');
+  assert.equal(nonUploadTimeout.causeName, 'AbortError');
+  assert.equal(nonUploadTimeout.causeMessage, 'The operation was aborted.');
+  assert.equal(
+    nonUploadTimeout.message,
+    'Request timed out. Please check your connection and try again.'
+  );
+
+  const uploadTimeout = mapClientErrorToApiError(abortErr, { isUpload: true });
+  assert.equal(uploadTimeout.code, 'timeout');
+  assert.equal(uploadTimeout.causeName, 'AbortError');
+  assert.match(uploadTimeout.message, /Upload timed out/i);
+
+  // 2. Unreadable file error
+  const fileErr = new Error('ENOENT: no such file or directory');
+  fileErr.name = 'FileNotFoundException';
+  const mappedFile = mapClientErrorToApiError(fileErr, { isUpload: true });
+  assert.equal(mappedFile.code, 'file_unreadable');
+  assert.equal(mappedFile.causeName, 'FileNotFoundException');
+  assert.match(mappedFile.message, /Upload failed: could not read file/i);
+
+  // 3. Expo SDK 58 FormData serialization failure
+  const formDataErr = new Error('Unsupported FormDataPart implementation');
+  const mappedFormData = mapClientErrorToApiError(formDataErr, { isUpload: true });
+  assert.equal(mappedFormData.code, 'upload_failed');
+  assert.equal(mappedFormData.causeMessage, 'Unsupported FormDataPart implementation');
+  assert.match(mappedFormData.message, /could not prepare attachment data/i);
+
+  // 4. Genuine offline / DNS / connection abort failures
+  const dnsErr = new Error('fetch failed: Unable to resolve host "api.ustpclarify.tech"');
+  dnsErr.name = 'FetchError';
+  const mappedOfflineUpload = mapClientErrorToApiError(dnsErr, { isUpload: true });
+  assert.equal(mappedOfflineUpload.code, 'offline');
+  assert.equal(mappedOfflineUpload.causeName, 'FetchError');
+  assert.match(mappedOfflineUpload.message, /no network connection/i);
+
+  const connAbortErr = new Error('Software caused connection abort');
+  connAbortErr.name = 'SocketException';
+  const mappedConnAbort = mapClientErrorToApiError(connAbortErr, { isUpload: true });
+  assert.equal(mappedConnAbort.code, 'offline');
+
+  // 5. Unexpected upload error surfaces concise sanitized reason and redacts tokens
+  const tlsErr = new Error(
+    'fetch failed: SSL handshake failed Authorization: Bearer super-secret-token-123'
+  );
+  tlsErr.name = 'FetchError';
+  const mappedTls = mapClientErrorToApiError(tlsErr, { isUpload: true });
+  assert.equal(mappedTls.code, 'upload_failed');
+  assert.ok(mappedTls.causeMessage?.includes('[REDACTED]'));
+  assert.equal(mappedTls.causeMessage?.includes('super-secret-token-123'), false);
+  assert.equal(mappedTls.message.includes('super-secret-token-123'), false);
+  assert.match(mappedTls.message, /^Upload failed: SSL handshake failed/i);
+
+  // 6. Direct sanitizer test
+  assert.equal(
+    sanitizeUploadErrorDetail('Bearer abc.def.ghi failed'),
+    'Bearer [REDACTED] failed'
+  );
+
+  // 7. HTTP 413 mapping
+  const err413 = mapHttpErrorToApiError({ status: 413, json: {} });
+  assert.equal(err413.status, 413);
+  assert.match(err413.message, /too large/i);
+});
+
+function createMockFsAdapter(options: {
+  files: Record<string, { exists: boolean; bytes?: Uint8Array; readError?: Error; copyError?: Error }>;
+  deletedUris?: string[];
+  copiedUris?: string[];
+}): UploadFileSystemAdapter {
+  const store = new Map<string, { exists: boolean; bytes?: Uint8Array; readError?: Error; copyError?: Error }>(
+    Object.entries(options.files)
+  );
+  let seq = 0;
+
+  const makeHandle = (uri: string): UploadFileSystemFile => ({
+    get uri() {
+      return uri;
+    },
+    get exists() {
+      return Boolean(store.get(uri)?.exists);
+    },
+    get size() {
+      return store.get(uri)?.bytes?.byteLength ?? 0;
+    },
+    async copy(destination) {
+      const entry = store.get(uri);
+      if (entry?.copyError) {
+        throw entry.copyError;
+      }
+      if (!entry?.exists || !entry.bytes) {
+        throw new Error('Source file missing during copy');
+      }
+      store.set(destination.uri, {
+        exists: true,
+        bytes: new Uint8Array(entry.bytes),
+      });
+      options.copiedUris?.push(destination.uri);
+    },
+    async bytes() {
+      const entry = store.get(uri);
+      if (entry?.readError) {
+        throw entry.readError;
+      }
+      if (!entry?.exists || !entry.bytes) {
+        throw new Error('Cannot read file bytes');
+      }
+      return entry.bytes;
+    },
+    delete() {
+      store.delete(uri);
+      options.deletedUris?.push(uri);
+    },
+  });
+
+  return {
+    createFile(uri: string) {
+      return makeHandle(uri);
+    },
+    createCacheUploadFile(fileName: string) {
+      seq += 1;
+      const cacheUri = `file:///cache/clarify-uploads/${seq}_${fileName}`;
+      return makeHandle(cacheUri);
+    },
+  };
+}
+
+test('prepareUploadFileForFormData verifies file:// directly, copies content:// to cache, and rejects unreadable/empty files', async () => {
+  const deletedUris: string[] = [];
+  const copiedUris: string[] = [];
+
+  try {
+    setUploadFileSystemAdapterForTests(
+      createMockFsAdapter({
+        files: {
+          'file:///cache/ImagePicker/photo.jpg': {
+            exists: true,
+            bytes: new Uint8Array([0xff, 0xd8, 0xff, 0xe0]),
+          },
+          'content://com.android.providers.downloads/document/42': {
+            exists: true,
+            bytes: new Uint8Array([0x25, 0x50, 0x44, 0x46]),
+          },
+          'file:///cache/empty.txt': {
+            exists: true,
+            bytes: new Uint8Array([]),
+          },
+          'file:///cache/unreadable_direct.m4a': {
+            exists: true,
+            bytes: new Uint8Array([1, 2, 3, 4]),
+            readError: new Error('EACCES: direct read blocked'),
+          },
+          'file:///cache/broken.pdf': {
+            exists: true,
+            bytes: new Uint8Array([9, 8, 7]),
+            readError: new Error('EIO: disk read failed'),
+            copyError: new Error('EIO: copy failed'),
+          },
+        },
+        deletedUris,
+        copiedUris,
+      })
+    );
+
+    // 1. Readable file:// URI uploads directly without cache copy
+    const direct = await prepareUploadFileForFormData({
+      uri: 'file:///cache/ImagePicker/photo.jpg',
+      name: 'whiteboard.jpg',
+      type: 'image/jpeg',
+    });
+    assert.equal(direct.copiedToCache, false);
+    assert.equal(direct.uri, 'file:///cache/ImagePicker/photo.jpg');
+    assert.equal(direct.name, 'whiteboard.jpg');
+    assert.equal(direct.type, 'image/jpeg');
+    assert.equal(direct.size, 4);
+    const directPart = direct.toFormDataPart();
+    assert.equal(directPart.name, 'whiteboard.jpg');
+    assert.equal(directPart.type, 'image/jpeg');
+    assert.deepEqual(await directPart.bytes(), new Uint8Array([0xff, 0xd8, 0xff, 0xe0]));
+
+    // 2. content:// URI is copied to cache file:// and cleaned up on cleanup()
+    const fromContent = await prepareUploadFileForFormData({
+      uri: 'content://com.android.providers.downloads/document/42',
+      name: 'Lab4_Report.pdf',
+      type: 'application/pdf',
+    });
+    assert.equal(fromContent.copiedToCache, true);
+    assert.ok(fromContent.uri.startsWith('file:///cache/clarify-uploads/'));
+    assert.equal(fromContent.size, 4);
+    fromContent.cleanup();
+    assert.ok(deletedUris.includes(fromContent.uri));
+
+    // 3. file:// whose direct read fails falls back to cache copy
+    const fallback = await prepareUploadFileForFormData({
+      uri: 'file:///cache/unreadable_direct.m4a',
+      name: 'Voice_Note_0m05s.m4a',
+      type: 'audio/mp4',
+    });
+    assert.equal(fallback.copiedToCache, true);
+    assert.ok(fallback.uri.startsWith('file:///cache/clarify-uploads/'));
+    assert.equal(fallback.size, 4);
+    fallback.cleanup();
+
+    // 4. Missing file URI
+    await assert.rejects(
+      async () => {
+        await prepareUploadFileForFormData({
+          uri: '   ',
+          name: 'missing.jpg',
+          type: 'image/jpeg',
+        });
+      },
+      (err: unknown) => {
+        const apiErr = err as ApiError;
+        assert.equal(apiErr.status, 0);
+        assert.equal(apiErr.code, 'file_unreadable');
+        assert.match(apiErr.message, /could not read file/i);
+        return true;
+      }
+    );
+
+    // 5. Non-existent file
+    await assert.rejects(
+      async () => {
+        await prepareUploadFileForFormData({
+          uri: 'file:///cache/does_not_exist.jpg',
+          name: 'gone.jpg',
+          type: 'image/jpeg',
+        });
+      },
+      (err: unknown) => {
+        const apiErr = err as ApiError;
+        assert.equal(apiErr.status, 0);
+        assert.equal(apiErr.code, 'file_unreadable');
+        assert.match(apiErr.message, /file not found/i);
+        return true;
+      }
+    );
+
+    // 6. Empty file
+    await assert.rejects(
+      async () => {
+        await prepareUploadFileForFormData({
+          uri: 'file:///cache/empty.txt',
+          name: 'empty.txt',
+          type: 'text/plain',
+        });
+      },
+      (err: unknown) => {
+        const apiErr = err as ApiError;
+        assert.equal(apiErr.status, 0);
+        assert.equal(apiErr.code, 'file_unreadable');
+        assert.match(apiErr.message, /empty/i);
+        return true;
+      }
+    );
+
+    // 7. Read + fallback copy failure preserves native error detail
+    await assert.rejects(
+      async () => {
+        await prepareUploadFileForFormData({
+          uri: 'file:///cache/broken.pdf',
+          name: 'broken.pdf',
+          type: 'application/pdf',
+        });
+      },
+      (err: unknown) => {
+        const apiErr = err as ApiError;
+        assert.equal(apiErr.status, 0);
+        assert.equal(apiErr.code, 'file_unreadable');
+        assert.equal(apiErr.causeMessage, 'EIO: copy failed');
+        return true;
+      }
+    );
+  } finally {
+    setUploadFileSystemAdapterForTests(null);
+  }
+});
+
+test('apiClient stages native FormData uploads, preserves Accept/Authorization without Content-Type, and cleans up temp cache', async () => {
+  const originalFetch = globalThis.fetch;
+  const deletedUris: string[] = [];
+
+  class FakeReactNativeFormData extends FormData {
+    _parts: [string, unknown][] = [];
+
+    override append(name: string, value: unknown): void {
+      this._parts.push([String(name), value]);
+    }
+
+    override *entries(): FormDataIterator<[string, FormDataEntryValue]> {
+      for (const [k, v] of this._parts) {
+        yield [k, v as FormDataEntryValue];
+      }
+    }
+  }
+
+  try {
+    await setSecureToken('upload-bearer-token');
+    setUploadFileSystemAdapterForTests(
+      createMockFsAdapter({
+        files: {
+          'content://media/external/images/99': {
+            exists: true,
+            bytes: new Uint8Array([10, 20, 30, 40, 50]),
+          },
+        },
+        deletedUris,
+      })
+    );
+
+    // Verify prepareFormDataForUpload rebuilds RN FormData parts cleanly
+    const rnForm = new FakeReactNativeFormData();
+    rnForm.append('content', 'Check this photo');
+    rnForm.append('attachment', {
+      uri: 'content://media/external/images/99',
+      name: 'campus.jpg',
+      type: 'image/jpeg',
+    });
+
+    const prepared = await prepareFormDataForUpload(rnForm);
+    assert.equal(prepared.hasFileAttachment, true);
+    assert.equal(prepared.formData.get('content'), 'Check this photo');
+    const attachmentEntry = prepared.formData.get('attachment');
+    assert.ok(attachmentEntry instanceof Blob);
+    assert.equal(attachmentEntry.size, 5);
+    prepared.cleanup();
+    assert.equal(deletedUris.length, 1);
+
+    // End-to-end apiClient upload with FakeReactNativeFormData
+    let capturedHeaders: Record<string, string> = {};
+    const capturedBody: { formData: FormData | null } = { formData: null };
+
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      capturedHeaders = (init?.headers || {}) as Record<string, string>;
+      capturedBody.formData = init?.body as FormData;
+      return createMockFetchResponse({
+        status: 201,
+        body: {
+          data: {
+            id: 77,
+            channel_id: 2,
+            content: 'Check this photo',
+            created_at: '2026-11-25T00:00:00Z',
+            author: { id: 1, name: 'Student', role: 'student' },
+          },
+        },
+      });
+    }) as typeof fetch;
+
+    const uploadForm = new FakeReactNativeFormData();
+    uploadForm.append('content', 'Check this photo');
+    uploadForm.append('attachment', {
+      uri: 'content://media/external/images/99',
+      name: 'campus.jpg',
+      type: 'image/jpeg',
+    });
+
+    await apiClient('/channels/2/messages', {
+      method: 'POST',
+      body: uploadForm,
+      timeoutMs: UPLOAD_REQUEST_TIMEOUT_MS,
+    });
+
+    assert.equal(capturedHeaders.Accept, 'application/json');
+    assert.equal(capturedHeaders.Authorization, 'Bearer upload-bearer-token');
+    assert.equal(capturedHeaders['Content-Type'], undefined);
+    assert.ok(capturedBody.formData instanceof FormData);
+    assert.equal(deletedUris.length, 2);
+
+    // Offline fetch rejection on upload preserves cause and still cleans up temp cache copy
+    globalThis.fetch = (async () => {
+      const err = new Error('fetch failed: Unable to resolve host "api.ustpclarify.tech"');
+      err.name = 'FetchError';
+      throw err;
+    }) as typeof fetch;
+
+    const offlineForm = new FakeReactNativeFormData();
+    offlineForm.append('content', 'Offline photo');
+    offlineForm.append('attachment', {
+      uri: 'content://media/external/images/99',
+      name: 'campus.jpg',
+      type: 'image/jpeg',
+    });
+
+    await assert.rejects(
+      async () => {
+        await apiClient('/channels/2/messages', {
+          method: 'POST',
+          body: offlineForm,
+          timeoutMs: UPLOAD_REQUEST_TIMEOUT_MS,
+        });
+      },
+      (err: unknown) => {
+        const apiErr = err as ApiError;
+        assert.equal(apiErr.status, 0);
+        assert.equal(apiErr.code, 'offline');
+        assert.equal(apiErr.causeName, 'FetchError');
+        assert.match(apiErr.message, /no network connection/i);
+        return true;
+      }
+    );
+    assert.equal(deletedUris.length, 3);
+
+    // Restore 201 mock and ensure sendChannelChatMessageApi with Blob attachment returns 201
+    globalThis.fetch = (async () =>
+      createMockFetchResponse({
+        status: 201,
+        body: {
+          data: {
+            id: 77,
+            channel_id: 2,
+            content: 'Voice caption',
+            created_at: '2026-11-25T00:00:00Z',
+            author: { id: 1, name: 'Student', role: 'student' },
+          },
+        },
+      })) as typeof fetch;
+
+    const msgRes = await sendChannelChatMessageApi(
+      2,
+      'Voice caption',
+      'temp-1',
+      new Blob(['audio'], { type: 'audio/mp4' })
+    );
+    assert.equal(msgRes.data.id, 77);
+  } finally {
+    setUploadFileSystemAdapterForTests(null);
     globalThis.fetch = originalFetch;
     await clearSecureToken();
   }

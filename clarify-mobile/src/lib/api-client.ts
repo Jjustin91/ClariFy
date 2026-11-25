@@ -26,6 +26,10 @@ import {
   getCachedBearerToken,
   setSecureToken,
 } from './secure-token.ts';
+import {
+  prepareFormDataForUpload,
+  sanitizeUploadErrorDetail,
+} from './upload-file.ts';
 
 const RAW_API_URL =
   process.env.EXPO_PUBLIC_API_BASE_URL ||
@@ -178,6 +182,15 @@ export function mapHttpErrorToApiError(params: {
     };
   }
 
+  if (status === 413) {
+    return {
+      status: 413,
+      message:
+        serverMessage ||
+        'Upload failed: file is too large for the server. Please choose a smaller file.',
+    };
+  }
+
   if (status === 422) {
     let firstFieldError: string | null = null;
     if (rawErrors) {
@@ -237,6 +250,172 @@ export function mapHttpErrorToApiError(params: {
   };
 }
 
+function isNormalizedClientApiError(err: unknown): err is ApiError {
+  if (!err || typeof err !== 'object') {
+    return false;
+  }
+  const candidate = err as Partial<ApiError>;
+  return (
+    typeof candidate.status === 'number' &&
+    typeof candidate.message === 'string' &&
+    candidate.message.trim().length > 0 &&
+    typeof candidate.code === 'string'
+  );
+}
+
+/**
+ * Normalizes a client-side or `fetch()` rejection into an `ApiError` (`status: 0`)
+ * while preserving the non-secret original error (`causeName`, `causeMessage`) and
+ * classifying timeouts, unreadable files, offline errors, and upload serialization issues.
+ */
+export function mapClientErrorToApiError(
+  error: unknown,
+  options: { isUpload?: boolean } = {}
+): ApiError {
+  const isUpload = Boolean(options.isUpload);
+
+  if (isNormalizedClientApiError(error)) {
+    return {
+      ...error,
+      ...(error.causeMessage
+        ? { causeMessage: sanitizeUploadErrorDetail(error.causeMessage) }
+        : {}),
+    };
+  }
+
+  const errObj = error instanceof Error ? error : null;
+  const causeName =
+    errObj?.name?.trim() ||
+    (error &&
+    typeof error === 'object' &&
+    'name' in error &&
+    typeof (error as { name?: unknown }).name === 'string'
+      ? (error as { name: string }).name.trim()
+      : '') ||
+    'Error';
+
+  const rawMessage =
+    errObj?.message ||
+    (error &&
+    typeof error === 'object' &&
+    'message' in error &&
+    typeof (error as { message?: unknown }).message === 'string'
+      ? (error as { message: string }).message
+      : typeof error === 'string'
+        ? error
+        : '');
+
+  const causeMessage = sanitizeUploadErrorDetail(rawMessage);
+  const lower = (causeMessage || '').toLowerCase();
+
+  const isConnectionAbort = lower.includes('connection abort');
+  const isAbortOrTimeout =
+    !isConnectionAbort &&
+    (causeName === 'AbortError' ||
+      lower.includes('abort') ||
+      lower.includes('timed out') ||
+      lower.includes('timeout'));
+
+  if (isAbortOrTimeout) {
+    return {
+      status: 0,
+      code: 'timeout',
+      message: isUpload
+        ? 'Upload timed out. Check your connection or try a smaller file.'
+        : 'Request timed out. Please check your connection and try again.',
+      causeName,
+      ...(causeMessage ? { causeMessage } : {}),
+    };
+  }
+
+  const isFileUnreadable =
+    lower.includes('enoent') ||
+    lower.includes('filenotfound') ||
+    lower.includes('no such file') ||
+    lower.includes('does not exist') ||
+    lower.includes('could not read') ||
+    lower.includes('unable to open input stream') ||
+    lower.includes('permission denied') ||
+    lower.includes('securityexception');
+
+  if (isFileUnreadable) {
+    return {
+      status: 0,
+      code: 'file_unreadable',
+      message:
+        'Upload failed: could not read file. Please re-select the file and try again.',
+      causeName,
+      ...(causeMessage ? { causeMessage } : {}),
+    };
+  }
+
+  const isFormDataError =
+    lower.includes('formdata') || lower.includes('unsupported bodyinit');
+
+  if (isFormDataError) {
+    return {
+      status: 0,
+      code: 'upload_failed',
+      message: 'Upload failed: could not prepare attachment data.',
+      causeName,
+      ...(causeMessage ? { causeMessage } : {}),
+    };
+  }
+
+  const isOfflineConnectivity =
+    isConnectionAbort ||
+    lower.includes('unable to resolve host') ||
+    lower.includes('unknownhostexception') ||
+    lower.includes('no address associated') ||
+    lower.includes('network is unreachable') ||
+    lower.includes('failed to connect') ||
+    lower.includes('connectexception') ||
+    lower.includes('econnrefused') ||
+    lower.includes('enotfound') ||
+    lower.includes('enetunreach') ||
+    lower.includes('offline') ||
+    lower.includes('network request failed') ||
+    lower.includes('connection reset') ||
+    lower.includes('broken pipe') ||
+    lower.includes('socketexception');
+
+  if (isOfflineConnectivity) {
+    return {
+      status: 0,
+      code: 'offline',
+      message: isUpload
+        ? 'Upload failed: no network connection. Check your internet and try again.'
+        : 'No network connection. Please check your internet and try again.',
+      causeName,
+      ...(causeMessage ? { causeMessage } : {}),
+    };
+  }
+
+  if (isUpload) {
+    const shortReason = sanitizeUploadErrorDetail(
+      (causeMessage || '').replace(/^fetch failed:\s*/i, ''),
+      80
+    );
+    return {
+      status: 0,
+      code: 'upload_failed',
+      message: shortReason
+        ? `Upload failed: ${shortReason}`
+        : 'Upload failed. Please check your connection and try again.',
+      causeName,
+      ...(causeMessage ? { causeMessage } : {}),
+    };
+  }
+
+  return {
+    status: 0,
+    code: 'offline',
+    message: 'No network connection. Please check your internet and try again.',
+    causeName,
+    ...(causeMessage ? { causeMessage } : {}),
+  };
+}
+
 export interface ApiRequestOptions extends RequestInit {
   timeoutMs?: number;
   skipAuth?: boolean;
@@ -245,7 +424,8 @@ export interface ApiRequestOptions extends RequestInit {
 /**
  * Single centralized HTTP client for ClariFy Mobile.
  * Automatically attaches `Accept: application/json`, `Authorization: Bearer <token>`,
- * enforces a request timeout, and normalizes all error statuses to `ApiError`.
+ * enforces a request timeout, runs SDK 58 pre-flight staging for FormData file uploads,
+ * and normalizes all error statuses to `ApiError`.
  */
 export async function apiClient<T>(
   endpoint: string,
@@ -260,6 +440,23 @@ export async function apiClient<T>(
   const token = skipAuth ? null : getCachedBearerToken();
   const isFormData =
     typeof FormData !== 'undefined' && fetchOptions.body instanceof FormData;
+
+  let preparedBody = fetchOptions.body;
+  let isUploadRequest = false;
+  let cleanupPreparedUpload: () => void = () => {};
+
+  if (isFormData) {
+    try {
+      const prepared = await prepareFormDataForUpload(
+        fetchOptions.body as FormData
+      );
+      preparedBody = prepared.formData;
+      isUploadRequest = prepared.hasFileAttachment;
+      cleanupPreparedUpload = prepared.cleanup;
+    } catch (preflightErr) {
+      throw mapClientErrorToApiError(preflightErr, { isUpload: true });
+    }
+  }
 
   const headers: Record<string, string> = {
     Accept: 'application/json',
@@ -277,24 +474,16 @@ export async function apiClient<T>(
   try {
     response = await fetch(`${API_BASE_URL}${endpoint}`, {
       ...fetchOptions,
+      body: preparedBody,
       headers,
       signal: fetchOptions.signal || controller.signal,
     });
   } catch (networkErr) {
     clearTimeout(timeoutId);
-    const isAbort =
-      networkErr instanceof Error &&
-      (networkErr.name === 'AbortError' ||
-        networkErr.message.toLowerCase().includes('abort'));
-    const err: ApiError = {
-      status: 0,
-      message: isAbort
-        ? 'Request timed out. Please check your connection and try again.'
-        : 'No network connection. Please check your internet and try again.',
-    };
-    throw err;
+    throw mapClientErrorToApiError(networkErr, { isUpload: isUploadRequest });
   } finally {
     clearTimeout(timeoutId);
+    cleanupPreparedUpload();
   }
 
   const json = (await response.json().catch(() => ({}))) as Record<
