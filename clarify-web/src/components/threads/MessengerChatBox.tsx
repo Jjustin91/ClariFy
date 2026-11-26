@@ -28,6 +28,7 @@ import {
 } from 'lucide-react';
 import { getSupabaseClient, isSupabaseConfigured } from '@/lib/supabase';
 import { formatShortTime } from '../announcements/AnnouncementCard';
+import { ConfirmDeleteModal } from '../ui/ConfirmDeleteModal';
 import { useClarify } from '../../context/ClarifyContext';
 import {
   getChannelChatMessagesApi,
@@ -357,6 +358,7 @@ export function MessengerChatBox({
   }, []);
 
   const [showSettingsMenu, setShowSettingsMenu] = useState(false);
+  const [isConfirmLeaveOpen, setIsConfirmLeaveOpen] = useState(false);
   const skipAutoScrollRef = useRef(false);
 
   // Voice recording state
@@ -431,6 +433,10 @@ export function MessengerChatBox({
       void refreshChannelRoster(hubKey);
     }
   }, [showSettingsMenu, hubKey, refreshChannelRoster]);
+
+  useEffect(() => {
+    setIsConfirmLeaveOpen(false);
+  }, [hubKey]);
 
   /**
    * Appends an incoming real-time message or reconciles it with an in-flight optimistic message
@@ -1577,7 +1583,7 @@ export function MessengerChatBox({
   };
 
   const handleLeaveCourseHub = async () => {
-    if (!channel) return;
+    if (!channel || isManagingRoster) return;
     setIsManagingRoster(true);
     try {
       const subChannelIds = getSubChannelsForHub(channels, channel.id).map(
@@ -1586,6 +1592,7 @@ export function MessengerChatBox({
       const res = await leaveChannelApi(channel.id, subChannelIds);
       await refreshChannels({ forceImmediate: true });
       triggerAnnouncementRefresh();
+      setIsConfirmLeaveOpen(false);
       setShowSettingsMenu(false);
       showToast(
         res.message || `Left ${formatCourseHubName(channel)}.`,
@@ -1893,7 +1900,10 @@ export function MessengerChatBox({
               </div>
               <button
                 type="button"
-                onClick={() => setShowSettingsMenu(false)}
+                onClick={() => {
+                  setIsConfirmLeaveOpen(false);
+                  setShowSettingsMenu(false);
+                }}
                 aria-label="Close course hub settings"
                 className="p-1 rounded text-slate-400 hover:text-slate-700 hover:bg-slate-100 cursor-pointer"
               >
@@ -1957,7 +1967,7 @@ export function MessengerChatBox({
                   <button
                     type="button"
                     disabled={isManagingRoster}
-                    onClick={handleLeaveCourseHub}
+                    onClick={() => setIsConfirmLeaveOpen(true)}
                     className="inline-flex items-center gap-1 px-2 py-1 rounded border border-red-300 bg-red-50 text-red-700 hover:bg-red-100 text-[10px] font-extrabold disabled:opacity-50 cursor-pointer"
                   >
                     <LogOut className="w-3 h-3" />
@@ -2641,6 +2651,29 @@ export function MessengerChatBox({
           </form>
         </>
       )}
+
+      <ConfirmDeleteModal
+        isOpen={isConfirmLeaveOpen}
+        title="Leave Course Hub?"
+        description={
+          <>
+            Are you sure you want to leave{' '}
+            <strong className="font-extrabold text-ustp-navy">
+              {formatCourseHubName(detailedChannel || channel)}
+            </strong>
+            ? You will lose access to its noticeboard, Q&amp;A threads, and chat
+            channels until you rejoin.
+          </>
+        }
+        confirmLabel="Leave Course Hub"
+        loadingLabel="Leaving..."
+        cancelLabel="Cancel"
+        isLoading={isManagingRoster}
+        onConfirm={() => void handleLeaveCourseHub()}
+        onCancel={() => {
+          if (!isManagingRoster) setIsConfirmLeaveOpen(false);
+        }}
+      />
     </section>
   );
 }

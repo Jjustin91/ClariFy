@@ -7,8 +7,9 @@ import { AlertTriangle, X } from 'lucide-react';
 interface ConfirmDeleteModalProps {
   isOpen: boolean;
   title: string;
-  description: string;
+  description: React.ReactNode;
   confirmLabel?: string;
+  loadingLabel?: string;
   cancelLabel?: string;
   isLoading?: boolean;
   onConfirm: () => void;
@@ -20,6 +21,7 @@ export function ConfirmDeleteModal({
   title,
   description,
   confirmLabel = 'Delete',
+  loadingLabel = 'Deleting...',
   cancelLabel = 'Cancel',
   isLoading = false,
   onConfirm,
@@ -99,7 +101,7 @@ export function ConfirmDeleteModal({
               onClick={onConfirm}
               className="px-4 py-2 text-xs font-extrabold text-white bg-red-600 hover:bg-red-700 border border-red-700 rounded disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-red-700 cursor-pointer"
             >
-              {isLoading ? 'Deleting...' : confirmLabel}
+              {isLoading ? loadingLabel : confirmLabel}
             </button>
           </div>
         </div>
