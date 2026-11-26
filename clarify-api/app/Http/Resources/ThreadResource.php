@@ -2,6 +2,7 @@
 
 namespace App\Http\Resources;
 
+use App\Support\AvatarStorage;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
@@ -38,7 +39,7 @@ class ThreadResource extends JsonResource
                     'id' => $this->sender?->id,
                     'name' => $this->sender?->name ?? 'USTP Student',
                     'role' => $this->sender?->role ?? 'student',
-                    'avatar_url' => $this->sender?->avatar_url,
+                    'avatar_url' => AvatarStorage::sanitizeForOutput($this->sender?->avatar_url),
                 ],
             'replies' => $this->replies->map(fn ($reply) => [
                 'id' => $reply->id,
@@ -49,7 +50,7 @@ class ThreadResource extends JsonResource
                     'id' => $reply->sender?->id,
                     'name' => $reply->sender?->name ?? 'Aki Hayakawa',
                     'role' => $reply->sender?->role ?? 'faculty',
-                    'avatar_url' => $reply->sender?->avatar_url,
+                    'avatar_url' => AvatarStorage::sanitizeForOutput($reply->sender?->avatar_url),
                 ],
             ])->values()->all(),
         ];

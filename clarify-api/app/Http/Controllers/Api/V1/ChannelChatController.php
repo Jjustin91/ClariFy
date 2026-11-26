@@ -6,6 +6,7 @@ use App\Events\RealtimeStateUpdated;
 use App\Models\Channel;
 use App\Models\Message;
 use App\Policies\ChannelPolicy;
+use App\Support\AvatarStorage;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\UploadedFile;
@@ -419,7 +420,7 @@ class ChannelChatController
                 'id' => $msg->sender?->id ?? $msg->sender_id,
                 'name' => $msg->sender?->name ?? 'Campus Member',
                 'role' => $msg->sender?->role ?? 'student',
-                'avatar_url' => $msg->sender?->avatar_url,
+                'avatar_url' => AvatarStorage::sanitizeForOutput($msg->sender?->avatar_url),
             ],
         ];
 

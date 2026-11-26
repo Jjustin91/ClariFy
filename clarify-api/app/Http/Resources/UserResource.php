@@ -2,6 +2,7 @@
 
 namespace App\Http\Resources;
 
+use App\Support\AvatarStorage;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
@@ -19,7 +20,7 @@ class UserResource extends JsonResource
             'last_name' => $this->last_name,
             'email' => $this->email,
             'contact_number' => $this->contact_number,
-            'avatar_url' => $this->avatar_url,
+            'avatar_url' => AvatarStorage::sanitizeForOutput($this->avatar_url),
             'role' => $this->role,
             'verification_status' => $this->verification_status,
             'created_at' => $this->created_at?->toIso8601String(),

@@ -84,6 +84,7 @@ Route::prefix('v1')->group(function () {
 
         // Scoped Announcements, Read Reach & Audits
         Route::get('/announcements', [AnnouncementController::class, 'index']);
+        Route::get('/announcements/{id}', [AnnouncementController::class, 'show'])->whereNumber('id');
         Route::post('/announcements', [AnnouncementController::class, 'store']);
         Route::match(['post', 'patch'], '/announcements/{id}', [AnnouncementController::class, 'update']);
         Route::delete('/announcements/{id}', [AnnouncementController::class, 'destroy']);

@@ -4,11 +4,13 @@ namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Resources\UserResource;
 use App\Support\ApiCache;
+use App\Support\AvatarStorage;
 use App\Support\PhoneNormalizer;
 use App\Support\UstpEmailValidator;
 use Closure;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Storage;
 
 class ProfileController
 {
@@ -52,19 +54,36 @@ class ProfileController
                     }
                 },
             ],
-            'avatar' => ['nullable', 'file', 'mimes:jpg,jpeg,png,webp', 'max:5120'],
+            'avatar' => ['nullable', 'file', 'mimes:jpg,jpeg,png,webp', 'max:' . AvatarStorage::MAX_SIZE_KB],
+            'remove_avatar' => ['nullable', 'boolean'],
             'avatar_preview_url' => ['nullable', 'string'],
         ]);
 
+        $previousAvatarUrl = $user->avatar_url;
+        $newlyStoredPath = null;
+        $shouldDeleteOldAvatar = false;
+        $removeAvatar = filter_var($request->input('remove_avatar', false), FILTER_VALIDATE_BOOLEAN);
+
         if ($request->hasFile('avatar')) {
-            $file = $request->file('avatar');
-            $mime = $file->getMimeType() ?: 'image/jpeg';
-            $base64 = base64_encode(file_get_contents($file->getRealPath()));
-            $user->avatar_url = "data:{$mime};base64,{$base64}";
+            $stored = AvatarStorage::storeUploadedAvatar($request->file('avatar'), (int) $user->id);
+            $newlyStoredPath = $stored['path'];
+            $user->avatar_url = $stored['url'];
+            $shouldDeleteOldAvatar = true;
+        } elseif (
+            $removeAvatar ||
+            (array_key_exists('avatar_preview_url', $validated) && trim((string) ($validated['avatar_preview_url'] ?? '')) === '')
+        ) {
+            $user->avatar_url = null;
+            $shouldDeleteOldAvatar = true;
         } elseif (array_key_exists('avatar_preview_url', $validated)) {
-            $user->avatar_url = $validated['avatar_preview_url'] !== ''
-                ? $validated['avatar_preview_url']
-                : null;
+            // Transition compatibility: never persist base64 data: URIs sent by older clients.
+            $candidate = trim((string) ($validated['avatar_preview_url'] ?? ''));
+            if ($candidate !== '' && ! str_starts_with(strtolower($candidate), 'data:')) {
+                $sanitized = AvatarStorage::sanitizeForOutput($candidate);
+                if ($sanitized !== null && $sanitized !== $previousAvatarUrl) {
+                    $user->avatar_url = $sanitized;
+                }
+            }
         }
 
         if (! empty($validated['name'])) {
@@ -83,10 +102,24 @@ class ProfileController
                 : null;
         }
 
-        $user->save();
+        try {
+            $user->save();
+        } catch (\Throwable $e) {
+            if ($newlyStoredPath !== null) {
+                Storage::disk('public')->delete($newlyStoredPath);
+            }
+            throw $e;
+        }
+
+        if ($shouldDeleteOldAvatar && $previousAvatarUrl !== $user->avatar_url) {
+            AvatarStorage::deleteStoredAvatar($previousAvatarUrl);
+        }
 
         ApiCache::forgetInstructors();
         ApiCache::forgetChannels();
+        if ($user->canPublishOrManage()) {
+            ApiCache::forgetChannelAnnouncements(null);
+        }
 
         return response()->json([
             'message' => 'Profile settings and avatar updated.',

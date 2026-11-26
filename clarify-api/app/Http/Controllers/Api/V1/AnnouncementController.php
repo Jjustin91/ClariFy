@@ -170,6 +170,7 @@ class AnnouncementController
 
             $items = $paginator->items();
             $this->hydrateReadReachMetrics($items);
+            $this->cacheReadReachForAnnouncements($items);
 
             if ($sort === 'read_reach') {
                 usort($items, function (Announcement $a, Announcement $b): int {
@@ -202,6 +203,28 @@ class AnnouncementController
             ];
         });
 
+        // Overlay short-TTL cached Read Reach counts after reading structural feed cache
+        if (! empty($payload['data'])) {
+            $this->overlayCachedReadReachIntoPayload($payload['data']);
+
+            if ($sort === 'read_reach') {
+                usort($payload['data'], function (array $a, array $b): int {
+                    if ((bool) ($a['is_urgent'] ?? false) !== (bool) ($b['is_urgent'] ?? false)) {
+                        return ! empty($a['is_urgent']) ? -1 : 1;
+                    }
+                    if ((bool) ($a['is_pinned'] ?? false) !== (bool) ($b['is_pinned'] ?? false)) {
+                        return ! empty($a['is_pinned']) ? -1 : 1;
+                    }
+                    $pctCmp = ((float) ($b['read_reach']['percentage'] ?? 0)) <=> ((float) ($a['read_reach']['percentage'] ?? 0));
+                    if ($pctCmp !== 0) {
+                        return $pctCmp;
+                    }
+
+                    return strcmp((string) ($b['published_at'] ?? ''), (string) ($a['published_at'] ?? ''));
+                });
+            }
+        }
+
         // Compute per-user acknowledgment flags in a single indexed query after cache read
         if ($user && ! empty($payload['data'])) {
             $announcementIds = array_values(array_filter(array_map(
@@ -227,6 +250,66 @@ class AnnouncementController
         }
 
         return response()->json($payload);
+    }
+
+    /**
+     * GET /api/v1/announcements/{id}
+     * Targeted single-announcement fetch used after acknowledgment or realtime updates without refetching the full feed.
+     */
+    public function show(Request $request, int $id): JsonResponse
+    {
+        $announcement = Announcement::with([
+            'publisher.academicProfile',
+            'channel',
+        ])->find($id);
+
+        if (! $announcement) {
+            return response()->json([
+                'status' => 404,
+                'message' => 'This announcement is no longer available.',
+            ], 404);
+        }
+
+        $user = $request->user();
+        if (! $user) {
+            return response()->json([
+                'status' => 401,
+                'message' => 'Unauthenticated.',
+            ], 401);
+        }
+
+        if (! $user->canPublishOrManage() && $announcement->status !== 'published') {
+            return response()->json([
+                'status' => 404,
+                'message' => 'This announcement is no longer available.',
+            ], 404);
+        }
+
+        if ($announcement->channel && ! ChannelPolicy::hasApprovedChannelAccess($user, $announcement->channel)) {
+            return response()->json([
+                'status' => 403,
+                'message' => "Access Denied: You are not an approved member of {$announcement->channel->name}.",
+            ], 403);
+        }
+
+        $cachedCounts = Cache::get(ApiCache::announcementReadReachKey((int) $announcement->id, (int) $announcement->channel_id));
+        if (is_array($cachedCounts) && isset($cachedCounts['enrolled_total'], $cachedCounts['acknowledged_count'], $cachedCounts['percentage'])) {
+            $announcement->precomputed_enrolled_total = (int) $cachedCounts['enrolled_total'];
+            $announcement->precomputed_acknowledged_count = (int) $cachedCounts['acknowledged_count'];
+            $announcement->precomputed_percentage = (float) $cachedCounts['percentage'];
+        } else {
+            $this->hydrateReadReachMetrics([$announcement]);
+            $this->cacheReadReachForAnnouncements([$announcement]);
+        }
+
+        // Per-user acknowledgment flag is always computed after cache read
+        $announcement->has_current_user_acknowledged = AnnouncementRead::where('announcement_id', $announcement->id)
+            ->where('user_id', $user->id)
+            ->exists();
+
+        return response()->json([
+            'data' => (new AnnouncementResource($announcement))->resolve($request),
+        ]);
     }
 
     /**
@@ -549,6 +632,7 @@ class AnnouncementController
             ], 403);
         }
 
+        $announcementId = (int) $announcement->id;
         $channelId = (int) $announcement->channel_id;
         $this->deleteStoredAttachment($announcement->attachment_url);
         $announcement->update([
@@ -559,6 +643,7 @@ class AnnouncementController
         ]);
         $announcement->delete();
 
+        ApiCache::forgetAnnouncementReadReach($announcementId);
         ApiCache::forgetChannelAnnouncements($channelId);
         ApiCache::forgetChannelAnnouncements(null);
         ApiCache::forgetChannels($channelId);
@@ -566,7 +651,14 @@ class AnnouncementController
         RealtimeStateUpdated::safeDispatch(
             'announcement.deleted',
             $channelId,
-            (int) ($request->user()?->id ?? 0)
+            (int) ($request->user()?->id ?? 0),
+            ['id' => $announcementId, 'channel_id' => $channelId],
+            null,
+            null,
+            null,
+            null,
+            null,
+            $announcementId
         );
 
         return response()->json([
@@ -579,7 +671,14 @@ class AnnouncementController
      */
     public function acknowledge(Request $request, int $id): JsonResponse
     {
-        $announcement = Announcement::findOrFail($id);
+        $announcement = Announcement::find($id);
+        if (! $announcement) {
+            return response()->json([
+                'status' => 404,
+                'message' => 'This announcement is no longer available.',
+            ], 404);
+        }
+
         $user = $request->user();
 
         if ($announcement->channel_id) {
@@ -599,28 +698,32 @@ class AnnouncementController
             'acknowledged_at' => now(),
         ]);
 
-        ApiCache::forgetChannelAnnouncements((int) $announcement->channel_id);
-        if ($announcement->channel) {
-            $parentHubId = ChannelPolicy::resolveParentHubId($announcement->channel);
-            if ($parentHubId !== null) {
-                ApiCache::forgetChannelAnnouncements($parentHubId);
-            }
-        }
+        // Invalidate ONLY this announcement's short-TTL Read Reach cache (do not bump global announcements.feed)
+        ApiCache::forgetAnnouncementReadReach((int) $announcement->id);
 
         $freshAnnouncement = $announcement->fresh([
             'publisher.academicProfile',
             'channel',
         ]);
         $this->hydrateReadReachMetrics([$freshAnnouncement]);
+        $this->cacheReadReachForAnnouncements([$freshAnnouncement]);
         $freshAnnouncement->has_current_user_acknowledged = true;
 
         $resourcePayload = (new AnnouncementResource($freshAnnouncement))->resolve($request);
+        $publisherUserId = $freshAnnouncement->publisher_id ? (int) $freshAnnouncement->publisher_id : null;
 
+        // Scoped broadcast: clarify.channel.{channel_id} + publisher's clarify.user.{publisher_id} (never clarify.global)
         RealtimeStateUpdated::safeDispatch(
             'announcement.acknowledged',
             (int) $freshAnnouncement->channel_id,
             (int) $user->id,
-            $resourcePayload
+            $resourcePayload,
+            null,
+            null,
+            $publisherUserId,
+            null,
+            null,
+            (int) $freshAnnouncement->id
         );
 
         return response()->json([
@@ -802,6 +905,84 @@ class AnnouncementController
                 ? round(($acked / $enrolled) * 100, 1)
                 : 0.0;
         }
+    }
+
+    /**
+     * Stores precomputed Read Reach aggregate counts in short-TTL versioned cache keys.
+     *
+     * @param iterable<int, Announcement> $announcements
+     */
+    private function cacheReadReachForAnnouncements(iterable $announcements): void
+    {
+        foreach ($announcements as $ann) {
+            if (! $ann instanceof Announcement) {
+                continue;
+            }
+            if ($ann->precomputed_enrolled_total === null || $ann->precomputed_acknowledged_count === null) {
+                continue;
+            }
+            $key = ApiCache::announcementReadReachKey((int) $ann->id, (int) $ann->channel_id);
+            Cache::put($key, [
+                'acknowledged_count' => (int) $ann->precomputed_acknowledged_count,
+                'enrolled_total' => (int) $ann->precomputed_enrolled_total,
+                'percentage' => (float) ($ann->precomputed_percentage ?? 0.0),
+            ], ApiCache::READ_REACH_TTL_SECONDS);
+        }
+    }
+
+    /**
+     * Overlays fresh or short-TTL-cached Read Reach aggregate counts onto cached announcement payloads,
+     * computing any cache misses in a single batched query.
+     *
+     * @param array<int, array<string, mixed>> $items
+     */
+    private function overlayCachedReadReachIntoPayload(array &$items): void
+    {
+        $missedIds = [];
+        $cachedById = [];
+
+        foreach ($items as $item) {
+            $aid = (int) ($item['id'] ?? 0);
+            $cid = (int) ($item['channel_id'] ?? 0);
+            if ($aid <= 0) {
+                continue;
+            }
+
+            $cached = Cache::get(ApiCache::announcementReadReachKey($aid, $cid));
+            if (is_array($cached) && isset($cached['enrolled_total'], $cached['acknowledged_count'], $cached['percentage'])) {
+                $cachedById[$aid] = $cached;
+            } else {
+                $missedIds[] = $aid;
+            }
+        }
+
+        if (! empty($missedIds)) {
+            $missedModels = Announcement::with('channel')
+                ->whereIn('id', array_values(array_unique($missedIds)))
+                ->get();
+
+            $this->hydrateReadReachMetrics($missedModels);
+            $this->cacheReadReachForAnnouncements($missedModels);
+
+            foreach ($missedModels as $model) {
+                $cachedById[(int) $model->id] = [
+                    'acknowledged_count' => (int) ($model->precomputed_acknowledged_count ?? 0),
+                    'enrolled_total' => (int) ($model->precomputed_enrolled_total ?? 0),
+                    'percentage' => (float) ($model->precomputed_percentage ?? 0.0),
+                ];
+            }
+        }
+
+        foreach ($items as &$item) {
+            $aid = (int) ($item['id'] ?? 0);
+            if (isset($cachedById[$aid])) {
+                $counts = $cachedById[$aid];
+                $item['read_reach']['acknowledged_count'] = (int) $counts['acknowledged_count'];
+                $item['read_reach']['enrolled_total'] = (int) $counts['enrolled_total'];
+                $item['read_reach']['percentage'] = (float) $counts['percentage'];
+            }
+        }
+        unset($item);
     }
 
     /**

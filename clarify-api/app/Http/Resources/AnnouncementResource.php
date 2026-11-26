@@ -3,6 +3,7 @@
 namespace App\Http\Resources;
 
 use App\Policies\ChannelPolicy;
+use App\Support\AvatarStorage;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 use Illuminate\Support\Facades\DB;
@@ -81,7 +82,7 @@ class AnnouncementResource extends JsonResource
                 'name' => $this->publisher?->name ?? 'Aki Hayakawa',
                 'role' => $this->publisher?->role ?? 'faculty',
                 'department' => $pubDept,
-                'avatar_url' => $this->publisher?->avatar_url,
+                'avatar_url' => AvatarStorage::sanitizeForOutput($this->publisher?->avatar_url),
             ],
         ];
     }

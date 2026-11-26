@@ -2,6 +2,7 @@
 
 namespace App\Http\Resources;
 
+use App\Support\AvatarStorage;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
@@ -23,7 +24,7 @@ class InstructorResource extends JsonResource
             'office_location' => $profile?->office_location ?? 'ICT Bldg Room 304',
             'consultation_hours' => $profile?->consultation_hours ?? 'MWF 1:00 PM – 4:00 PM',
             'courses_handled' => $profile?->courses_handled ?? ['IT314 Software Engineering'],
-            'avatar_url' => $this->avatar_url,
+            'avatar_url' => AvatarStorage::sanitizeForOutput($this->avatar_url),
         ];
     }
 }

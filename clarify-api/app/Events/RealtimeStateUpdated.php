@@ -2,6 +2,7 @@
 
 namespace App\Events;
 
+use App\Support\AvatarStorage;
 use Illuminate\Broadcasting\InteractsWithSockets;
 use Illuminate\Broadcasting\PrivateChannel;
 use Illuminate\Contracts\Broadcasting\ShouldBroadcast;
@@ -15,6 +16,12 @@ class RealtimeStateUpdated implements ShouldBroadcast, ShouldQueue, ShouldDispat
 {
     use Dispatchable, InteractsWithSockets, SerializesModels;
 
+    /**
+     * Guard ceiling safely below Reverb's 10,000-byte max_message_size (config/reverb.php:71),
+     * leaving headroom for Pusher protocol envelope metadata.
+     */
+    public const MAX_BROADCAST_BYTES = 8192;
+
     public string $broadcastQueue = 'broadcasts';
 
     public string $type;
@@ -23,6 +30,7 @@ class RealtimeStateUpdated implements ShouldBroadcast, ShouldQueue, ShouldDispat
     public ?int $targetUserId;
     public ?string $action;
     public ?int $messageId;
+    public ?int $announcementId;
     public ?array $announcement;
     public ?array $message;
     public ?array $thread;
@@ -40,7 +48,8 @@ class RealtimeStateUpdated implements ShouldBroadcast, ShouldQueue, ShouldDispat
         ?array $thread = null,
         ?int $targetUserId = null,
         ?string $action = null,
-        ?int $messageId = null
+        ?int $messageId = null,
+        ?int $announcementId = null
     ) {
         $this->type = $type;
         $this->channelId = $channelId;
@@ -51,6 +60,7 @@ class RealtimeStateUpdated implements ShouldBroadcast, ShouldQueue, ShouldDispat
         $this->targetUserId = $targetUserId;
         $this->action = $action;
         $this->messageId = $messageId;
+        $this->announcementId = $announcementId ?? (isset($announcement['id']) ? (int) $announcement['id'] : null);
         $this->timestamp = now()->toIso8601String();
     }
 
@@ -66,7 +76,8 @@ class RealtimeStateUpdated implements ShouldBroadcast, ShouldQueue, ShouldDispat
         ?array $thread = null,
         ?int $targetUserId = null,
         ?string $action = null,
-        ?int $messageId = null
+        ?int $messageId = null,
+        ?int $announcementId = null
     ): void {
         try {
             event(new self(
@@ -78,7 +89,8 @@ class RealtimeStateUpdated implements ShouldBroadcast, ShouldQueue, ShouldDispat
                 $thread,
                 $targetUserId,
                 $action,
-                $messageId
+                $messageId,
+                $announcementId
             ));
         } catch (\Throwable $e) {
             Log::warning('RealtimeStateUpdated broadcast dispatch failed: ' . $e->getMessage(), [
@@ -88,6 +100,7 @@ class RealtimeStateUpdated implements ShouldBroadcast, ShouldQueue, ShouldDispat
                 'target_user_id' => $targetUserId,
                 'action' => $action,
                 'message_id' => $messageId,
+                'announcement_id' => $announcementId,
             ]);
         }
     }
@@ -133,11 +146,12 @@ class RealtimeStateUpdated implements ShouldBroadcast, ShouldQueue, ShouldDispat
             $channels[] = new PrivateChannel("clarify.user.{$this->targetUserId}");
         }
 
-        // Only broadcast global notices (not private channel chat messages, threads, or user-scoped membership events) on clarify.global
+        // Only broadcast global notices (never chat, threads, membership changes, or high-frequency acknowledgments) on clarify.global
         if (
             ! str_starts_with($this->type, 'chat.') &&
             ! str_starts_with($this->type, 'thread.') &&
-            $this->type !== 'membership.changed'
+            $this->type !== 'membership.changed' &&
+            $this->type !== 'announcement.acknowledged'
         ) {
             $channels[] = new PrivateChannel('clarify.global');
         }
@@ -159,6 +173,7 @@ class RealtimeStateUpdated implements ShouldBroadcast, ShouldQueue, ShouldDispat
 
     /**
      * Get the data to broadcast over Laravel Reverb.
+     * Enforces data: URI stripping and a ~8 KB ceiling so Reverb never rejects payloads.
      *
      * @return array<string, mixed>
      */
@@ -185,11 +200,29 @@ class RealtimeStateUpdated implements ShouldBroadcast, ShouldQueue, ShouldDispat
             ];
         }
 
+        if ($this->type === 'announcement.deleted') {
+            $resolvedAnnId = $this->announcementId ?? (isset($this->announcement['id']) ? (int) $this->announcement['id'] : null);
+
+            return [
+                'type' => 'announcement.deleted',
+                'channel_id' => $this->channelId,
+                'announcement_id' => $resolvedAnnId,
+                'actor_id' => $this->actorId,
+                'announcement' => $resolvedAnnId !== null
+                    ? [
+                        'id' => $resolvedAnnId,
+                        'channel_id' => $this->channelId,
+                    ]
+                    : null,
+                'timestamp' => $this->timestamp,
+            ];
+        }
+
         // Strip announcement body content on global notices unless on a scoped channel
         $safeAnnouncement = null;
         if ($this->announcement !== null) {
             $safeAnnouncement = [
-                'id' => $this->announcement['id'] ?? null,
+                'id' => $this->announcement['id'] ?? $this->announcementId,
                 'channel_id' => $this->announcement['channel_id'] ?? $this->channelId,
                 'channel_type' => $this->announcement['channel_type'] ?? null,
                 'is_urgent' => $this->announcement['is_urgent'] ?? false,
@@ -201,16 +234,76 @@ class RealtimeStateUpdated implements ShouldBroadcast, ShouldQueue, ShouldDispat
             ];
         }
 
-        return [
+        $safeMessage = $this->channelId !== null
+            ? AvatarStorage::sanitizeArrayPayload($this->message)
+            : null;
+        $safeThread = $this->channelId !== null
+            ? AvatarStorage::sanitizeArrayPayload($this->thread)
+            : null;
+
+        $resolvedAnnouncementId = $this->announcementId
+            ?? (isset($safeAnnouncement['id']) ? (int) $safeAnnouncement['id'] : null);
+
+        $payload = [
             'type' => $this->type,
             'channel_id' => $this->channelId,
+            'announcement_id' => $resolvedAnnouncementId,
             'target_user_id' => $this->targetUserId,
             'action' => $this->action,
             'actor_id' => $this->actorId,
             'message_id' => $this->messageId,
             'announcement' => $safeAnnouncement,
-            'message' => $this->channelId !== null ? $this->message : null,
-            'thread' => $this->channelId !== null ? $this->thread : null,
+            'message' => $safeMessage,
+            'thread' => $safeThread,
+            'timestamp' => $this->timestamp,
+        ];
+
+        $encoded = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        $byteLength = $encoded !== false ? strlen($encoded) : PHP_INT_MAX;
+
+        if ($byteLength > self::MAX_BROADCAST_BYTES) {
+            Log::warning('RealtimeStateUpdated payload exceeded max broadcast size; falling back to minimal IDs-only event.', [
+                'type' => $this->type,
+                'channel_id' => $this->channelId,
+                'actor_id' => $this->actorId,
+                'announcement_id' => $resolvedAnnouncementId,
+                'message_id' => $this->messageId ?? ($safeMessage['id'] ?? ($safeThread['id'] ?? null)),
+                'byte_length' => $byteLength,
+                'max_bytes' => self::MAX_BROADCAST_BYTES,
+            ]);
+
+            return $this->buildMinimalFallbackPayload($resolvedAnnouncementId, $safeMessage, $safeThread);
+        }
+
+        return $payload;
+    }
+
+    /**
+     * Minimal IDs-only fallback payload guaranteed to stay well under Reverb's 10 KB limit.
+     *
+     * @param array<string, mixed>|null $safeMessage
+     * @param array<string, mixed>|null $safeThread
+     * @return array<string, mixed>
+     */
+    private function buildMinimalFallbackPayload(?int $announcementId, ?array $safeMessage, ?array $safeThread): array
+    {
+        $resolvedMessageId = $this->messageId
+            ?? (isset($safeMessage['id']) ? (int) $safeMessage['id'] : null)
+            ?? (isset($safeThread['id']) ? (int) $safeThread['id'] : null);
+
+        return [
+            'type' => $this->type,
+            'channel_id' => $this->channelId,
+            'announcement_id' => $announcementId,
+            'target_user_id' => $this->targetUserId,
+            'action' => $this->action,
+            'actor_id' => $this->actorId,
+            'message_id' => $resolvedMessageId,
+            'announcement' => $announcementId !== null
+                ? ['id' => $announcementId, 'channel_id' => $this->channelId]
+                : null,
+            'message' => null,
+            'thread' => null,
             'timestamp' => $this->timestamp,
         ];
     }

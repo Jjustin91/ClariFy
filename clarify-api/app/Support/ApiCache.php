@@ -7,6 +7,7 @@ use Illuminate\Support\Facades\Cache;
 class ApiCache
 {
     public const ANNOUNCEMENTS_TTL_SECONDS = 600; // 10 minutes
+    public const READ_REACH_TTL_SECONDS = 15;     // 15 seconds (short TTL for live read-reach counts)
     public const CHANNELS_TTL_SECONDS = 600;      // 10 minutes
     public const INSTRUCTORS_TTL_SECONDS = 1800;  // 30 minutes
     public const VERSION_TTL_SECONDS = 604800;    // 7 days (volatile-lru safe)
@@ -92,6 +93,27 @@ class ApiCache
         $hash = empty($params) ? 'default' : md5(json_encode($params));
 
         return "instructors.dir.v{$ver}.{$hash}";
+    }
+
+    /**
+     * Builds the short-TTL versioned cache key for a single announcement's Read Reach aggregate counts.
+     * Versioned by per-announcement read_reach, channel membership, and global announcements counters.
+     */
+    public static function announcementReadReachKey(int $announcementId, int $channelId = 0): string
+    {
+        $rrVer = self::getVersion("announcements.read_reach.{$announcementId}");
+        $chVer = $channelId > 0 ? self::getVersion("channels.channel.{$channelId}") : 1;
+        $globalVer = self::getVersion('announcements.global');
+
+        return "announcements.rr.{$announcementId}.v{$rrVer}.c{$chVer}.g{$globalVer}";
+    }
+
+    /**
+     * Invalidates only a single announcement's cached Read Reach counts (without bumping the global feed version).
+     */
+    public static function forgetAnnouncementReadReach(int $announcementId): void
+    {
+        self::bumpVersion("announcements.read_reach.{$announcementId}");
     }
 
     /**
