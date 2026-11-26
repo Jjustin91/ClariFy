@@ -11,7 +11,8 @@ import {
   TagBadge,
 } from '@/src/components/ui/StateViews';
 import { useClarify } from '@/src/context/ClarifyContext';
-import { getInstructorsApi } from '@/src/lib/api-client';
+import { API_BASE_URL, getInstructorsApi } from '@/src/lib/api-client';
+import { getUserInitials, resolveAvatarDisplayUrl } from '@/src/lib/domain-logic';
 import type {
   Instructor,
   LaravelValidationError,
@@ -46,6 +47,9 @@ export default function InstructorsPage() {
   const [error, setError] = useState<string | null>(null);
   const [selectedInstructor, setSelectedInstructor] =
     useState<Instructor | null>(null);
+  const [failedAvatarIds, setFailedAvatarIds] = useState<Record<number, boolean>>(
+    {}
+  );
 
   const loadInstructors = useCallback(async () => {
     if (!isAuthReady || !isAuthenticated || user.role === 'it_admin') {
@@ -262,12 +266,14 @@ export default function InstructorsPage() {
         ) : (
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
             {instructors.map((inst) => {
-              const initials = inst.name
-                .replace(/^(ENGR\.|PROF\.|DR\.)\s*/i, '')
-                .split(' ')
-                .slice(0, 2)
-                .map((n) => n.charAt(0))
-                .join('');
+              const initials = getUserInitials(inst.name, 'F');
+              const resolvedAvatar = resolveAvatarDisplayUrl(
+                inst.avatar_url,
+                API_BASE_URL
+              );
+              const showAvatar = Boolean(
+                resolvedAvatar && !failedAvatarIds[inst.id]
+              );
 
               return (
                 <button
@@ -278,10 +284,17 @@ export default function InstructorsPage() {
                 >
                   {/* Centered Circular Instructor Avatar */}
                   <div className="w-20 h-20 mx-auto my-2 rounded-full bg-ustp-navy text-ustp-gold border-2 border-ustp-gold flex items-center justify-center text-lg font-extrabold tracking-tight group-hover:scale-105 transition-transform overflow-hidden">
-                    {inst.avatar_url ? (
+                    {showAvatar && resolvedAvatar ? (
+                      // eslint-disable-next-line @next/next/no-img-element
                       <img
-                        src={inst.avatar_url}
+                        src={resolvedAvatar}
                         alt={inst.name}
+                        onError={() =>
+                          setFailedAvatarIds((prev) => ({
+                            ...prev,
+                            [inst.id]: true,
+                          }))
+                        }
                         className="w-full h-full object-cover"
                       />
                     ) : (

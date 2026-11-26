@@ -1204,6 +1204,261 @@ export function formatUnreadBadgeCount(count: number | undefined): string {
 }
 
 /**
+ * Returns the maximum allowed profile avatar size (5 MB = 5120 KB), matching ProfileController.
+ */
+export const MAX_PROFILE_AVATAR_BYTES = 5 * 1024 * 1024;
+
+export const ALLOWED_PROFILE_AVATAR_EXTENSIONS = [
+  'jpg',
+  'jpeg',
+  'png',
+  'webp',
+] as const;
+
+/**
+ * Validates a selected profile avatar file (jpg/jpeg/png/webp, <= 5 MB).
+ */
+export function validateProfileAvatarFile(file: {
+  name?: string;
+  size?: number;
+  type?: string;
+}): { valid: true } | { valid: false; error: string } {
+  if (!file || typeof file.size !== 'number' || file.size <= 0) {
+    return { valid: false, error: 'Selected image file is empty.' };
+  }
+  if (file.size > MAX_PROFILE_AVATAR_BYTES) {
+    return {
+      valid: false,
+      error: 'Profile photo must not exceed 5 MB (JPG, PNG, or WebP).',
+    };
+  }
+  const ext = (file.name || '').trim().split('.').pop()?.toLowerCase() || '';
+  const mime = (file.type || '').toLowerCase();
+  const validMime =
+    mime === 'image/jpeg' ||
+    mime === 'image/jpg' ||
+    mime === 'image/png' ||
+    mime === 'image/webp';
+  const validExt = (
+    ALLOWED_PROFILE_AVATAR_EXTENSIONS as readonly string[]
+  ).includes(ext);
+
+  if (!validMime && !validExt) {
+    return {
+      valid: false,
+      error: 'Please select a JPG, PNG, or WebP image (max 5 MB).',
+    };
+  }
+
+  return { valid: true };
+}
+
+/**
+ * Computes up to two uppercase initials for avatar fallbacks (stripping academic titles).
+ */
+export function getUserInitials(
+  name: string | null | undefined,
+  fallback = 'U'
+): string {
+  const cleaned = (name || '')
+    .trim()
+    .replace(/^(ENGR\.|PROF\.|DR\.|MR\.|MS\.|MRS\.)\s*/i, '');
+  if (!cleaned) {
+    return fallback;
+  }
+  const parts = cleaned.split(/\s+/).filter(Boolean);
+  if (parts.length === 1) {
+    return parts[0].charAt(0).toUpperCase() || fallback;
+  }
+  return (
+    `${parts[0].charAt(0)}${parts[parts.length - 1].charAt(0)}`.toUpperCase() ||
+    fallback
+  );
+}
+
+/**
+ * Resolves a stored avatar URL for display, rejecting legacy `data:` URIs
+ * so UI components fall back cleanly to user initials.
+ */
+export function resolveAvatarDisplayUrl(
+  rawUrl: string | null | undefined,
+  apiBaseUrl?: string
+): string | null {
+  if (!rawUrl) return null;
+  const trimmed = rawUrl.trim();
+  if (!trimmed) return null;
+  if (/^data:/i.test(trimmed)) return null;
+  if (/^(https?:|blob:)/i.test(trimmed)) {
+    return trimmed;
+  }
+  if (trimmed.startsWith('/assets/')) {
+    return trimmed;
+  }
+  const base = (apiBaseUrl || '').trim().replace(/\/+$/, '');
+  const originMatch = base.match(/^(https?:\/\/[^/]+)/i);
+  const origin = originMatch ? originMatch[1] : '';
+  const normalizedPath = trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
+  return origin ? `${origin}${normalizedPath}` : normalizedPath;
+}
+
+/**
+ * Extracts the deleted announcement ID from an `announcement.deleted` realtime event.
+ */
+export function resolveDeletedAnnouncementId(
+  event: Pick<
+    RealtimeEvent,
+    'type' | 'announcement_id' | 'announcement' | 'message_id'
+  >
+): number | null {
+  if (event.type !== 'announcement.deleted') {
+    return null;
+  }
+  const candidate = Number(
+    event.announcement_id ?? event.announcement?.id ?? event.message_id ?? 0
+  );
+  return Number.isInteger(candidate) && candidate > 0 ? candidate : null;
+}
+
+/**
+ * Pure reducer for `urgentPopupAnnouncement` state on incoming realtime events:
+ * - Closes the popup when `announcement.deleted` matches the open announcement's ID.
+ * - Patches live Read Reach counts on `announcement.acknowledged` while preserving the local ack flag.
+ * - Closes the popup if the announcement transitions to `archived`.
+ */
+export function reduceUrgentPopupOnRealtimeEvent(
+  current: Announcement | null,
+  event: RealtimeEvent,
+  currentUserId?: number
+): Announcement | null {
+  if (!current) {
+    return null;
+  }
+
+  if (event.type === 'announcement.deleted') {
+    const deletedId = resolveDeletedAnnouncementId(event);
+    if (deletedId !== null && Number(current.id) === deletedId) {
+      return null;
+    }
+    return current;
+  }
+
+  if (event.type === 'announcement.acknowledged') {
+    const incoming = event.announcement;
+    const targetId = Number(event.announcement_id ?? incoming?.id ?? 0);
+    if (
+      targetId > 0 &&
+      Number(current.id) === targetId &&
+      incoming?.read_reach
+    ) {
+      const isSelfAck =
+        Boolean(currentUserId) &&
+        Boolean(event.actor_id) &&
+        Number(event.actor_id) === Number(currentUserId);
+      return {
+        ...current,
+        read_reach: {
+          acknowledged_count: incoming.read_reach.acknowledged_count,
+          enrolled_total: incoming.read_reach.enrolled_total,
+          percentage: incoming.read_reach.percentage,
+          has_current_user_acknowledged: isSelfAck
+            ? Boolean(incoming.read_reach.has_current_user_acknowledged)
+            : Boolean(current.read_reach.has_current_user_acknowledged),
+        },
+      };
+    }
+    return current;
+  }
+
+  if (event.type === 'announcement.updated' && event.announcement) {
+    if (
+      Number(event.announcement.id) === Number(current.id) &&
+      event.announcement.status === 'archived'
+    ) {
+      return null;
+    }
+  }
+
+  return current;
+}
+
+/**
+ * Removes an announcement from a local feed array by ID (returns original ref when unchanged).
+ */
+export function removeAnnouncementFromList(
+  list: Announcement[],
+  announcementId: number
+): Announcement[] {
+  const numericId = Number(announcementId);
+  if (!numericId || numericId <= 0) {
+    return list;
+  }
+  const exists = list.some((item) => Number(item.id) === numericId);
+  if (!exists) {
+    return list;
+  }
+  return list.filter((item) => Number(item.id) !== numericId);
+}
+
+/**
+ * Patches an announcement in a local feed array in-place, preserving the current user's
+ * `has_current_user_acknowledged` flag when another user triggered the update.
+ */
+export function patchAnnouncementInList(
+  list: Announcement[],
+  incoming: Partial<Announcement> & { id: number },
+  options?: { currentUserId?: number; actorId?: number }
+): Announcement[] {
+  const targetId = Number(incoming.id);
+  if (!targetId || targetId <= 0) {
+    return list;
+  }
+  const idx = list.findIndex((item) => Number(item.id) === targetId);
+  if (idx === -1) {
+    return list;
+  }
+
+  const existing = list[idx];
+  const isOtherActor =
+    Boolean(options?.currentUserId) &&
+    Boolean(options?.actorId) &&
+    Number(options?.actorId) !== Number(options?.currentUserId);
+
+  const nextReadReach = incoming.read_reach
+    ? {
+        acknowledged_count: incoming.read_reach.acknowledged_count,
+        enrolled_total: incoming.read_reach.enrolled_total,
+        percentage: incoming.read_reach.percentage,
+        has_current_user_acknowledged: isOtherActor
+          ? Boolean(existing.read_reach.has_current_user_acknowledged)
+          : Boolean(incoming.read_reach.has_current_user_acknowledged),
+      }
+    : existing.read_reach;
+
+  const merged: Announcement = {
+    ...existing,
+    ...(incoming.title ? { title: incoming.title } : {}),
+    ...(incoming.content !== undefined ? { content: incoming.content } : {}),
+    ...(incoming.subtitle !== undefined ? { subtitle: incoming.subtitle } : {}),
+    ...(incoming.status ? { status: incoming.status } : {}),
+    ...(incoming.is_urgent !== undefined
+      ? { is_urgent: incoming.is_urgent }
+      : {}),
+    ...(incoming.is_pinned !== undefined
+      ? { is_pinned: incoming.is_pinned }
+      : {}),
+    ...(incoming.is_edited !== undefined
+      ? { is_edited: incoming.is_edited }
+      : {}),
+    ...(incoming.updated_at ? { updated_at: incoming.updated_at } : {}),
+    read_reach: nextReadReach,
+  };
+
+  const next = [...list];
+  next[idx] = merged;
+  return next;
+}
+
+/**
  * Returns sorted unique IDs of all top-level Course Hubs that the user is approved in or administers,
  * used to subscribe to `clarify.channel.{id}` for every approved hub the user belongs to.
  */

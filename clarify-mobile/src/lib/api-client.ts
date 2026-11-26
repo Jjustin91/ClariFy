@@ -69,6 +69,22 @@ export function resolveApiAssetUrl(
   return `${origin}${normalizedPath}`;
 }
 
+/**
+ * Resolves a stored avatar URL for display while rejecting legacy base64 `data:` URIs
+ * so avatars fall back cleanly to initials during transition.
+ */
+export function resolveAvatarUrl(
+  rawUrl: string | null | undefined,
+  apiBaseUrl: string = API_BASE_URL
+): string | null {
+  if (!rawUrl) return null;
+  const trimmed = rawUrl.trim();
+  if (!trimmed || /^data:/i.test(trimmed)) {
+    return null;
+  }
+  return resolveApiAssetUrl(trimmed, apiBaseUrl);
+}
+
 type SessionExpiredListener = (message: string) => void;
 const sessionExpiredListeners = new Set<SessionExpiredListener>();
 
@@ -822,6 +838,14 @@ export async function deleteAnnouncementApi(
   return apiClient<{ message: string }>(`/announcements/${id}`, {
     method: 'DELETE',
   });
+}
+
+export async function getAnnouncementApi(
+  id: number
+): Promise<SingleResourceResponse<Announcement>> {
+  return apiClient<SingleResourceResponse<Announcement>>(
+    `/announcements/${id}`
+  );
 }
 
 export async function acknowledgeAnnouncementApi(

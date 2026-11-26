@@ -16,7 +16,7 @@ import {
 } from 'react-native';
 
 import { useAuth } from '../context/AuthContext';
-import { resolveApiAssetUrl, updateProfileApi } from '../lib/api-client';
+import { resolveAvatarUrl, updateProfileApi } from '../lib/api-client';
 import {
   buildProfileUpdateFormData,
   getFieldValidationError,
@@ -84,6 +84,7 @@ export function ProfileSettingsModal({
   const [selectedAvatarFile, setSelectedAvatarFile] =
     useState<NativeUploadFile | null>(null);
   const [removeAvatar, setRemoveAvatar] = useState(false);
+  const [avatarLoadFailed, setAvatarLoadFailed] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string[]>>({});
   const [generalError, setGeneralError] = useState<string | null>(null);
@@ -99,6 +100,7 @@ export function ProfileSettingsModal({
       setContactNumber(user?.contact_number || '');
       setSelectedAvatarFile(null);
       setRemoveAvatar(false);
+      setAvatarLoadFailed(false);
       setFieldErrors({});
       setGeneralError(null);
     }
@@ -108,7 +110,7 @@ export function ProfileSettingsModal({
     return null;
   }
 
-  const resolvedExistingAvatar = resolveApiAssetUrl(user.avatar_url);
+  const resolvedExistingAvatar = resolveAvatarUrl(user.avatar_url);
   const effectivePreviewUri = selectedAvatarFile
     ? selectedAvatarFile.uri
     : removeAvatar
@@ -154,6 +156,7 @@ export function ProfileSettingsModal({
       size: asset.fileSize,
     });
     setRemoveAvatar(false);
+    setAvatarLoadFailed(false);
   };
 
   const handlePickFromGallery = async () => {
@@ -316,9 +319,10 @@ export function ProfileSettingsModal({
             <View style={styles.avatarCard}>
               <View style={styles.avatarHeaderRow}>
                 <View style={styles.avatarRing}>
-                  {effectivePreviewUri ? (
+                  {effectivePreviewUri && !avatarLoadFailed ? (
                     <Image
                       source={{ uri: effectivePreviewUri }}
+                      onError={() => setAvatarLoadFailed(true)}
                       style={styles.avatarImage}
                       accessibilityLabel={`${user.name} profile photo`}
                     />

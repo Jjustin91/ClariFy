@@ -22,10 +22,12 @@ import {
   X,
 } from 'lucide-react';
 import { useClarify } from '../../context/ClarifyContext';
-import { logoutApi } from '../../lib/api-client';
+import { API_BASE_URL, logoutApi } from '../../lib/api-client';
 import {
   type AdminSectionTab,
   getTopLevelCourseHubs,
+  getUserInitials,
+  resolveAvatarDisplayUrl,
 } from '../../lib/domain-logic';
 import { AnnouncementFormModal } from '../modals/AnnouncementFormModal';
 import { ProfileSettingsModal } from '../modals/ProfileSettingsModal';
@@ -60,6 +62,7 @@ export function AppShell({
 
   const [isLogoutConfirmOpen, setIsLogoutConfirmOpen] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
+  const [failedAvatarUrl, setFailedAvatarUrl] = useState<string | null>(null);
   const logoutTriggerRef = useRef<HTMLButtonElement | null>(null);
   const cancelLogoutBtnRef = useRef<HTMLButtonElement | null>(null);
   const confirmLogoutBtnRef = useRef<HTMLButtonElement | null>(null);
@@ -225,7 +228,14 @@ export function AppShell({
         },
       ];
 
-  const avatarInitial = user.name ? user.name.charAt(0).toUpperCase() : 'U';
+  const avatarInitial = getUserInitials(user.name);
+  const resolvedUserAvatarUrl = resolveAvatarDisplayUrl(
+    user.avatar_url,
+    API_BASE_URL
+  );
+  const showAvatarImage = Boolean(
+    resolvedUserAvatarUrl && failedAvatarUrl !== resolvedUserAvatarUrl
+  );
   const idDisplay =
     user.role === 'faculty'
       ? `Faculty ID: ${user.institutional_id}`
@@ -363,10 +373,12 @@ export function AppShell({
             {/* Top Profile Header: Circular Avatar with gold/red ring, Name, Institutional ID, Scope */}
             <div className="px-4 pb-5 pt-1 text-center border-b border-amber-700/30">
               <div className="w-20 h-20 mx-auto rounded-full bg-white border-4 border-red-600 ring-2 ring-ustp-gold flex items-center justify-center text-2xl font-extrabold text-ustp-navy select-none overflow-hidden">
-                {user.avatar_url ? (
+                {showAvatarImage && resolvedUserAvatarUrl ? (
+                  // eslint-disable-next-line @next/next/no-img-element
                   <img
-                    src={user.avatar_url}
+                    src={resolvedUserAvatarUrl}
                     alt={user.name}
+                    onError={() => setFailedAvatarUrl(resolvedUserAvatarUrl)}
                     className="w-full h-full object-cover"
                   />
                 ) : (

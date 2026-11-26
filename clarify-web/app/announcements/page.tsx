@@ -13,7 +13,12 @@ import {
 } from '@/src/components/ui/StateViews';
 import { useClarify } from '@/src/context/ClarifyContext';
 import { getAnnouncementsApi } from '@/src/lib/api-client';
-import { canPublishCampusWideAnnouncements } from '@/src/lib/domain-logic';
+import {
+  canPublishCampusWideAnnouncements,
+  patchAnnouncementInList,
+  removeAnnouncementFromList,
+  resolveDeletedAnnouncementId,
+} from '@/src/lib/domain-logic';
 import type {
   Announcement,
   LaravelValidationError,
@@ -39,6 +44,7 @@ export default function AnnouncementsPage() {
     isAuthReady,
     announcementVersion,
     openAnnouncementModal,
+    subscribeRealtimeEvents,
   } = useClarify();
 
   const [search, setSearch] = useState('');
@@ -117,6 +123,35 @@ export default function AnnouncementsPage() {
     user.role,
     router,
   ]);
+
+  useEffect(() => {
+    if (!isAuthReady || !isAuthenticated || user.role === 'it_admin') {
+      return;
+    }
+    return subscribeRealtimeEvents((event) => {
+      if (event.type === 'announcement.deleted') {
+        const deletedId = resolveDeletedAnnouncementId(event);
+        if (deletedId !== null) {
+          setAnnouncements((prev) => {
+            const next = removeAnnouncementFromList(prev, deletedId);
+            if (next !== prev) {
+              setMeta((m) => ({ ...m, total: Math.max(0, m.total - 1) }));
+            }
+            return next;
+          });
+        }
+        return;
+      }
+      if (event.type === 'announcement.acknowledged' && event.announcement?.id) {
+        setAnnouncements((prev) =>
+          patchAnnouncementInList(prev, event.announcement!, {
+            currentUserId: user.id,
+            actorId: event.actor_id,
+          })
+        );
+      }
+    });
+  }, [isAuthReady, isAuthenticated, user.role, user.id, subscribeRealtimeEvents]);
 
   if (!isAuthReady || !isAuthenticated || user.role === 'it_admin') {
     return null;

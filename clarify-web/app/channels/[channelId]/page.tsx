@@ -70,8 +70,11 @@ import {
   isThreadUnread,
   isThreadVisibleToUser,
   isUserCourseAdmin,
+  patchAnnouncementInList,
   type QaThreadStatusFilter,
+  removeAnnouncementFromList,
   resolveCourseHubSelection,
+  resolveDeletedAnnouncementId,
 } from '@/src/lib/domain-logic';
 import type {
   Announcement,
@@ -350,6 +353,30 @@ export default function CourseHubPage() {
         return;
       }
 
+      if (event.type === 'announcement.deleted') {
+        const deletedId = resolveDeletedAnnouncementId(event);
+        if (deletedId !== null) {
+          setAnnouncements((prev) => removeAnnouncementFromList(prev, deletedId));
+          return;
+        }
+        void loadHubData(channelId);
+        return;
+      }
+
+      if (event.type === 'announcement.acknowledged') {
+        if (event.announcement?.id && event.announcement.read_reach) {
+          setAnnouncements((prev) =>
+            patchAnnouncementInList(prev, event.announcement!, {
+              currentUserId: user.id,
+              actorId: event.actor_id,
+            })
+          );
+          return;
+        }
+        void loadHubData(channelId);
+        return;
+      }
+
       if (
         event.type === 'thread.deleted' ||
         event.type.startsWith('announcement.')
@@ -374,6 +401,7 @@ export default function CourseHubPage() {
     isAuthReady,
     isAuthenticated,
     user.role,
+    user.id,
     loadHubData,
     subscribeRealtimeEvents,
     updateFaqSectionOpen,

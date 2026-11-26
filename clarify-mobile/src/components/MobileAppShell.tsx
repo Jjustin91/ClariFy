@@ -18,7 +18,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '../context/AuthContext';
 import { useChannels } from '../context/ChannelsContext';
 import { useOptionalRealtime } from '../context/RealtimeContext';
-import { resolveApiAssetUrl } from '../lib/api-client';
+import { resolveAvatarUrl } from '../lib/api-client';
 import type { AdminSectionTab } from '../lib/domain-logic';
 import { formatAdminPendingBadgeLabel } from '../lib/realtime-reducer';
 import {
@@ -75,6 +75,7 @@ export function MobileAppShell({
 
   const [isLogoutConfirmOpen, setIsLogoutConfirmOpen] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
+  const [failedAvatarUrl, setFailedAvatarUrl] = useState<string | null>(null);
   const [drawerMounted, setDrawerMounted] = useState(false);
   const [reduceMotion, setReduceMotion] = useState(false);
 
@@ -409,17 +410,24 @@ export function MobileAppShell({
               <View style={styles.profileSection}>
                 <View style={styles.avatarOuterRing}>
                   <View style={styles.avatarInnerRing}>
-                    {resolveApiAssetUrl(user.avatar_url) ? (
-                      <Image
-                        source={{
-                          uri: resolveApiAssetUrl(user.avatar_url)!,
-                        }}
-                        accessibilityLabel={user.name}
-                        style={styles.avatarImage}
-                      />
-                    ) : (
-                      <Text style={styles.avatarInitial}>{avatarInitial}</Text>
-                    )}
+                    {(() => {
+                      const resolvedAvatar = resolveAvatarUrl(user.avatar_url);
+                      if (resolvedAvatar && failedAvatarUrl !== resolvedAvatar) {
+                        return (
+                          <Image
+                            source={{ uri: resolvedAvatar }}
+                            onError={() => setFailedAvatarUrl(resolvedAvatar)}
+                            accessibilityLabel={user.name}
+                            style={styles.avatarImage}
+                          />
+                        );
+                      }
+                      return (
+                        <Text style={styles.avatarInitial}>
+                          {avatarInitial}
+                        </Text>
+                      );
+                    })()}
                   </View>
                 </View>
 

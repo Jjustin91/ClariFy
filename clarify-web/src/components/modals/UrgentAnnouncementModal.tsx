@@ -12,6 +12,7 @@ import {
 import { useClarify } from '../../context/ClarifyContext';
 import { acknowledgeAnnouncementApi } from '../../lib/api-client';
 import { parseAnnouncementAttachment } from '../../lib/domain-logic';
+import type { LaravelValidationError } from '../../types/api';
 import { formatShortTime } from '../announcements/AnnouncementCard';
 import { TagBadge } from '../ui/StateViews';
 
@@ -20,7 +21,9 @@ export function UrgentAnnouncementModal() {
     user,
     urgentPopupAnnouncement,
     dismissUrgentPopup,
-    triggerAnnouncementRefresh,
+    patchAnnouncementInState,
+    removeAnnouncementFromState,
+    refreshAnnouncementsFeedOnce,
     showToast,
   } = useClarify();
 
@@ -42,15 +45,28 @@ export function UrgentAnnouncementModal() {
     setIsAckLoading(true);
     try {
       const res = await acknowledgeAnnouncementApi(urgentPopupAnnouncement.id);
+      if (res?.data) {
+        patchAnnouncementInState(res.data, { scheduleRefetch: true });
+      }
       showToast(
         res.message ||
           'Urgent announcement acknowledged! Read Reach counter updated.',
         'success'
       );
-      triggerAnnouncementRefresh();
       dismissUrgentPopup(urgentPopupAnnouncement.id);
-    } catch {
-      showToast('Failed to record acknowledgment. Please try again.', 'error');
+    } catch (err) {
+      const apiErr = err as LaravelValidationError;
+      if (apiErr?.status === 404) {
+        dismissUrgentPopup(urgentPopupAnnouncement.id);
+        removeAnnouncementFromState(urgentPopupAnnouncement.id);
+        refreshAnnouncementsFeedOnce();
+        showToast('This announcement is no longer available.', 'info');
+      } else {
+        showToast(
+          'Failed to record acknowledgment. Please try again.',
+          'error'
+        );
+      }
     } finally {
       setIsAckLoading(false);
     }

@@ -21,7 +21,7 @@ import {
   TagPill,
 } from '@/components/StateViews';
 import { useAuth } from '@/context/AuthContext';
-import { getInstructorsApi } from '@/lib/api-client';
+import { getInstructorsApi, resolveAvatarUrl } from '@/lib/api-client';
 import { colors, radii, spacing, touchTarget, typography } from '@/theme';
 import type { ApiError, Instructor, PaginatedMeta } from '@/types/api';
 
@@ -53,6 +53,9 @@ export default function MobileInstructorsScreen() {
   const [error, setError] = useState<ApiError | null>(null);
   const [selectedInstructor, setSelectedInstructor] =
     useState<Instructor | null>(null);
+  const [failedAvatarIds, setFailedAvatarIds] = useState<
+    Record<number, boolean>
+  >({});
 
   const seqRef = useRef(0);
   const inFlightMoreRef = useRef(false);
@@ -176,15 +179,27 @@ export default function MobileInstructorsScreen() {
         >
           <View style={styles.facultyTopRow}>
             <View style={styles.avatarCircle}>
-              {item.avatar_url ? (
-                <Image
-                  source={{ uri: item.avatar_url }}
-                  accessibilityLabel={item.name}
-                  style={styles.avatarImage}
-                />
-              ) : (
-                <Text style={styles.avatarInitials}>{initials || 'F'}</Text>
-              )}
+              {(() => {
+                const avatarUri = resolveAvatarUrl(item.avatar_url);
+                if (avatarUri && !failedAvatarIds[item.id]) {
+                  return (
+                    <Image
+                      source={{ uri: avatarUri }}
+                      onError={() =>
+                        setFailedAvatarIds((prev) => ({
+                          ...prev,
+                          [item.id]: true,
+                        }))
+                      }
+                      accessibilityLabel={item.name}
+                      style={styles.avatarImage}
+                    />
+                  );
+                }
+                return (
+                  <Text style={styles.avatarInitials}>{initials || 'F'}</Text>
+                );
+              })()}
             </View>
 
             <View style={styles.facultyInfoWrap}>
@@ -233,7 +248,7 @@ export default function MobileInstructorsScreen() {
         </Pressable>
       );
     },
-    [selectedInstructor]
+    [selectedInstructor, failedAvatarIds]
   );
 
   const keyExtractor = useCallback((item: Instructor) => String(item.id), []);

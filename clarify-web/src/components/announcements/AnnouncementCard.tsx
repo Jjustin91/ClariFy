@@ -12,7 +12,11 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
-import type { Announcement, ReadReach } from '../../types/api';
+import type {
+  Announcement,
+  LaravelValidationError,
+  ReadReach,
+} from '../../types/api';
 import { useClarify } from '../../context/ClarifyContext';
 import {
   acknowledgeAnnouncementApi,
@@ -54,6 +58,9 @@ export function AnnouncementCard({
     channels,
     openAnnouncementModal,
     triggerAnnouncementRefresh,
+    patchAnnouncementInState,
+    removeAnnouncementFromState,
+    refreshAnnouncementsFeedOnce,
     showToast,
   } = useClarify();
 
@@ -196,18 +203,26 @@ export function AnnouncementCard({
     setOptimisticReadReach(calculateAcknowledgedReadReach(effectiveReadReach));
     try {
       const res = await acknowledgeAnnouncementApi(announcement.id);
-      if (res?.data?.read_reach) {
-        setOptimisticReadReach(res.data.read_reach);
+      if (res?.data) {
+        if (res.data.read_reach) {
+          setOptimisticReadReach(res.data.read_reach);
+        }
+        patchAnnouncementInState(res.data, { scheduleRefetch: true });
       }
       showToast(
         res.message || 'Announcement acknowledged. Read Reach updated.',
         'success'
       );
-      triggerAnnouncementRefresh();
-      onUpdated?.();
-    } catch {
+    } catch (err) {
       setOptimisticReadReach(null);
-      showToast('Failed to acknowledge announcement.', 'error');
+      const apiErr = err as LaravelValidationError;
+      if (apiErr?.status === 404) {
+        removeAnnouncementFromState(announcement.id);
+        refreshAnnouncementsFeedOnce();
+        showToast('This announcement is no longer available.', 'info');
+      } else {
+        showToast('Failed to acknowledge announcement.', 'error');
+      }
     } finally {
       setIsAckLoading(false);
     }

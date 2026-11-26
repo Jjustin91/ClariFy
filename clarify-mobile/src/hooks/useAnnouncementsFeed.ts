@@ -186,7 +186,8 @@ export function useAnnouncementsFeed({
 
       if (nextState !== stateRef.current) {
         if (event.type === 'announcement.deleted') {
-          const targetId = event.announcement?.id ?? event.message_id;
+          const targetId =
+            event.announcement_id ?? event.announcement?.id ?? event.message_id;
           if (targetId && targetId > 0) {
             dispatch({ type: 'REMOVE_ANNOUNCEMENT', announcementId: targetId });
           }
@@ -282,6 +283,9 @@ export function useAnnouncementsFeed({
 
         if (res?.data) {
           dispatch({ type: 'ACK_SUCCESS', announcement: res.data });
+          realtime?.patchAnnouncementInState(res.data, {
+            scheduleRefetch: true,
+          });
         } else {
           dispatch({ type: 'ACK_FINISH', announcementId: announcement.id });
         }
@@ -292,6 +296,17 @@ export function useAnnouncementsFeed({
       } catch (err) {
         if (!mountedRef.current) return;
         const apiErr = err as ApiError;
+
+        if (apiErr.status === 404) {
+          dispatch({
+            type: 'REMOVE_ANNOUNCEMENT',
+            announcementId: announcement.id,
+          });
+          realtime?.dismissUrgentPopup(announcement.id);
+          realtime?.refreshAnnouncementsFeedOnce();
+          showToast('This announcement is no longer available.', 'info');
+          return;
+        }
 
         if (shouldRefetchAnnouncementOnAckError(apiErr)) {
           await refetchSingleAnnouncementFallback(announcement);
@@ -314,7 +329,7 @@ export function useAnnouncementsFeed({
         }
       }
     },
-    [state.ackLoadingIds, showToast, refetchSingleAnnouncementFallback]
+    [state.ackLoadingIds, showToast, realtime, refetchSingleAnnouncementFallback]
   );
 
   const deleteAnnouncement = useCallback(

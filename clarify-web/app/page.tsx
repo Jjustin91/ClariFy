@@ -19,6 +19,9 @@ import {
   getJoinedCourseHubs,
   getSubChannelsForHub,
   getTopLevelCourseHubs,
+  patchAnnouncementInList,
+  removeAnnouncementFromList,
+  resolveDeletedAnnouncementId,
   resolveHubUpdateDestination,
 } from '@/src/lib/domain-logic';
 import type { Announcement, LaravelValidationError } from '@/src/types/api';
@@ -33,6 +36,7 @@ export default function DashboardPage() {
     announcementVersion,
     openAnnouncementModal,
     openCourseHubModal,
+    subscribeRealtimeEvents,
   } = useClarify();
 
   const allCourseHubs = getTopLevelCourseHubs(channels);
@@ -87,6 +91,29 @@ export default function DashboardPage() {
     user.role,
     router,
   ]);
+
+  useEffect(() => {
+    if (!isAuthReady || !isAuthenticated || user.role === 'it_admin') {
+      return;
+    }
+    return subscribeRealtimeEvents((event) => {
+      if (event.type === 'announcement.deleted') {
+        const deletedId = resolveDeletedAnnouncementId(event);
+        if (deletedId !== null) {
+          setAnnouncements((prev) => removeAnnouncementFromList(prev, deletedId));
+        }
+        return;
+      }
+      if (event.type === 'announcement.acknowledged' && event.announcement?.id) {
+        setAnnouncements((prev) =>
+          patchAnnouncementInList(prev, event.announcement!, {
+            currentUserId: user.id,
+            actorId: event.actor_id,
+          })
+        );
+      }
+    });
+  }, [isAuthReady, isAuthenticated, user.role, user.id, subscribeRealtimeEvents]);
 
   if (!isAuthReady || !isAuthenticated || user.role === 'it_admin') {
     return null;

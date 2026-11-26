@@ -9,7 +9,11 @@ import React, {
 } from 'react';
 import { AppState, type AppStateStatus } from 'react-native';
 
-import { getAdminMetricsApi, getAnnouncementsApi } from '../lib/api-client';
+import {
+  getAdminMetricsApi,
+  getAnnouncementApi,
+  getAnnouncementsApi,
+} from '../lib/api-client';
 import { getSubscribableCourseHubIds } from '../lib/domain-logic';
 import {
   computeDebouncedRefreshDelayMs,
@@ -17,6 +21,7 @@ import {
   normalizeReverbPayloadToEvent,
   planRealtimeEventEffects,
   reduceChannelsOnRealtimeEvent,
+  reduceUrgentPopupOnRealtimeEvent,
   resolveAdminPendingCount,
   shouldFetchAdminPendingCount,
 } from '../lib/realtime-reducer';
@@ -47,6 +52,12 @@ export interface RealtimeContextValue {
   activeChannelId: number;
   setActiveChannelId: (channelId: number) => void;
   triggerAnnouncementRefresh: () => void;
+  refreshAnnouncementsFeedOnce: () => void;
+  patchAnnouncementInState: (
+    announcement: Announcement,
+    options?: { scheduleRefetch?: boolean }
+  ) => void;
+  removeAnnouncementFromState: (announcementId: number) => void;
   subscribeRealtimeEvents: (listener: RealtimeEventListener) => () => void;
 }
 
@@ -90,6 +101,9 @@ export function RealtimeProvider({ children }: { children: React.ReactNode }) {
   const debouncedChannelTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
     null
   );
+  const singleAnnouncementRefetchTimersRef = useRef<
+    Map<number, ReturnType<typeof setTimeout>>
+  >(new Map());
   const urgentCheckInFlightRef = useRef<Promise<void> | null>(null);
   const adminPendingInFlightRef = useRef<Promise<void> | null>(null);
   const isAppActiveRef = useRef<boolean>(AppState.currentState === 'active');
@@ -186,6 +200,13 @@ export function RealtimeProvider({ children }: { children: React.ReactNode }) {
           setUrgentPopupAnnouncement((current) => {
             if (!current) return null;
             const updatedMatch = list.find((a) => a.id === current.id);
+            if (
+              updatedMatch &&
+              (updatedMatch.status !== 'published' ||
+                updatedMatch.read_reach?.has_current_user_acknowledged)
+            ) {
+              return null;
+            }
             return updatedMatch || current;
           });
         }
@@ -244,6 +265,106 @@ export function RealtimeProvider({ children }: { children: React.ReactNode }) {
     scheduleDebouncedChannelRefresh();
   }, [scheduleDebouncedChannelRefresh]);
 
+  const refreshAnnouncementsFeedOnce = useCallback(() => {
+    setAnnouncementVersion((v) => v + 1);
+  }, []);
+
+  const removeAnnouncementFromState = useCallback(
+    (announcementId: number) => {
+      const numericId = Number(announcementId);
+      if (!numericId || numericId <= 0) return;
+
+      dismissedUrgentIdsRef.current.add(numericId);
+      const pendingTimer =
+        singleAnnouncementRefetchTimersRef.current.get(numericId);
+      if (pendingTimer) {
+        clearTimeout(pendingTimer);
+        singleAnnouncementRefetchTimersRef.current.delete(numericId);
+      }
+
+      const deleteEvent: RealtimeEvent = {
+        revision: Date.now(),
+        type: 'announcement.deleted',
+        announcement_id: numericId,
+        timestamp: new Date().toISOString(),
+      };
+
+      setUrgentPopupAnnouncement((current) =>
+        reduceUrgentPopupOnRealtimeEvent(current, deleteEvent)
+      );
+      notifyEventListeners(deleteEvent);
+    },
+    [notifyEventListeners]
+  );
+
+  const patchAnnouncementInState = useCallback(
+    (
+      announcement: Announcement,
+      options: { scheduleRefetch?: boolean } = { scheduleRefetch: true }
+    ) => {
+      if (!announcement?.id) return;
+
+      const activeUser = userRef.current;
+      const patchEvent: RealtimeEvent = {
+        revision: Date.now(),
+        type: 'announcement.acknowledged',
+        channel_id: announcement.channel_id,
+        announcement_id: announcement.id,
+        actor_id: activeUser?.id,
+        announcement,
+        timestamp: new Date().toISOString(),
+      };
+
+      setUrgentPopupAnnouncement((current) =>
+        reduceUrgentPopupOnRealtimeEvent(current, patchEvent, activeUser?.id)
+      );
+      notifyEventListeners(patchEvent);
+
+      if (options.scheduleRefetch !== false) {
+        const targetId = Number(announcement.id);
+        const existingTimer =
+          singleAnnouncementRefetchTimersRef.current.get(targetId);
+        if (existingTimer) {
+          clearTimeout(existingTimer);
+        }
+        const timer = setTimeout(() => {
+          singleAnnouncementRefetchTimersRef.current.delete(targetId);
+          if (!isAppActiveRef.current) return;
+          void getAnnouncementApi(targetId)
+            .then((res) => {
+              if (!res?.data) return;
+              const fresh = res.data;
+              const currentActor = userRef.current;
+              const syncEvent: RealtimeEvent = {
+                revision: Date.now(),
+                type: 'announcement.acknowledged',
+                channel_id: fresh.channel_id,
+                announcement_id: fresh.id,
+                actor_id: currentActor?.id,
+                announcement: fresh,
+                timestamp: new Date().toISOString(),
+              };
+              setUrgentPopupAnnouncement((curr) =>
+                reduceUrgentPopupOnRealtimeEvent(
+                  curr,
+                  syncEvent,
+                  currentActor?.id
+                )
+              );
+              notifyEventListeners(syncEvent);
+            })
+            .catch((err: { status?: number }) => {
+              if (err?.status === 404) {
+                removeAnnouncementFromState(targetId);
+              }
+            });
+        }, 800);
+        singleAnnouncementRefetchTimersRef.current.set(targetId, timer);
+      }
+    },
+    [notifyEventListeners, removeAnnouncementFromState]
+  );
+
   const handleIncomingRealtimeEvent = useCallback(
     (event: RealtimeEvent) => {
       const currentUser = userRef.current;
@@ -280,22 +401,18 @@ export function RealtimeProvider({ children }: { children: React.ReactNode }) {
       if (plan.urgentPopupCandidate) {
         setUrgentPopupAnnouncement(plan.urgentPopupCandidate);
       }
-      if (
-        event.type === 'announcement.acknowledged' &&
-        event.announcement?.read_reach
+      if (plan.dismissUrgentPopupId !== null) {
+        dismissedUrgentIdsRef.current.add(plan.dismissUrgentPopupId);
+        setUrgentPopupAnnouncement((current) =>
+          reduceUrgentPopupOnRealtimeEvent(current, event, currentUser.id)
+        );
+      } else if (
+        event.type === 'announcement.acknowledged' ||
+        event.type === 'announcement.updated'
       ) {
-        const ackedAnn = event.announcement;
-        setUrgentPopupAnnouncement((current) => {
-          if (!current || current.id !== ackedAnn.id) return current;
-          return {
-            ...current,
-            read_reach: {
-              ...ackedAnn.read_reach,
-              has_current_user_acknowledged:
-                current.read_reach.has_current_user_acknowledged,
-            },
-          };
-        });
+        setUrgentPopupAnnouncement((current) =>
+          reduceUrgentPopupOnRealtimeEvent(current, event, currentUser.id)
+        );
       }
       if (plan.shouldCheckUrgentAnnouncement) {
         void checkUnacknowledgedUrgentAnnouncement();
@@ -488,10 +605,54 @@ export function RealtimeProvider({ children }: { children: React.ReactNode }) {
     refreshAdminPendingCount,
   ]);
 
+  // Temporarily subscribe to clarify.channel.{urgentPopup.channel_id} while an urgent popup is open
+  // so campus-wide/department urgent popup live Read Reach counters stay updated without clarify.global acks
+  const urgentPopupChannelId = urgentPopupAnnouncement?.channel_id ?? 0;
+  useEffect(() => {
+    if (
+      !isAuthReady ||
+      !isAuthenticated ||
+      !user?.id ||
+      user.role === 'it_admin' ||
+      !isAppActiveRef.current ||
+      !urgentPopupChannelId
+    ) {
+      return;
+    }
+
+    const existingHubIds = subscribableHubIdsKey
+      ? subscribableHubIdsKey.split(',').map((id) => Number(id))
+      : [];
+    if (existingHubIds.includes(Number(urgentPopupChannelId))) {
+      return;
+    }
+
+    return subscribeChannelReverb(
+      urgentPopupChannelId,
+      (payload: ReverbBroadcastPayload) => {
+        handleIncomingRealtimeEvent(
+          normalizeReverbPayloadToEvent(payload, urgentPopupChannelId)
+        );
+      }
+    );
+  }, [
+    isAuthReady,
+    isAuthenticated,
+    user?.id,
+    user?.role,
+    urgentPopupChannelId,
+    subscribableHubIdsKey,
+    appActiveEpoch,
+    handleIncomingRealtimeEvent,
+  ]);
+
   // Ensure full socket disconnect on provider unmount
   useEffect(() => {
+    const refetchTimers = singleAnnouncementRefetchTimersRef.current;
     return () => {
       clearDebouncedChannelTimer();
+      refetchTimers.forEach((timer) => clearTimeout(timer));
+      refetchTimers.clear();
       disconnectReverb();
     };
   }, [clearDebouncedChannelTimer]);
@@ -545,6 +706,9 @@ export function RealtimeProvider({ children }: { children: React.ReactNode }) {
       activeChannelId: effectiveActiveChannelId,
       setActiveChannelId,
       triggerAnnouncementRefresh,
+      refreshAnnouncementsFeedOnce,
+      patchAnnouncementInState,
+      removeAnnouncementFromState,
       subscribeRealtimeEvents,
     }),
     [
@@ -558,6 +722,9 @@ export function RealtimeProvider({ children }: { children: React.ReactNode }) {
       dismissUrgentPopup,
       effectiveActiveChannelId,
       triggerAnnouncementRefresh,
+      refreshAnnouncementsFeedOnce,
+      patchAnnouncementInState,
+      removeAnnouncementFromState,
       subscribeRealtimeEvents,
     ]
   );

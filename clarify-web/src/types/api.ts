@@ -281,6 +281,7 @@ export interface RealtimeEvent {
     | 'admin.updated'
     | 'db.changed';
   channel_id?: number;
+  announcement_id?: number;
   message_id?: number;
   target_user_id?: number;
   action?: 'requested' | 'approved' | 'rejected' | 'removed' | 'added';

@@ -82,21 +82,31 @@ export function UrgentAnnouncementModal() {
     setAckError(null);
     setIsAcknowledging(true);
     try {
-      await acknowledgeAnnouncementApi(announcement.id);
+      const res = await acknowledgeAnnouncementApi(announcement.id);
+      if (res?.data) {
+        realtime?.patchAnnouncementInState(res.data, { scheduleRefetch: true });
+      }
       showToast('Urgent announcement acknowledged!', 'success');
-      realtime?.triggerAnnouncementRefresh();
       realtime?.dismissUrgentPopup(announcement.id);
     } catch (err) {
       const apiErr = err as ApiError;
-      setAckError(
-        apiErr?.message
-          ? apiErr
-          : {
-              status: apiErr?.status ?? 500,
-              message:
-                'Failed to record acknowledgment. Please check your connection and try again.',
-            }
-      );
+      if (apiErr?.status === 404) {
+        setAckError(null);
+        realtime?.dismissUrgentPopup(announcement.id);
+        realtime?.removeAnnouncementFromState(announcement.id);
+        realtime?.refreshAnnouncementsFeedOnce();
+        showToast('This announcement is no longer available.', 'info');
+      } else {
+        setAckError(
+          apiErr?.message
+            ? apiErr
+            : {
+                status: apiErr?.status ?? 500,
+                message:
+                  'Failed to record acknowledgment. Please check your connection and try again.',
+              }
+        );
+      }
     } finally {
       setIsAcknowledging(false);
     }

@@ -18,7 +18,9 @@ import {
   patchAnnouncementFeedOnRealtimeEvent,
   planRealtimeEventEffects,
   reduceChannelsOnRealtimeEvent,
+  reduceUrgentPopupOnRealtimeEvent,
   resolveAdminPendingCount,
+  resolveDeletedAnnouncementId,
   resolvePushNotificationRoute,
   shouldFetchAdminPendingCount,
 } from './realtime-reducer.ts';
@@ -696,5 +698,57 @@ test('admin pending badge count helpers resolve metrics count, format badge labe
   assert.equal(shouldFetchAdminPendingCount(facultyUser, true), false);
   assert.equal(shouldFetchAdminPendingCount(null, true), false);
 });
+
+test('reduceUrgentPopupOnRealtimeEvent and planRealtimeEventEffects close urgent popup on matching announcement.deleted', () => {
+  const openUrgent = makeAnnouncement(22, { is_urgent: true, is_pinned: true });
+
+  const nonMatchingDelete = normalizeReverbPayloadToEvent({
+    type: 'announcement.deleted',
+    channel_id: 100,
+    announcement_id: 99,
+  });
+  assert.equal(resolveDeletedAnnouncementId(nonMatchingDelete), 99);
+  assert.equal(
+    reduceUrgentPopupOnRealtimeEvent(openUrgent, nonMatchingDelete, studentUser.id),
+    openUrgent
+  );
+
+  const matchingDelete = normalizeReverbPayloadToEvent({
+    type: 'announcement.deleted',
+    channel_id: 100,
+    announcement_id: 22,
+  });
+  assert.equal(resolveDeletedAnnouncementId(matchingDelete), 22);
+  assert.equal(
+    reduceUrgentPopupOnRealtimeEvent(openUrgent, matchingDelete, studentUser.id),
+    null
+  );
+
+  const deletePlan = planRealtimeEventEffects(matchingDelete, studentUser);
+  assert.equal(deletePlan.dismissUrgentPopupId, 22);
+  assert.equal(deletePlan.shouldBumpAnnouncementVersion, false);
+
+  // Feed patch also removes card using top-level announcement_id
+  const initialFeed = announcementFeedReducer(
+    createInitialAnnouncementFeedState(10),
+    {
+      type: 'LOAD_SUCCESS',
+      items: [openUrgent, makeAnnouncement(23)],
+      meta: { current_page: 1, last_page: 1, per_page: 10, total: 2 },
+      append: false,
+    }
+  );
+  const afterDeleteFeed = patchAnnouncementFeedOnRealtimeEvent(
+    initialFeed,
+    matchingDelete,
+    studentUser.id
+  );
+  assert.equal(afterDeleteFeed.shouldRefetch, false);
+  assert.deepEqual(
+    afterDeleteFeed.state.items.map((a) => a.id),
+    [23]
+  );
+});
+
 
 

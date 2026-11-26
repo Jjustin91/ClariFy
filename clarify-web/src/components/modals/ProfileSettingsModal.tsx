@@ -3,57 +3,15 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Camera, Phone, ShieldCheck, Trash2, X } from 'lucide-react';
 import { useClarify } from '../../context/ClarifyContext';
-import { updateProfileApi } from '../../lib/api-client';
+import { API_BASE_URL, updateProfileApi } from '../../lib/api-client';
 import {
   getFieldValidationError,
+  getUserInitials,
   normalizePhilippineMobileNumber,
+  resolveAvatarDisplayUrl,
+  validateProfileAvatarFile,
 } from '../../lib/domain-logic';
 import type { LaravelValidationError } from '../../types/api';
-
-async function compressAvatarFileToDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () => reject(new Error('Failed to read image file.'));
-    reader.onload = () => {
-      const result = typeof reader.result === 'string' ? reader.result : '';
-      if (!result) {
-        reject(new Error('Empty image data.'));
-        return;
-      }
-      const img = new window.Image();
-      img.onerror = () => resolve(result);
-      img.onload = () => {
-        const targetSize = 256;
-        const canvas = document.createElement('canvas');
-        canvas.width = targetSize;
-        canvas.height = targetSize;
-        const ctx = canvas.getContext('2d');
-        if (!ctx) {
-          resolve(result);
-          return;
-        }
-        // Center-crop square for crisp circular PFP
-        const minSide = Math.min(img.width, img.height);
-        const sx = Math.max(0, (img.width - minSide) / 2);
-        const sy = Math.max(0, (img.height - minSide) / 2);
-        ctx.drawImage(
-          img,
-          sx,
-          sy,
-          minSide,
-          minSide,
-          0,
-          0,
-          targetSize,
-          targetSize
-        );
-        resolve(canvas.toDataURL('image/jpeg', 0.85));
-      };
-      img.src = result;
-    };
-    reader.readAsDataURL(file);
-  });
-}
 
 export function ProfileSettingsModal() {
   const {
@@ -65,49 +23,111 @@ export function ProfileSettingsModal() {
   } = useClarify();
 
   const [contactNumber, setContactNumber] = useState(user.contact_number || '');
-  const [avatarPreview, setAvatarPreview] = useState<string | null>(
-    user.avatar_url || null
+  const [selectedAvatarFile, setSelectedAvatarFile] = useState<File | null>(
+    null
   );
+  const [localObjectUrl, setLocalObjectUrl] = useState<string | null>(null);
+  const [removeAvatar, setRemoveAvatar] = useState(false);
+  const [avatarLoadFailed, setAvatarLoadFailed] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string[]>>({});
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const wasOpenRef = useRef(false);
 
+  const revokeLocalPreview = (url: string | null) => {
+    if (url && url.startsWith('blob:')) {
+      try {
+        URL.revokeObjectURL(url);
+      } catch {
+        // Ignore revoke errors
+      }
+    }
+  };
+
   useEffect(() => {
     if (isSettingsModalOpen && !wasOpenRef.current) {
       wasOpenRef.current = true;
       setContactNumber(user.contact_number || '');
-      setAvatarPreview(user.avatar_url || null);
+      setSelectedAvatarFile(null);
+      setLocalObjectUrl((prev) => {
+        revokeLocalPreview(prev);
+        return null;
+      });
+      setRemoveAvatar(false);
+      setAvatarLoadFailed(false);
       setFieldErrors({});
-    } else if (!isSettingsModalOpen) {
+    } else if (!isSettingsModalOpen && wasOpenRef.current) {
       wasOpenRef.current = false;
+      setSelectedAvatarFile(null);
+      setLocalObjectUrl((prev) => {
+        revokeLocalPreview(prev);
+        return null;
+      });
     }
   }, [isSettingsModalOpen, user.contact_number, user.avatar_url]);
 
+  useEffect(() => {
+    return () => {
+      revokeLocalPreview(localObjectUrl);
+    };
+  }, [localObjectUrl]);
+
   if (!isSettingsModalOpen) return null;
 
-  const handleAvatarFileChange = async (
-    e: React.ChangeEvent<HTMLInputElement>
-  ) => {
+  const savedAvatarUrl = resolveAvatarDisplayUrl(user.avatar_url, API_BASE_URL);
+  const effectivePreviewUrl = localObjectUrl
+    ? localObjectUrl
+    : removeAvatar
+    ? null
+    : savedAvatarUrl;
+
+  const handleAvatarFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = '';
     if (!file) return;
 
-    if (!file.type.startsWith('image/')) {
-      showToast('Please select a valid image file (PNG, JPG, WebP).', 'error');
+    const validation = validateProfileAvatarFile({
+      name: file.name,
+      size: file.size,
+      type: file.type,
+    });
+    if (!validation.valid) {
+      setFieldErrors((prev) => ({
+        ...prev,
+        avatar: [validation.error],
+      }));
+      showToast(validation.error, 'error');
       return;
     }
 
-    try {
-      const dataUrl = await compressAvatarFileToDataUrl(file);
-      setAvatarPreview(dataUrl);
-      showToast(
-        'Profile photo ready! Click Save Profile to apply.',
-        'info'
-      );
-    } catch {
-      showToast('Failed to process selected image.', 'error');
-    }
+    const nextObjectUrl = URL.createObjectURL(file);
+    setLocalObjectUrl((prev) => {
+      revokeLocalPreview(prev);
+      return nextObjectUrl;
+    });
+    setSelectedAvatarFile(file);
+    setRemoveAvatar(false);
+    setAvatarLoadFailed(false);
+    setFieldErrors((prev) => {
+      if (!prev.avatar) return prev;
+      const next = { ...prev };
+      delete next.avatar;
+      return next;
+    });
+    showToast(
+      'Profile photo ready! Click Save Profile to upload.',
+      'info'
+    );
+  };
+
+  const handleRemoveAvatar = () => {
+    setSelectedAvatarFile(null);
+    setLocalObjectUrl((prev) => {
+      revokeLocalPreview(prev);
+      return null;
+    });
+    setRemoveAvatar(true);
+    setAvatarLoadFailed(false);
   };
 
   const handleSave = async (e: React.FormEvent) => {
@@ -133,13 +153,15 @@ export function ProfileSettingsModal() {
     try {
       const formData = new FormData();
       formData.set('contact_number', normalizedPhone);
-      formData.set('avatar_preview_url', avatarPreview || '');
+      if (selectedAvatarFile) {
+        formData.set('avatar', selectedAvatarFile, selectedAvatarFile.name);
+      } else if (removeAvatar) {
+        formData.set('remove_avatar', '1');
+        formData.set('avatar_preview_url', '');
+      }
       const res = await updateProfileApi(formData);
       setUser(res.data);
-      showToast(
-        res.message || 'Profile settings updated.',
-        'success'
-      );
+      showToast(res.message || 'Profile settings updated.', 'success');
       setIsSettingsModalOpen(false);
     } catch (err) {
       const apiErr = err as LaravelValidationError;
@@ -154,7 +176,8 @@ export function ProfileSettingsModal() {
   };
 
   const contactError = getFieldValidationError(fieldErrors, 'contact_number');
-  const avatarInitial = user.name ? user.name.charAt(0).toUpperCase() : 'U';
+  const avatarError = getFieldValidationError(fieldErrors, 'avatar');
+  const avatarInitials = getUserInitials(user.name);
 
   return (
     <div
@@ -187,61 +210,70 @@ export function ProfileSettingsModal() {
           <input
             ref={fileInputRef}
             type="file"
-            accept="image/*"
+            accept="image/jpeg,image/png,image/webp"
             onChange={handleAvatarFileChange}
             className="hidden"
             aria-label="Choose profile avatar image"
           />
 
           {/* Avatar Section */}
-          <div className="flex items-center gap-4">
-            <button
-              type="button"
-              onClick={() => fileInputRef.current?.click()}
-              title="Click to upload profile picture"
-              className="w-16 h-16 rounded-full bg-ustp-cream border-2 border-ustp-gold flex items-center justify-center text-xl font-extrabold text-ustp-navy shrink-0 overflow-hidden relative group cursor-pointer"
-            >
-              {avatarPreview ? (
-                <img
-                  src={avatarPreview}
-                  alt={user.name}
-                  className="w-full h-full object-cover"
-                />
-              ) : (
-                <span>{avatarInitial}</span>
-              )}
-              <span className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white">
-                <Camera className="w-4 h-4" />
-              </span>
-            </button>
-            <div className="min-w-0 flex-1">
-              <p className="text-sm font-bold text-ustp-text truncate">
-                {user.name}
-              </p>
-              <p className="text-xs text-slate-600 font-mono tabular-nums">
-                ID: {user.institutional_id} • {user.role.toUpperCase()}
-              </p>
-              <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                <button
-                  type="button"
-                  onClick={() => fileInputRef.current?.click()}
-                  className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-ustp-navy rounded border border-slate-300 cursor-pointer"
-                >
-                  <Camera className="w-3.5 h-3.5" />
-                  <span>Upload Avatar</span>
-                </button>
-                {avatarPreview && (
+          <div className="space-y-1.5">
+            <div className="flex items-center gap-4">
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                title="Click to upload profile picture"
+                className="w-16 h-16 rounded-full bg-ustp-cream border-2 border-ustp-gold flex items-center justify-center text-xl font-extrabold text-ustp-navy shrink-0 overflow-hidden relative group cursor-pointer"
+              >
+                {effectivePreviewUrl && !avatarLoadFailed ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={effectivePreviewUrl}
+                    alt={user.name}
+                    onError={() => setAvatarLoadFailed(true)}
+                    className="w-full h-full object-cover"
+                  />
+                ) : (
+                  <span>{avatarInitials}</span>
+                )}
+                <span className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white">
+                  <Camera className="w-4 h-4" />
+                </span>
+              </button>
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-bold text-ustp-text truncate">
+                  {user.name}
+                </p>
+                <p className="text-xs text-slate-600 font-mono tabular-nums">
+                  ID: {user.institutional_id} • {user.role.toUpperCase()}
+                </p>
+                <div className="mt-2 flex flex-wrap items-center gap-1.5">
                   <button
                     type="button"
-                    onClick={() => setAvatarPreview(null)}
-                    className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-red-600 hover:bg-red-50 rounded border border-red-200 cursor-pointer"
+                    onClick={() => fileInputRef.current?.click()}
+                    className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-ustp-navy rounded border border-slate-300 cursor-pointer"
                   >
-                    <Trash2 className="w-3 h-3" />
-                    <span>Remove</span>
+                    <Camera className="w-3.5 h-3.5" />
+                    <span>Upload Avatar</span>
                   </button>
-                )}
+                  {effectivePreviewUrl && (
+                    <button
+                      type="button"
+                      onClick={handleRemoveAvatar}
+                      className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-red-600 hover:bg-red-50 rounded border border-red-200 cursor-pointer"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                      <span>Remove</span>
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
+            {avatarError && (
+              <p className="text-xs font-semibold text-red-600" role="alert">
+                {avatarError}
+              </p>
+            )}
           </div>
 
           {/* Mobile Contact Number for SMS Fallback */}

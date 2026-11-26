@@ -49,8 +49,88 @@ export interface RealtimeEventPlan {
   shouldBumpAdminVersion: boolean;
   shouldCheckUrgentAnnouncement: boolean;
   urgentPopupCandidate: Announcement | null;
+  dismissUrgentPopupId: number | null;
   toast: RealtimeToastNotice | null;
   ignoredReason: string | null;
+}
+
+/**
+ * Extracts the deleted announcement ID from an `announcement.deleted` realtime event.
+ */
+export function resolveDeletedAnnouncementId(
+  event: Pick<
+    RealtimeEvent,
+    'type' | 'announcement_id' | 'announcement' | 'message_id'
+  >
+): number | null {
+  if (event.type !== 'announcement.deleted') {
+    return null;
+  }
+  const candidate = Number(
+    event.announcement_id ?? event.announcement?.id ?? event.message_id ?? 0
+  );
+  return Number.isInteger(candidate) && candidate > 0 ? candidate : null;
+}
+
+/**
+ * Pure reducer for `urgentPopupAnnouncement` state on incoming realtime events.
+ * Closes the urgent popup when `announcement.deleted` matches its ID, and patches live
+ * Read Reach counts on `announcement.acknowledged` while preserving the local ack flag.
+ */
+export function reduceUrgentPopupOnRealtimeEvent(
+  current: Announcement | null,
+  event: RealtimeEvent,
+  currentUserId?: number
+): Announcement | null {
+  if (!current) {
+    return null;
+  }
+
+  if (event.type === 'announcement.deleted') {
+    const deletedId = resolveDeletedAnnouncementId(event);
+    if (deletedId !== null && Number(current.id) === deletedId) {
+      return null;
+    }
+    return current;
+  }
+
+  if (event.type === 'announcement.acknowledged') {
+    const incoming = event.announcement;
+    const targetId = Number(event.announcement_id ?? incoming?.id ?? 0);
+    if (
+      targetId > 0 &&
+      Number(current.id) === targetId &&
+      incoming?.read_reach
+    ) {
+      const isSelfAck =
+        Boolean(currentUserId) &&
+        Boolean(event.actor_id) &&
+        Number(event.actor_id) === Number(currentUserId);
+      return {
+        ...current,
+        read_reach: {
+          acknowledged_count: incoming.read_reach.acknowledged_count,
+          enrolled_total: incoming.read_reach.enrolled_total,
+          percentage: incoming.read_reach.percentage,
+          has_current_user_acknowledged: isSelfAck
+            ? Boolean(incoming.read_reach.has_current_user_acknowledged)
+            : Boolean(current.read_reach.has_current_user_acknowledged),
+        },
+      };
+    }
+    return current;
+  }
+
+  if (event.type === 'announcement.updated' && event.announcement) {
+    if (
+      Number(event.announcement.id) === Number(current.id) &&
+      event.announcement.status === 'archived'
+    ) {
+      return null;
+    }
+  }
+
+  return current;
 }
 
 /**
@@ -76,6 +156,7 @@ export function normalizeReverbPayloadToEvent(
     revision: nowMs,
     type: payload.type || 'db.changed',
     channel_id: payload.channel_id ?? fallbackChannelId,
+    announcement_id: payload.announcement_id ?? payload.announcement?.id,
     message_id: payload.message_id,
     target_user_id: payload.target_user_id,
     action: payload.action,
@@ -320,6 +401,7 @@ export function planRealtimeEventEffects(
     shouldBumpAdminVersion: false,
     shouldCheckUrgentAnnouncement: false,
     urgentPopupCandidate: null,
+    dismissUrgentPopupId: null,
     toast: null,
     ignoredReason: null,
   };
@@ -420,12 +502,15 @@ export function planRealtimeEventEffects(
       };
     }
 
-    case 'announcement.deleted':
+    case 'announcement.deleted': {
+      const deletedId = resolveDeletedAnnouncementId(event);
       return {
         ...emptyPlan,
         shouldScheduleChannelRefresh: !isItAdmin,
-        shouldBumpAnnouncementVersion: !isItAdmin,
+        shouldBumpAnnouncementVersion: !isItAdmin && deletedId === null,
+        dismissUrgentPopupId: deletedId,
       };
+    }
 
     case 'announcement.acknowledged':
       // Handled in-place by feed subscribers when full announcement is attached;
@@ -660,7 +745,8 @@ export function patchAnnouncementFeedOnRealtimeEvent(
       };
 
     case 'announcement.deleted': {
-      const targetId = event.announcement?.id ?? event.message_id;
+      const targetId =
+        event.announcement_id ?? event.announcement?.id ?? event.message_id;
       if (targetId && targetId > 0) {
         const exists = state.items.some((item) => item.id === targetId);
         if (exists) {
@@ -672,6 +758,7 @@ export function patchAnnouncementFeedOnRealtimeEvent(
             shouldRefetch: false,
           };
         }
+        return { state, shouldRefetch: false };
       }
       return {
         state,

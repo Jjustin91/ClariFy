@@ -26,6 +26,31 @@ const RAW_API_URL =
   'https://api.ustpclarify.tech/api/v1';
 export const API_BASE_URL = RAW_API_URL.replace(/\/+$/, '');
 
+export function getApiOrigin(apiBaseUrl: string = API_BASE_URL): string {
+  const trimmed = (apiBaseUrl || '').trim().replace(/\/+$/, '');
+  const match = trimmed.match(/^(https?:\/\/[^/]+)/i);
+  return match ? match[1] : trimmed.replace(/\/api\/v\d+$/i, '');
+}
+
+export function resolveApiAssetUrl(
+  rawUrl: string | null | undefined,
+  apiBaseUrl: string = API_BASE_URL
+): string | null {
+  if (!rawUrl) return null;
+  const trimmed = rawUrl.trim();
+  if (!trimmed) return null;
+  if (/^data:/i.test(trimmed)) return null;
+  if (/^(https?:|blob:)/i.test(trimmed)) {
+    return trimmed;
+  }
+  if (trimmed.startsWith('/assets/')) {
+    return trimmed;
+  }
+  const origin = getApiOrigin(apiBaseUrl);
+  const normalizedPath = trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
+  return origin ? `${origin}${normalizedPath}` : normalizedPath;
+}
+
 const STORAGE_KEYS = {
   TOKEN: 'clarify_bearer_token',
   ROLE: 'clarify_active_role',
@@ -550,6 +575,51 @@ export async function markChannelSeenApi(
 
 const sessionAnnouncementsById = new Map<number, Announcement>();
 const sessionDeletedAnnouncementIds = new Set<number>();
+
+export function markAnnouncementDeletedLocally(id: number): void {
+  const numericId = Number(id);
+  if (!numericId || numericId <= 0) return;
+  sessionAnnouncementsById.delete(numericId);
+  sessionDeletedAnnouncementIds.add(numericId);
+}
+
+export function patchAnnouncementLocally(
+  incoming: Partial<Announcement> & { id: number },
+  preserveAckFlag = false
+): void {
+  const numericId = Number(incoming.id);
+  if (!numericId || numericId <= 0) return;
+  const existing = sessionAnnouncementsById.get(numericId);
+  if (existing) {
+    sessionAnnouncementsById.set(numericId, {
+      ...existing,
+      ...incoming,
+      read_reach: incoming.read_reach
+        ? {
+            ...incoming.read_reach,
+            has_current_user_acknowledged: preserveAckFlag
+              ? existing.read_reach.has_current_user_acknowledged
+              : incoming.read_reach.has_current_user_acknowledged,
+          }
+        : existing.read_reach,
+    });
+  } else if (incoming.title && incoming.content !== undefined && incoming.read_reach) {
+    sessionAnnouncementsById.set(numericId, incoming as Announcement);
+  }
+}
+
+export async function getAnnouncementApi(
+  id: number
+): Promise<SingleResourceResponse<Announcement>> {
+  const res = await requestLaravel<SingleResourceResponse<Announcement>>(
+    `/announcements/${id}`
+  );
+  if (res?.data) {
+    sessionAnnouncementsById.set(res.data.id, res.data);
+    sessionDeletedAnnouncementIds.delete(res.data.id);
+  }
+  return res;
+}
 
 function matchesAnnouncementFilters(
   ann: Announcement,
