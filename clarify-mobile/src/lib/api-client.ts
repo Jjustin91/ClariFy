@@ -1117,6 +1117,41 @@ export async function getPersistenceStatusApi(): Promise<
 // PUSH NOTIFICATIONS DEVICE TOKEN REGISTRATION
 // ============================================================================
 
+function formatSanitizedModuleError(error: unknown): string {
+  const errObj = error instanceof Error ? error : null;
+  const name =
+    errObj?.name?.trim() ||
+    (error &&
+    typeof error === 'object' &&
+    'name' in error &&
+    typeof (error as { name?: unknown }).name === 'string'
+      ? (error as { name: string }).name.trim()
+      : '') ||
+    'Error';
+  const rawMessage =
+    errObj?.message ||
+    (error &&
+    typeof error === 'object' &&
+    'message' in error &&
+    typeof (error as { message?: unknown }).message === 'string'
+      ? (error as { message: string }).message
+      : typeof error === 'string'
+        ? error
+        : 'Unknown error');
+
+  const sanitizedMessage = rawMessage
+    .replace(/Bearer\s+[A-Za-z0-9\-._~+/]+=*/gi, 'Bearer [REDACTED]')
+    .replace(/Expo(?:nent)?PushToken\[[^\]]+\]/gi, 'ExpoPushToken[[REDACTED]]')
+    .replace(/(Authorization|Cookie|Set-Cookie)\s*:\s*[^\r\n;,]+/gi, '$1: [REDACTED]')
+    .replace(/https?:\/\/[^\s)'"`]+/gi, '[URL_REDACTED]')
+    .replace(/([?&](?:token|access_token|auth|key|secret|password|jwt)=)[^&\s)'"`]+/gi, '$1[REDACTED]')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 160);
+
+  return `${name}: ${sanitizedMessage || 'Unknown error'}`;
+}
+
 export async function registerExpoPushTokenApi(
   expoPushToken: string,
   platformOverride?: 'ios' | 'android' | 'web'
@@ -1129,14 +1164,18 @@ export async function registerExpoPushTokenApi(
   let platform: 'ios' | 'android' | 'web' = platformOverride || 'android';
   if (!platformOverride) {
     try {
-      const { Platform } = await import('react-native');
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { Platform } = require('react-native');
       platform =
         Platform.OS === 'ios'
           ? 'ios'
           : Platform.OS === 'android'
             ? 'android'
             : 'web';
-    } catch {
+    } catch (error) {
+      console.warn(
+        `[api-client] Failed to load react-native Platform; defaulting push platform to android (${formatSanitizedModuleError(error)})`
+      );
       platform = 'android';
     }
   }
@@ -1156,13 +1195,14 @@ export async function registerDeviceForPushNotificationsAsync(): Promise<void> {
       return;
     }
 
-    const [{ Platform }, Device, Notifications, ConstantsModule] =
-      await Promise.all([
-        import('react-native'),
-        import('expo-device'),
-        import('expo-notifications'),
-        import('expo-constants'),
-      ]);
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { Platform } = require('react-native');
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const Device = require('expo-device');
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const Notifications = require('expo-notifications');
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const ConstantsModule = require('expo-constants');
 
     if (Platform.OS === 'web' || !Device.isDevice) {
       return;
@@ -1211,8 +1251,11 @@ export async function registerDeviceForPushNotificationsAsync(): Promise<void> {
     if (pushToken) {
       await registerExpoPushTokenApi(pushToken);
     }
-  } catch {
+  } catch (error) {
     // Non-fatal: never block login or session restore on push registration errors
+    console.warn(
+      `[api-client] Push notification device registration failed (${formatSanitizedModuleError(error)})`
+    );
   }
 }
 

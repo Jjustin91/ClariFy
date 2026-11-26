@@ -138,10 +138,10 @@ export function isNativeUploadFilePart(
 
 async function resolveDefaultFileSystemAdapter(): Promise<UploadFileSystemAdapter | null> {
   try {
-    const [{ Platform }, FileSystem] = await Promise.all([
-      import('react-native'),
-      import('expo-file-system'),
-    ]);
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { Platform } = require('react-native');
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const FileSystem = require('expo-file-system');
 
     if (Platform.OS === 'web') {
       return null;
@@ -207,7 +207,23 @@ async function resolveDefaultFileSystemAdapter(): Promise<UploadFileSystemAdapte
         };
       },
     };
-  } catch {
+  } catch (error) {
+    const errObj = error instanceof Error ? error : null;
+    const errName = errObj?.name?.trim() || 'Error';
+    const rawMsg =
+      errObj?.message || (typeof error === 'string' ? error : 'Unknown error');
+    const safeMsg =
+      sanitizeUploadErrorDetail(
+        rawMsg
+          .replace(/https?:\/\/[^\s)'"`]+/gi, '[URL_REDACTED]')
+          .replace(
+            /([?&](?:token|access_token|auth|key|secret|password|jwt)=)[^&\s)'"`]+/gi,
+            '$1[REDACTED]'
+          )
+      ) || 'Unknown error';
+    console.warn(
+      `[upload-file] Failed to load expo-file-system adapter (${errName}: ${safeMsg})`
+    );
     return null;
   }
 }

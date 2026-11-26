@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 import {
   apiClient,
@@ -943,5 +946,41 @@ test('apiClient stages native FormData uploads, preserves Accept/Authorization w
     globalThis.fetch = originalFetch;
     await clearSecureToken();
   }
+});
+
+test('no non-test file under clarify-mobile/src contains dynamic import() with a quoted specifier', () => {
+  const srcRoot = path.resolve(
+    path.dirname(fileURLToPath(import.meta.url)),
+    '..'
+  );
+  const dynamicImportPattern = /import\(\s*['"`]/;
+  const violations: string[] = [];
+
+  const walk = (dir: string) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(fullPath);
+        continue;
+      }
+      if (!entry.isFile()) {
+        continue;
+      }
+      if (/\.(test|spec)\.[cm]?[jt]sx?$/i.test(entry.name)) {
+        continue;
+      }
+      const contents = fs.readFileSync(fullPath, 'utf8');
+      if (dynamicImportPattern.test(contents)) {
+        violations.push(path.relative(srcRoot, fullPath));
+      }
+    }
+  };
+
+  walk(srcRoot);
+  assert.deepEqual(
+    violations,
+    [],
+    `Dynamic import() is forbidden in clarify-mobile/src (breaks Metro release bundles): ${violations.join(', ')}`
+  );
 });
 
