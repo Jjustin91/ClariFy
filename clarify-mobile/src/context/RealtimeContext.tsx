@@ -58,6 +58,7 @@ export interface RealtimeContextValue {
     options?: { scheduleRefetch?: boolean }
   ) => void;
   removeAnnouncementFromState: (announcementId: number) => void;
+  removeChannelAnnouncementsFromState: (channelIds: number[]) => void;
   subscribeRealtimeEvents: (listener: RealtimeEventListener) => () => void;
 }
 
@@ -293,6 +294,42 @@ export function RealtimeProvider({ children }: { children: React.ReactNode }) {
         reduceUrgentPopupOnRealtimeEvent(current, deleteEvent)
       );
       notifyEventListeners(deleteEvent);
+    },
+    [notifyEventListeners]
+  );
+
+  const removeChannelAnnouncementsFromState = useCallback(
+    (channelIds: number[]) => {
+      const uniqueIds = Array.from(
+        new Set(
+          channelIds
+            .map((id) => Number(id))
+            .filter((id) => Number.isFinite(id) && id > 0)
+        )
+      );
+      if (uniqueIds.length === 0) return;
+
+      const activeUserId = userRef.current?.id;
+      const nowIso = new Date().toISOString();
+
+      for (const cid of uniqueIds) {
+        const leaveEvent: RealtimeEvent = {
+          revision: Date.now(),
+          type: 'membership.changed',
+          channel_id: cid,
+          target_user_id: activeUserId,
+          actor_id: activeUserId,
+          action: 'left',
+          timestamp: nowIso,
+        };
+
+        setUrgentPopupAnnouncement((current) =>
+          reduceUrgentPopupOnRealtimeEvent(current, leaveEvent, activeUserId)
+        );
+        notifyEventListeners(leaveEvent);
+      }
+
+      setAnnouncementVersion((v) => v + 1);
     },
     [notifyEventListeners]
   );
@@ -709,6 +746,7 @@ export function RealtimeProvider({ children }: { children: React.ReactNode }) {
       refreshAnnouncementsFeedOnce,
       patchAnnouncementInState,
       removeAnnouncementFromState,
+      removeChannelAnnouncementsFromState,
       subscribeRealtimeEvents,
     }),
     [
@@ -725,6 +763,7 @@ export function RealtimeProvider({ children }: { children: React.ReactNode }) {
       refreshAnnouncementsFeedOnce,
       patchAnnouncementInState,
       removeAnnouncementFromState,
+      removeChannelAnnouncementsFromState,
       subscribeRealtimeEvents,
     ]
   );

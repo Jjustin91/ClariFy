@@ -130,6 +130,17 @@ export function reduceUrgentPopupOnRealtimeEvent(
     }
   }
 
+  if (
+    event.type === 'membership.changed' &&
+    (event.action === 'left' || event.action === 'removed') &&
+    Boolean(currentUserId) &&
+    Number(event.target_user_id) === Number(currentUserId) &&
+    event.channel_id &&
+    Number(current.channel_id) === Number(event.channel_id)
+  ) {
+    return null;
+  }
+
   return current;
 }
 
@@ -764,6 +775,27 @@ export function patchAnnouncementFeedOnRealtimeEvent(
         state,
         shouldRefetch: matchesFilter(event.channel_id),
       };
+    }
+
+    case 'membership.changed': {
+      const isSelfLeftOrRemoved =
+        Boolean(event.target_user_id) &&
+        Number(event.target_user_id) === Number(currentUserId) &&
+        (event.action === 'left' || event.action === 'removed');
+      if (
+        isSelfLeftOrRemoved &&
+        event.channel_id &&
+        Number(event.channel_id) > 0
+      ) {
+        return {
+          state: announcementFeedReducer(state, {
+            type: 'REMOVE_CHANNEL_ANNOUNCEMENTS',
+            channelIds: [Number(event.channel_id)],
+          }),
+          shouldRefetch: true,
+        };
+      }
+      return { state, shouldRefetch: false };
     }
 
     case 'db.changed':

@@ -24,7 +24,7 @@ import {
 } from '../../lib/api-client';
 import {
   calculateAcknowledgedReadReach,
-  canPublishOrManageAnnouncements,
+  canManageAnnouncement,
   parseAnnouncementAttachment,
 } from '../../lib/domain-logic';
 import { TagBadge } from '../ui/StateViews';
@@ -112,9 +112,7 @@ export function AnnouncementCard({
   const isCampusWideMemo =
     announcement.channel_type === 'university' ||
     matchedChannel?.channel_type === 'university';
-  const canManage = isCampusWideMemo
-    ? user.role === 'dept_head'
-    : canPublishOrManageAnnouncements(user.role);
+  const canManage = canManageAnnouncement(announcement, user, channels);
   const isStudent = user.role === 'student';
   const timeFormatted = formatShortTime(announcement.published_at);
   const editedTimeFormatted = formatShortTime(announcement.updated_at);

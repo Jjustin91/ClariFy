@@ -729,11 +729,10 @@ export async function joinChannelApi(
 
 export async function leaveChannelApi(
   channelId: number
-): Promise<SingleResourceResponse<Channel>> {
-  return apiClient<SingleResourceResponse<Channel>>(
-    `/channels/${channelId}/leave`,
-    { method: 'POST' }
-  );
+): Promise<SingleResourceResponse<Channel> & { left_channel_ids?: number[] }> {
+  return apiClient<
+    SingleResourceResponse<Channel> & { left_channel_ids?: number[] }
+  >(`/channels/${channelId}/leave`, { method: 'POST' });
 }
 
 export async function manageChannelMemberApi(

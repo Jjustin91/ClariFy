@@ -62,6 +62,7 @@ export type AnnouncementFeedAction =
   | { type: 'ACK_FINISH'; announcementId: number }
   | { type: 'PATCH_ANNOUNCEMENT'; announcement: Announcement }
   | { type: 'REMOVE_ANNOUNCEMENT'; announcementId: number }
+  | { type: 'REMOVE_CHANNEL_ANNOUNCEMENTS'; channelIds: number[] }
   | { type: 'RESET'; perPage?: number };
 
 /**
@@ -198,6 +199,37 @@ export function announcementFeedReducer(
         ackLoadingIds: state.ackLoadingIds.filter(
           (id) => id !== action.announcementId
         ),
+      };
+    }
+
+    case 'REMOVE_CHANNEL_ANNOUNCEMENTS': {
+      const idSet = new Set(
+        action.channelIds
+          .map((id) => Number(id))
+          .filter((id) => Number.isFinite(id) && id > 0)
+      );
+      if (idSet.size === 0) {
+        return state;
+      }
+      const removedIds = new Set<number>();
+      const nextItems = state.items.filter((item) => {
+        if (idSet.has(Number(item.channel_id))) {
+          removedIds.add(item.id);
+          return false;
+        }
+        return true;
+      });
+      if (removedIds.size === 0) {
+        return state;
+      }
+      return {
+        ...state,
+        items: nextItems,
+        meta: {
+          ...state.meta,
+          total: Math.max(0, state.meta.total - removedIds.size),
+        },
+        ackLoadingIds: state.ackLoadingIds.filter((id) => !removedIds.has(id)),
       };
     }
 

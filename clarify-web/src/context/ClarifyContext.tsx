@@ -18,6 +18,7 @@ import type {
 } from '../types/api';
 import {
   API_BASE_URL,
+  clearSessionAnnouncementsForChannels,
   clearStoredSession,
   getAnnouncementApi,
   getAnnouncementsApi,
@@ -35,6 +36,7 @@ import {
 } from '../lib/api-client';
 import {
   formatCourseHubName,
+  getSubChannelsForHub,
   getSubscribableCourseHubIds,
   getTopLevelCourseHubs,
   isUserCourseAdmin,
@@ -982,6 +984,20 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
           targetUserId === Number(activeUser.id);
 
         if (isCurrentUserTarget) {
+          if (
+            targetChannelId > 0 &&
+            (event.action === 'left' || event.action === 'removed')
+          ) {
+            const subChannelIds = getSubChannelsForHub(
+              channelsRef.current,
+              targetChannelId
+            ).map((sub) => sub.id);
+            clearSessionAnnouncementsForChannels([
+              targetChannelId,
+              ...subChannelIds,
+            ]);
+          }
+
           const dedupeKey = `${targetChannelId}:${targetUserId}:${event.action || ''}`;
           const lastShownAt =
             recentMembershipToastKeysRef.current.get(dedupeKey) || 0;
@@ -1393,7 +1409,9 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
         }
       } else if (
         channelMatch &&
-        (endpoint.endsWith('/members') || endpoint.endsWith('/join'))
+        (endpoint.endsWith('/members') ||
+          endpoint.endsWith('/join') ||
+          endpoint.endsWith('/leave'))
       ) {
         // Only synthesize membership.changed on cross-tab BroadcastChannel events so same-tab doesn't double-fire
         if (isFromCrossTab) {
@@ -1401,6 +1419,8 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
           const rawAction = String(msgData?.requestBody?.action || '');
           if (endpoint.endsWith('/join')) {
             membershipAction = 'requested';
+          } else if (endpoint.endsWith('/leave')) {
+            membershipAction = 'left';
           } else if (rawAction === 'approve') {
             membershipAction = 'approved';
           } else if (rawAction === 'reject') {
@@ -1414,7 +1434,9 @@ export function ClarifyProvider({ children }: { children: React.ReactNode }) {
             msgData?.requestBody?.institutional_id || ''
           );
           const activeUser = getStoredUser();
-          if (
+          if (endpoint.endsWith('/leave') && actorId === activeUser.id) {
+            targetUserId = activeUser.id;
+          } else if (
             targetInstId &&
             activeUser.institutional_id === targetInstId
           ) {

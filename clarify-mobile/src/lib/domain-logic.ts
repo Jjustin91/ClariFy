@@ -1361,15 +1361,24 @@ export function canManageAnnouncement(
   if (!user || user.role === 'student' || user.role === 'it_admin') {
     return false;
   }
+  if (typeof announcement.can_manage === 'boolean') {
+    return announcement.can_manage;
+  }
+  if (
+    announcement.publisher?.id != null &&
+    Number(announcement.publisher.id) === Number(user.id)
+  ) {
+    return true;
+  }
   const matchedChannel = channels.find(
     (c) => Number(c.id) === Number(announcement.channel_id)
   );
-  const isCampusWideMemo =
-    announcement.channel_type === 'university' ||
-    matchedChannel?.channel_type === 'university';
-  return isCampusWideMemo
-    ? user.role === 'dept_head'
-    : canPublishOrManageAnnouncements(user.role);
+  const effectiveChannelType =
+    announcement.channel_type ?? matchedChannel?.channel_type ?? 'course_hub';
+  if (user.role === 'dept_head' && effectiveChannelType !== 'course_hub') {
+    return true;
+  }
+  return false;
 }
 
 /**

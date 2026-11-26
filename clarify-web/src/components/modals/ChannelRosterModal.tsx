@@ -45,6 +45,7 @@ export function ChannelRosterModal() {
     user,
     channels,
     refreshChannels,
+    triggerAnnouncementRefresh,
     isChannelModalOpen,
     setIsChannelModalOpen,
     channelModalTargetHubId,
@@ -199,8 +200,12 @@ export function ChannelRosterModal() {
   const handleCancelJoinRequest = async (channelId: number) => {
     setJoiningHubId(channelId);
     try {
-      const res = await leaveChannelApi(channelId);
+      const subChannelIds = getSubChannelsForHub(channels, channelId).map(
+        (sub) => sub.id
+      );
+      const res = await leaveChannelApi(channelId, subChannelIds);
       await refreshChannels();
+      triggerAnnouncementRefresh();
       showToast(res.message || 'Join request cancelled.', 'info');
     } catch (err) {
       const apiErr = err as LaravelValidationError;

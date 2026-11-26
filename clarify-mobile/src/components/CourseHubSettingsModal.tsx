@@ -16,6 +16,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useAuth } from '../context/AuthContext';
 import { useChannels } from '../context/ChannelsContext';
+import { useOptionalRealtime } from '../context/RealtimeContext';
 import {
   joinChannelApi,
   leaveChannelApi,
@@ -26,6 +27,7 @@ import {
   formatEnrolledRosterSummary,
   getChannelFacultyLabel,
   getFieldValidationError,
+  getSubChannelsForHub,
   isUserCourseAdmin,
 } from '../lib/domain-logic';
 import { getChannelMembersCount } from '../lib/feed-reducer';
@@ -68,12 +70,14 @@ export function CourseHubSettingsModal({
   const insets = useSafeAreaInsets();
   const { user, showToast } = useAuth();
   const {
+    channels,
     rosterByChannelId,
     isLoadingRosterById,
     refreshChannelRoster,
     setRosterChannelSnapshot,
     refreshChannels,
   } = useChannels();
+  const realtime = useOptionalRealtime();
 
   const [newMemberId, setNewMemberId] = useState('');
   const [newMemberName, setNewMemberName] = useState('');
@@ -145,6 +149,18 @@ export function CourseHubSettingsModal({
     setIsManagingRoster(true);
     try {
       const res = await leaveChannelApi(hub.id);
+      const subChannelIds = getSubChannelsForHub(channels, hub.id).map(
+        (sub) => sub.id
+      );
+      const leftChannelIds = Array.from(
+        new Set([
+          hub.id,
+          ...subChannelIds,
+          ...(Array.isArray(res?.left_channel_ids) ? res.left_channel_ids : []),
+        ])
+      );
+      realtime?.removeChannelAnnouncementsFromState(leftChannelIds);
+      realtime?.triggerAnnouncementRefresh();
       await refreshChannels();
       setConfirmingLeave(false);
       onClose();

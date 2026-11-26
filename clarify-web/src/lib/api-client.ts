@@ -17,7 +17,7 @@ import type {
   UserRole,
   VerificationStatus,
 } from '../types/api';
-import { buildChatMessageFormData } from './domain-logic';
+import { buildChatMessageFormData } from './domain-logic.ts';
 
 // Always route browser requests through same-origin /api/v1 (which connects to PostgreSQL directly or proxies to LARAVEL_BACKEND_URL)
 const RAW_API_URL = 
@@ -148,6 +148,8 @@ export function setStoredToken(token: string | null): void {
 export function clearStoredSession(): void {
   setStoredToken(null);
   setStoredUser(null);
+  sessionAnnouncementsById.clear();
+  sessionDeletedAnnouncementIds.clear();
 }
 
 async function requestLaravel<T>(
@@ -516,12 +518,38 @@ export async function joinChannelApi(
 }
 
 export async function leaveChannelApi(
-  channelId: number
-): Promise<SingleResourceResponse<Channel>> {
-  return requestLaravel<SingleResourceResponse<Channel>>(
-    `/channels/${channelId}/leave`,
-    { method: 'POST' }
-  );
+  channelId: number,
+  subChannelIds: number[] = []
+): Promise<SingleResourceResponse<Channel> & { left_channel_ids?: number[] }> {
+  const res = await requestLaravel<
+    SingleResourceResponse<Channel> & { left_channel_ids?: number[] }
+  >(`/channels/${channelId}/leave`, { method: 'POST' });
+
+  const idsToClear = new Set<number>([Number(channelId)]);
+  for (const subId of subChannelIds) {
+    const numericId = Number(subId);
+    if (Number.isFinite(numericId) && numericId > 0) {
+      idsToClear.add(numericId);
+    }
+  }
+  if (Array.isArray(res?.left_channel_ids)) {
+    for (const leftId of res.left_channel_ids) {
+      const numericId = Number(leftId);
+      if (Number.isFinite(numericId) && numericId > 0) {
+        idsToClear.add(numericId);
+      }
+    }
+  }
+  if (res?.data?.id) {
+    idsToClear.add(Number(res.data.id));
+  }
+  if (res?.data?.parent_hub_id) {
+    idsToClear.add(Number(res.data.parent_hub_id));
+  }
+
+  clearSessionAnnouncementsForChannels(Array.from(idsToClear));
+
+  return res;
 }
 
 export async function manageChannelMemberApi(
@@ -581,6 +609,31 @@ export function markAnnouncementDeletedLocally(id: number): void {
   if (!numericId || numericId <= 0) return;
   sessionAnnouncementsById.delete(numericId);
   sessionDeletedAnnouncementIds.add(numericId);
+}
+
+export function clearSessionAnnouncementsForChannels(
+  channelIds: number[]
+): void {
+  const idSet = new Set<number>(
+    channelIds
+      .map((id) => Number(id))
+      .filter((id) => Number.isFinite(id) && id > 0)
+  );
+  if (idSet.size === 0) return;
+
+  for (const [annId, ann] of sessionAnnouncementsById.entries()) {
+    const annChannelId = Number(ann.channel_id);
+    const annParentHubId = Number(
+      (ann as Announcement & { parent_hub_id?: number | null }).parent_hub_id ??
+        0
+    );
+    if (
+      idSet.has(annChannelId) ||
+      (annParentHubId > 0 && idSet.has(annParentHubId))
+    ) {
+      sessionAnnouncementsById.delete(annId);
+    }
+  }
 }
 
 export function patchAnnouncementLocally(

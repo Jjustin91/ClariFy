@@ -21,6 +21,7 @@ import { useAuth } from '@/context/AuthContext';
 import { useChannels } from '@/context/ChannelsContext';
 import { useAnnouncementsFeed } from '@/hooks/useAnnouncementsFeed';
 import {
+  canManageAnnouncement,
   canPublishOrManageAnnouncements,
   formatCourseHubName,
   formatHubActivityBreakdownChips,
@@ -123,25 +124,32 @@ export default function MobileDashboardScreen() {
             />
           ) : (
             <View style={styles.cardsStack}>
-              {feed.items.map((item) => (
-                <AnnouncementCard
-                  key={String(item.id)}
-                  announcement={item}
-                  channels={channels}
-                  compact
-                  isAckLoading={feed.ackLoadingIds.includes(item.id)}
-                  isDeleting={feed.deletingIds.includes(item.id)}
-                  onAcknowledge={feed.acknowledge}
-                  onEdit={
-                    canManageAnnouncements
-                      ? (ann) => setEditingAnnouncement(ann)
-                      : undefined
-                  }
-                  onDelete={
-                    canManageAnnouncements ? feed.deleteAnnouncement : undefined
-                  }
-                />
-              ))}
+              {feed.items.map((item) => {
+                const canManageItem = canManageAnnouncement(
+                  item,
+                  user,
+                  channels
+                );
+                return (
+                  <AnnouncementCard
+                    key={String(item.id)}
+                    announcement={item}
+                    channels={channels}
+                    compact
+                    isAckLoading={feed.ackLoadingIds.includes(item.id)}
+                    isDeleting={feed.deletingIds.includes(item.id)}
+                    onAcknowledge={feed.acknowledge}
+                    onEdit={
+                      canManageItem
+                        ? (ann) => setEditingAnnouncement(ann)
+                        : undefined
+                    }
+                    onDelete={
+                      canManageItem ? feed.deleteAnnouncement : undefined
+                    }
+                  />
+                );
+              })}
             </View>
           )}
         </View>

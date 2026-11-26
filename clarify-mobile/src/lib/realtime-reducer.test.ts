@@ -750,5 +750,61 @@ test('reduceUrgentPopupOnRealtimeEvent and planRealtimeEventEffects close urgent
   );
 });
 
+test('REMOVE_CHANNEL_ANNOUNCEMENTS and membership.changed(left) drop left hub items immediately and request feed refresh', () => {
+  const hubAnn = makeAnnouncement(31, { channel_id: 100 });
+  const subHubAnn = makeAnnouncement(32, { channel_id: 101 });
+  const campusAnn = makeAnnouncement(33, {
+    channel_id: 1,
+    channel_type: 'university',
+  });
+
+  const initial = announcementFeedReducer(
+    createInitialAnnouncementFeedState(10),
+    {
+      type: 'LOAD_SUCCESS',
+      items: [hubAnn, subHubAnn, campusAnn],
+      meta: { current_page: 1, last_page: 1, per_page: 10, total: 3 },
+      append: false,
+    }
+  );
+
+  const reduced = announcementFeedReducer(initial, {
+    type: 'REMOVE_CHANNEL_ANNOUNCEMENTS',
+    channelIds: [100, 101],
+  });
+  assert.deepEqual(
+    reduced.items.map((a) => a.id),
+    [33]
+  );
+  assert.equal(reduced.meta.total, 1);
+
+  const leaveEvent = normalizeReverbPayloadToEvent({
+    type: 'membership.changed',
+    channel_id: 100,
+    target_user_id: studentUser.id,
+    actor_id: studentUser.id,
+    action: 'left',
+  });
+
+  const patched = patchAnnouncementFeedOnRealtimeEvent(
+    initial,
+    leaveEvent,
+    studentUser.id
+  );
+  assert.equal(patched.shouldRefetch, true);
+  assert.deepEqual(
+    patched.state.items.map((a) => a.id),
+    [32, 33]
+  );
+  assert.equal(
+    reduceUrgentPopupOnRealtimeEvent(hubAnn, leaveEvent, studentUser.id),
+    null
+  );
+  assert.equal(
+    reduceUrgentPopupOnRealtimeEvent(campusAnn, leaveEvent, studentUser.id),
+    campusAnn
+  );
+});
+
 
 

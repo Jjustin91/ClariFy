@@ -176,6 +176,22 @@ export function useAnnouncementsFeed({
     }
 
     return realtime.subscribeRealtimeEvents((event) => {
+      if (
+        event.type === 'membership.changed' &&
+        (event.action === 'left' || event.action === 'removed') &&
+        event.target_user_id &&
+        Number(event.target_user_id) === Number(user.id) &&
+        event.channel_id &&
+        Number(event.channel_id) > 0
+      ) {
+        dispatch({
+          type: 'REMOVE_CHANNEL_ANNOUNCEMENTS',
+          channelIds: [Number(event.channel_id)],
+        });
+        void fetchPage(1, 'silent');
+        return;
+      }
+
       const { state: nextState, shouldRefetch } =
         patchAnnouncementFeedOnRealtimeEvent(
           stateRef.current,
@@ -206,7 +222,14 @@ export function useAnnouncementsFeed({
         scheduleDebouncedSilentRefresh();
       }
     });
-  }, [enabled, realtime, user?.id, channelId, scheduleDebouncedSilentRefresh]);
+  }, [
+    enabled,
+    realtime,
+    user?.id,
+    channelId,
+    fetchPage,
+    scheduleDebouncedSilentRefresh,
+  ]);
 
   // React to foreground catch-up or manual announcementVersion bumps
   useEffect(() => {

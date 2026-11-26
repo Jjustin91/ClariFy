@@ -46,6 +46,7 @@ import {
   getCleanChannelDescription,
   getFieldValidationError,
   getJoinedCourseHubs,
+  getSubChannelsForHub,
   getUnsentMessagePlaceholder,
   isSubChannel,
   isUserCourseAdmin,
@@ -1579,8 +1580,12 @@ export function MessengerChatBox({
     if (!channel) return;
     setIsManagingRoster(true);
     try {
-      const res = await leaveChannelApi(channel.id);
+      const subChannelIds = getSubChannelsForHub(channels, channel.id).map(
+        (sub) => sub.id
+      );
+      const res = await leaveChannelApi(channel.id, subChannelIds);
       await refreshChannels({ forceImmediate: true });
+      triggerAnnouncementRefresh();
       setShowSettingsMenu(false);
       showToast(
         res.message || `Left ${formatCourseHubName(channel)}.`,

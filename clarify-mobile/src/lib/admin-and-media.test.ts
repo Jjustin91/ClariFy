@@ -207,7 +207,7 @@ test('validateProfileAvatarFile enforces jpg/png/webp and 5 MB limit', () => {
   assert.equal(wrongType.valid, false);
 });
 
-test('canManageAnnouncement strictly hides edit/delete for students and scopes campus-wide to dept_head', () => {
+test('canManageAnnouncement uses server can_manage first and enforces ownership & non-course_hub dept_head scope', () => {
   const campusChannel: Channel = {
     id: 1,
     name: '# USTP Campus-Wide',
@@ -215,6 +215,16 @@ test('canManageAnnouncement strictly hides edit/delete for students and scopes c
     course_code: 'CAMPUS',
     description: 'Campus-wide notices',
     scope_college: 'USTP',
+    scope_department: 'CITC',
+    scope_section: null,
+  };
+  const deptChannel: Channel = {
+    id: 3,
+    name: '# CITC Department',
+    channel_type: 'department',
+    course_code: 'CITC',
+    description: 'Department notices',
+    scope_college: 'CITC',
     scope_department: 'CITC',
     scope_section: null,
   };
@@ -228,47 +238,103 @@ test('canManageAnnouncement strictly hides edit/delete for students and scopes c
     scope_department: 'CITC',
     scope_section: 'IT3R2',
   };
+  const facultyOwner = makeUser('faculty', 10);
+  const otherFaculty = makeUser('faculty', 20);
+  const deptHeadUser = makeUser('dept_head', 30);
+
   const campusAnn = makeAnnouncement({
     channel_id: 1,
     channel_type: 'university',
+    publisher: { id: 30, name: 'Dr. Chair', role: 'dept_head', department: 'CITC' },
   });
-  const courseAnn = makeAnnouncement({
+  const deptAnn = makeAnnouncement({
+    channel_id: 3,
+    channel_type: 'department',
+    publisher: { id: 10, name: 'Prof. Reyes', role: 'faculty', department: 'CITC' },
+  });
+  const facultyCourseAnn = makeAnnouncement({
     channel_id: 2,
     channel_type: 'course_hub',
+    publisher: { id: 10, name: 'Prof. Reyes', role: 'faculty', department: 'CITC' },
+  });
+  const deptHeadCourseAnn = makeAnnouncement({
+    channel_id: 2,
+    channel_type: 'course_hub',
+    publisher: { id: 30, name: 'Dr. Chair', role: 'dept_head', department: 'CITC' },
   });
 
   // Students and IT admins NEVER see manage controls
   assert.equal(
-    canManageAnnouncement(courseAnn, makeUser('student'), [courseChannel]),
+    canManageAnnouncement(facultyCourseAnn, makeUser('student', 99), [courseChannel]),
     false
   );
   assert.equal(
-    canManageAnnouncement(campusAnn, makeUser('student'), [campusChannel]),
+    canManageAnnouncement(campusAnn, makeUser('student', 99), [campusChannel]),
     false
   );
   assert.equal(
-    canManageAnnouncement(campusAnn, makeUser('it_admin'), [campusChannel]),
-    false
-  );
-
-  // Faculty can manage Course Hub announcements, not Campus-Wide memos
-  assert.equal(
-    canManageAnnouncement(courseAnn, makeUser('faculty'), [courseChannel]),
-    true
-  );
-  assert.equal(
-    canManageAnnouncement(campusAnn, makeUser('faculty'), [campusChannel]),
+    canManageAnnouncement(campusAnn, makeUser('it_admin', 1), [campusChannel]),
     false
   );
 
-  // Dept Head can manage both Campus-Wide and Course Hub announcements
+  // Faculty can manage ONLY their own announcements, NEVER another faculty's or campus-wide memos
   assert.equal(
-    canManageAnnouncement(campusAnn, makeUser('dept_head'), [campusChannel]),
+    canManageAnnouncement(facultyCourseAnn, facultyOwner, [courseChannel]),
     true
   );
   assert.equal(
-    canManageAnnouncement(courseAnn, makeUser('dept_head'), [courseChannel]),
+    canManageAnnouncement(facultyCourseAnn, otherFaculty, [courseChannel]),
+    false
+  );
+  assert.equal(
+    canManageAnnouncement(campusAnn, facultyOwner, [campusChannel]),
+    false
+  );
+
+  // Dept Head can manage university/department announcements and their OWN course_hub posts,
+  // but NOT another faculty's course_hub post
+  assert.equal(
+    canManageAnnouncement(campusAnn, deptHeadUser, [campusChannel]),
     true
+  );
+  assert.equal(
+    canManageAnnouncement(deptAnn, deptHeadUser, [deptChannel]),
+    true
+  );
+  assert.equal(
+    canManageAnnouncement(deptHeadCourseAnn, deptHeadUser, [courseChannel]),
+    true
+  );
+  assert.equal(
+    canManageAnnouncement(facultyCourseAnn, deptHeadUser, [courseChannel]),
+    false
+  );
+
+  // Server-authoritative `can_manage` takes precedence when present
+  assert.equal(
+    canManageAnnouncement(
+      { ...facultyCourseAnn, can_manage: false },
+      facultyOwner,
+      [courseChannel]
+    ),
+    false
+  );
+  assert.equal(
+    canManageAnnouncement(
+      { ...facultyCourseAnn, can_manage: true },
+      otherFaculty,
+      [courseChannel]
+    ),
+    true
+  );
+  // Student still denied even if can_manage were true
+  assert.equal(
+    canManageAnnouncement(
+      { ...facultyCourseAnn, can_manage: true },
+      makeUser('student', 99),
+      [courseChannel]
+    ),
+    false
   );
 });
 

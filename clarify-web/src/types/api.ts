@@ -101,6 +101,7 @@ export interface Announcement {
   trigger_sms_fallback?: boolean;
   status: 'draft' | 'published' | 'archived';
   is_edited: boolean;
+  can_manage?: boolean;
   published_at: string;
   updated_at: string;
   read_reach: ReadReach;
@@ -284,7 +285,7 @@ export interface RealtimeEvent {
   announcement_id?: number;
   message_id?: number;
   target_user_id?: number;
-  action?: 'requested' | 'approved' | 'rejected' | 'removed' | 'added';
+  action?: 'requested' | 'approved' | 'rejected' | 'removed' | 'added' | 'left';
   actor_id?: number;
   announcement?: Announcement;
   message?: ChatMessage;

@@ -717,6 +717,39 @@ export function canPublishCampusWideAnnouncements(role: UserRole): boolean {
 }
 
 /**
+ * Determines whether the signed-in user should see Edit/Delete UX controls for an announcement.
+ * Prefers server-computed `announcement.can_manage` when present; otherwise falls back to
+ * publisher ownership or dept_head on non-course_hub channels (never role alone).
+ */
+export function canManageAnnouncement(
+  announcement: Announcement,
+  user: User | null | undefined,
+  channels: Channel[] = []
+): boolean {
+  if (!user || user.role === 'student' || user.role === 'it_admin') {
+    return false;
+  }
+  if (typeof announcement.can_manage === 'boolean') {
+    return announcement.can_manage;
+  }
+  if (
+    announcement.publisher?.id != null &&
+    Number(announcement.publisher.id) === Number(user.id)
+  ) {
+    return true;
+  }
+  const matchedChannel = channels.find(
+    (c) => Number(c.id) === Number(announcement.channel_id)
+  );
+  const effectiveChannelType =
+    announcement.channel_type ?? matchedChannel?.channel_type ?? 'course_hub';
+  if (user.role === 'dept_head' && effectiveChannelType !== 'course_hub') {
+    return true;
+  }
+  return false;
+}
+
+/**
  * Returns the muted placeholder string for an unsent chat message ("You unsent a message" or "<Name> unsent a message"),
  * or null if the message is not unsent.
  */

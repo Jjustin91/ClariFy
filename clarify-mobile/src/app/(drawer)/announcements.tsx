@@ -27,6 +27,7 @@ import { useAuth } from '@/context/AuthContext';
 import { useChannels } from '@/context/ChannelsContext';
 import { useAnnouncementsFeed } from '@/hooks/useAnnouncementsFeed';
 import {
+  canManageAnnouncement,
   canPublishCampusWideAnnouncements,
   canPublishOrManageAnnouncements,
 } from '@/lib/domain-logic';
@@ -144,24 +145,27 @@ export default function MobileAnnouncementsScreen() {
   }, []);
 
   const renderItem = useCallback(
-    ({ item }: { item: Announcement }) => (
-      <AnnouncementCard
-        announcement={item}
-        channels={channels}
-        isAckLoading={feed.ackLoadingIds.includes(item.id)}
-        isDeleting={feed.deletingIds.includes(item.id)}
-        onAcknowledge={feed.acknowledge}
-        onEdit={canPublish ? handleOpenEdit : undefined}
-        onDelete={canPublish ? feed.deleteAnnouncement : undefined}
-      />
-    ),
+    ({ item }: { item: Announcement }) => {
+      const canManageItem = canManageAnnouncement(item, user, channels);
+      return (
+        <AnnouncementCard
+          announcement={item}
+          channels={channels}
+          isAckLoading={feed.ackLoadingIds.includes(item.id)}
+          isDeleting={feed.deletingIds.includes(item.id)}
+          onAcknowledge={feed.acknowledge}
+          onEdit={canManageItem ? handleOpenEdit : undefined}
+          onDelete={canManageItem ? feed.deleteAnnouncement : undefined}
+        />
+      );
+    },
     [
+      user,
       channels,
       feed.ackLoadingIds,
       feed.deletingIds,
       feed.acknowledge,
       feed.deleteAnnouncement,
-      canPublish,
       handleOpenEdit,
     ]
   );
