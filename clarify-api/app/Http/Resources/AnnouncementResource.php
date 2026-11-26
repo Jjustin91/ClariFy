@@ -7,6 +7,7 @@ use App\Support\AvatarStorage;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Storage;
 
 class AnnouncementResource extends JsonResource
@@ -51,6 +52,14 @@ class AnnouncementResource extends JsonResource
 
         $resolvedAttachmentUrl = $this->resolvePublicAttachmentUrl($this->attachment_url);
 
+        if ($this->precomputed_can_manage !== null) {
+            $canManage = (bool) $this->precomputed_can_manage;
+        } else {
+            $canManage = $user
+                ? Gate::forUser($user)->allows('update', $this->resource)
+                : false;
+        }
+
         return [
             'id' => $this->id,
             'channel_id' => $this->channel_id,
@@ -69,6 +78,7 @@ class AnnouncementResource extends JsonResource
             'trigger_sms_fallback' => (bool) $this->trigger_sms_fallback,
             'status' => $this->status,
             'is_edited' => (bool) $this->is_edited,
+            'can_manage' => $canManage,
             'published_at' => ($this->published_at ?? $this->created_at)?->toIso8601String(),
             'updated_at' => $this->updated_at?->toIso8601String(),
             'read_reach' => [

@@ -876,11 +876,19 @@ class ChannelController
 
         ApiCache::forgetChannels((int) $channel->id);
         ApiCache::forgetChannelAnnouncements((int) $channel->id);
+        ApiCache::forgetChannelAnnouncements(null);
+        RealtimeStateUpdated::dispatchMembershipChanged(
+            (int) $channel->id,
+            (int) $user->id,
+            'left',
+            (int) $user->id
+        );
         RealtimeStateUpdated::safeDispatch('channel.updated', (int) $channel->id, (int) $user->id);
 
         return response()->json([
             'message' => "You have left {$channel->name}.",
             'data' => new ChannelResource($channel->fresh('members.academicProfile')),
+            'left_channel_ids' => array_map('intval', $allTargetIds),
         ]);
     }
 

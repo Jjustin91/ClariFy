@@ -68,13 +68,23 @@ class AnnouncementController
 
         $enrolledIds = [];
         if (! $channelId && $user) {
-            $enrolledIds = DB::table('channel_user')
+            $directEnrolledIds = DB::table('channel_user')
                 ->where('user_id', $user->id)
                 ->where('approval_status', 'approved')
                 ->orderBy('channel_id')
                 ->pluck('channel_id')
                 ->map(fn ($id) => (int) $id)
                 ->all();
+
+            $subChannelIds = empty($directEnrolledIds)
+                ? []
+                : Channel::whereIn('parent_hub_id', $directEnrolledIds)
+                    ->pluck('id')
+                    ->map(fn ($id) => (int) $id)
+                    ->all();
+
+            $enrolledIds = array_values(array_unique(array_merge($directEnrolledIds, $subChannelIds)));
+            sort($enrolledIds);
         }
 
         // Cache key is shared across users with the same role/scope filter; per-user acknowledgment is computed after cache read
@@ -123,7 +133,13 @@ class AnnouncementController
                 $query->where(function ($q) use ($enrolledIds, $user) {
                     $q->whereHas('channel', fn ($cq) => $cq->where('channel_type', '!=', 'course_hub'))
                         ->orWhereIn('channel_id', $enrolledIds)
-                        ->orWhere('publisher_id', $user->id);
+                        ->orWhere(function ($pq) use ($enrolledIds, $user) {
+                            $pq->where('publisher_id', $user->id)
+                                ->where(function ($cq) use ($enrolledIds) {
+                                    $cq->whereHas('channel', fn ($chq) => $chq->where('channel_type', '!=', 'course_hub'))
+                                        ->orWhereIn('channel_id', $enrolledIds);
+                                });
+                        });
                 });
             }
 
@@ -190,6 +206,7 @@ class AnnouncementController
 
             foreach ($items as $item) {
                 $item->has_current_user_acknowledged = false;
+                $item->precomputed_can_manage = false;
             }
 
             return [
@@ -225,28 +242,42 @@ class AnnouncementController
             }
         }
 
-        // Compute per-user acknowledgment flags in a single indexed query after cache read
+        // Compute per-user acknowledgment flags and per-user can_manage authorization after cache read (zero N+1)
         if ($user && ! empty($payload['data'])) {
             $announcementIds = array_values(array_filter(array_map(
                 fn (array $item) => isset($item['id']) ? (int) $item['id'] : 0,
                 $payload['data']
             )));
 
-            if (! empty($announcementIds)) {
-                $ackedSet = array_flip(
+            $ackedSet = ! empty($announcementIds)
+                ? array_flip(
                     AnnouncementRead::where('user_id', $user->id)
                         ->whereIn('announcement_id', $announcementIds)
                         ->pluck('announcement_id')
                         ->map(fn ($id) => (int) $id)
                         ->all()
-                );
+                )
+                : [];
 
-                foreach ($payload['data'] as &$item) {
-                    $aid = (int) ($item['id'] ?? 0);
-                    $item['read_reach']['has_current_user_acknowledged'] = isset($ackedSet[$aid]);
-                }
-                unset($item);
+            $userGate = Gate::forUser($user);
+
+            foreach ($payload['data'] as &$item) {
+                $aid = (int) ($item['id'] ?? 0);
+                $item['read_reach']['has_current_user_acknowledged'] = isset($ackedSet[$aid]);
+
+                $announcementForGate = new Announcement();
+                $announcementForGate->id = $aid;
+                $announcementForGate->channel_id = (int) ($item['channel_id'] ?? 0);
+                $announcementForGate->publisher_id = (int) ($item['publisher']['id'] ?? 0);
+
+                $channelForGate = new Channel();
+                $channelForGate->id = (int) ($item['channel_id'] ?? 0);
+                $channelForGate->channel_type = (string) ($item['channel_type'] ?? 'course_hub');
+                $announcementForGate->setRelation('channel', $channelForGate);
+
+                $item['can_manage'] = $userGate->allows('update', $announcementForGate);
             }
+            unset($item);
         }
 
         return response()->json($payload);
@@ -523,7 +554,7 @@ class AnnouncementController
      */
     public function update(Request $request, int $id): JsonResponse
     {
-        $announcement = Announcement::findOrFail($id);
+        $announcement = Announcement::with('channel')->findOrFail($id);
 
         $authResponse = Gate::inspect('update', $announcement);
         if ($authResponse->denied()) {
@@ -622,7 +653,7 @@ class AnnouncementController
      */
     public function destroy(Request $request, int $id): JsonResponse
     {
-        $announcement = Announcement::findOrFail($id);
+        $announcement = Announcement::with('channel')->findOrFail($id);
 
         $authResponse = Gate::inspect('delete', $announcement);
         if ($authResponse->denied()) {

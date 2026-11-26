@@ -54,11 +54,19 @@ class AnnouncementPolicy
             );
         }
 
-        if (
-            $user->role === 'dept_head' ||
-            $announcement->publisher_id === $user->id
-        ) {
+        if ((int) $announcement->publisher_id === (int) $user->id) {
             return Response::allow();
+        }
+
+        if ($user->role === 'dept_head') {
+            $channel = $announcement->relationLoaded('channel')
+                ? $announcement->channel
+                : $announcement->channel()->first();
+            $channelType = $channel?->channel_type ?? 'course_hub';
+
+            if ($channelType !== 'course_hub') {
+                return Response::allow();
+            }
         }
 
         return Response::denyWithStatus(
